@@ -21,7 +21,7 @@ fi
 # Redirect stdout and stderr to the log file while preserving console output
 exec > >(tee -i "$LOG_FILE") 2>&1
 
-echo -e "\033[1;35m"
+echo -e "\033[1;36m"
 echo "========================================================"
 echo "    KACE Studio: Klipper Automated Setup Bootstrapper   "
 echo "========================================================"

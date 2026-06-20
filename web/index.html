@@ -318,23 +318,20 @@
                         <!-- Step 10: Resume & Write Summary -->
                         <div class="form-group" style="margin-top: 24px;">
                             <label><span class="brand-orange">Step 10:</span> Resume & Write</label>
-                            <button class="btn btn-primary btn-block" onclick="openFormatModal()" id="flash-action-btn">
-                                <i class="fa-solid fa-fire"></i> Write
-                            </button>
+                            <div class="write-action-container" style="position: relative;">
+                                <button class="btn btn-primary btn-block progress-btn" onclick="openFormatModal()" id="flash-action-btn">
+                                    <span class="btn-progress-fill" id="btn-progress-fill"></span>
+                                    <span class="btn-text" id="btn-text-content"><i class="fa-solid fa-fire"></i> Write</span>
+                                </button>
+                                <div class="flash-status-container" id="flash-status-container" style="display: none; margin-top: 12px; align-items: center; justify-content: space-between; gap: 8px;">
+                                    <span class="status-msg" id="flasher-status-msg" style="font-size: 13px; color: var(--text-secondary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap; flex-grow: 1;">Preparing disk write loops...</span>
+                                    <button class="btn btn-danger" id="cancel-flash-btn" onclick="cancelFlashing()" title="Cancel flashing" style="padding: 6px 12px; font-size: 12px; flex-shrink: 0; line-height: 1.2;">
+                                        <i class="fa-solid fa-xmark"></i> Cancel
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                </div>
-
-                <!-- Flashing Progress Card -->
-                <div class="card mt-20" id="progress-card" style="display: none;">
-                    <h3 id="progress-title">Writing Image to Storage...</h3>
-                    <div class="progress-bar-container">
-                        <div class="progress-bar" id="progress-fill">0%</div>
-                    </div>
-                    <p class="status-msg" id="flasher-status-msg">Preparing disk write loops...</p>
-                    <button class="btn btn-danger btn-block" id="cancel-flash-btn" onclick="cancelFlashing()" style="margin-top: 12px; display: none;">
-                        <i class="fa-solid fa-xmark"></i> Cancel
-                    </button>
                 </div>
             </section>
 

@@ -379,13 +379,17 @@ function startFlashing() {
     const imageSource = document.getElementById('image-source-select').value;
     const imagePath = imageSource === 'custom' ? document.getElementById('custom-image-path').value : "default_lite";
     
-    // Show progress panel
-    const progressCard = document.getElementById('progress-card');
+    // Show progress elements
     const flashBtn = document.getElementById('flash-action-btn');
     const cancelBtn = document.getElementById('cancel-flash-btn');
-    progressCard.style.display = 'block';
+    const statusContainer = document.getElementById('flash-status-container');
+    if (statusContainer) statusContainer.style.display = 'flex';
     flashBtn.disabled = true;
-    if (cancelBtn) cancelBtn.style.display = 'block';
+    if (cancelBtn) {
+        cancelBtn.style.display = 'block';
+        cancelBtn.disabled = false;
+        cancelBtn.innerHTML = '<i class="fa-solid fa-xmark"></i> Cancel';
+    }
     
     updateProgress(0, "Requesting administrative privileges...");
     window.updateDeviceState("FLASHING", 0, "Requesting administrative privileges...");
@@ -462,8 +466,8 @@ window.updateDeviceState = function(state, progress, message) {
             globalStatus.className = 'status-indicator-online';
             globalStatus.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Flashing: ${progress}%`;
             
-            const progressCard = document.getElementById('progress-card');
-            progressCard.style.display = 'block';
+            const statusContainer = document.getElementById('flash-status-container');
+            if (statusContainer) statusContainer.style.display = 'flex';
             flashBtn.disabled = true;
             updateProgress(progress, message);
             
@@ -478,6 +482,13 @@ window.updateDeviceState = function(state, progress, message) {
             globalStatus.innerHTML = '<i class="fa-solid fa-compact-disc"></i> Flipped & Flashed';
             flashBtn.disabled = false;
             updateProgress(100, message);
+            
+            // Hide progress container and reset progress fill
+            const statusContainerDone = document.getElementById('flash-status-container');
+            if (statusContainerDone) statusContainerDone.style.display = 'none';
+            const progressFillDone = document.getElementById('btn-progress-fill');
+            if (progressFillDone) progressFillDone.style.width = '0%';
+            
             document.getElementById('success-modal').style.display = 'flex';
             
             // Hide cancel button
@@ -517,6 +528,12 @@ window.updateDeviceState = function(state, progress, message) {
             globalStatus.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Error';
             flashBtn.disabled = false;
             
+            // Hide progress container and reset progress fill
+            const statusContainerErr = document.getElementById('flash-status-container');
+            if (statusContainerErr) statusContainerErr.style.display = 'none';
+            const progressFillErr = document.getElementById('btn-progress-fill');
+            if (progressFillErr) progressFillErr.style.width = '0%';
+            
             // Reset cancel button state
             const cancelBtnErr = document.getElementById('cancel-flash-btn');
             if (cancelBtnErr) { cancelBtnErr.style.display = 'none'; cancelBtnErr.disabled = false; cancelBtnErr.innerHTML = '<i class="fa-solid fa-xmark"></i> Cancel'; }
@@ -534,7 +551,7 @@ window.updateDeviceState = function(state, progress, message) {
 
 function showTroubleshootingPrompt(errorMsg) {
     if (!term) return;
-    term.write("\r\n\x1b[1;35m[KACE Diagnostics] Troubleshooting Guidance:\x1b[0m\r\n");
+    term.write("\r\n\x1b[1;36m[KACE Diagnostics] Troubleshooting Guidance:\x1b[0m\r\n");
     term.write(" 1. \x1b[1;37mPower Check:\x1b[0m Verify the Raspberry Pi is powered on and ACT green LED is blinking.\r\n");
     term.write(" 2. \x1b[1;37mNetwork Subnet:\x1b[0m Ensure your PC and the Pi are connected to the same WiFi SSID / Subnet.\r\n");
     term.write(" 3. \x1b[1;37mWiFi Band:\x1b[0m Confirm you didn't connect a 2.4GHz-only Pi model (like Zero W or 3B) to a 5GHz band.\r\n");
@@ -583,12 +600,23 @@ function updateTrackerBar(state) {
 }
 
 function updateProgress(percent, message) {
-    const fill = document.getElementById('progress-fill');
+    const fill = document.getElementById('btn-progress-fill');
+    const textContent = document.getElementById('btn-text-content');
     const msg = document.getElementById('flasher-status-msg');
     
-    fill.style.width = `${percent}%`;
-    fill.textContent = `${percent}%`;
-    msg.textContent = message;
+    if (fill) {
+        fill.style.width = `${percent}%`;
+    }
+    if (textContent) {
+        if (percent > 0 && percent < 100) {
+            textContent.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Writing... ${percent}%`;
+        } else {
+            textContent.innerHTML = `<i class="fa-solid fa-fire"></i> Write`;
+        }
+    }
+    if (msg) {
+        msg.textContent = message;
+    }
 }
 
 
@@ -831,7 +859,7 @@ function connectToDevice(ip, name) {
     terminalNav.click(); // Switch to terminal workspace tab
     
     term.clear();
-    term.write(`\x1b[1;35m[KACE Workspace] Connecting to ${name} (${ip})...\x1b[0m\r\n`);
+    term.write(`\x1b[1;36m[KACE Workspace] Connecting to ${name} (${ip})...\x1b[0m\r\n`);
     
     promptTerminalLogin();
 }
@@ -850,9 +878,9 @@ function initTerminal() {
             background: '#000000',
             foreground: '#ffffff',
             cursor: '#5a52e5',
-            magenta: '#a78bfa',
+            magenta: '#818cf8',
             green: '#10b981',
-            red: '#f43f5e'
+            red: '#ef4444'
         }
     });
     
@@ -968,7 +996,7 @@ function startBootstrap() {
         return;
     }
     
-    term.write(`\r\n\x1b[1;35m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
+    term.write(`\r\n\x1b[1;36m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
     const bootstrapCmd = `curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}\n`;
     
     if (window.pywebview && window.pywebview.api) {

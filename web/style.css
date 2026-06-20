@@ -19,8 +19,8 @@
     
     --success-color: #10b981;
     --success-hover: #059669;
-    --danger-color: #f43f5e;
-    --danger-hover: #e11d48;
+    --danger-color: #ef4444;
+    --danger-hover: #dc2626;
     --accent-glow: rgba(255, 133, 0, 0.4);
     --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
@@ -346,29 +346,39 @@ body {
 }
 
 /* Flashing Progress Section */
-.progress-bar-container {
-    width: 100%;
-    height: 24px;
-    background-color: var(--bg-main);
-    border-radius: 12px;
-    border: 1px solid var(--border-color);
+.progress-btn {
+    position: relative;
     overflow: hidden;
-    margin-top: 14px;
-    margin-bottom: 8px;
 }
 
-.progress-bar {
-    height: 100%;
+.btn-progress-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
     width: 0%;
-    background-color: var(--primary-color);
+    background: linear-gradient(90deg, var(--primary-color) 0%, #ff5500 100%);
     box-shadow: 0 0 10px var(--accent-glow);
+    transition: width 0.3s ease;
+    z-index: 1;
+}
+
+.btn-text {
+    position: relative;
+    z-index: 2;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
-    font-weight: 600;
-    color: #ffffff;
-    transition: width 0.3s ease;
+    gap: 8px;
+    width: 100%;
+}
+
+.progress-btn:disabled {
+    background-color: var(--bg-card) !important;
+    border-color: var(--border-color) !important;
+    color: var(--text-primary) !important;
+    cursor: not-allowed;
+    box-shadow: none !important;
 }
 
 .status-msg {
