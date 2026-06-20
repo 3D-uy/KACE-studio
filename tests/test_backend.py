@@ -602,6 +602,139 @@ class TestKaceBackend(unittest.TestCase):
             result = list_drives()
             self.assertEqual(result, [])
 
+    def test_build_boot_path_formatting(self):
+        """
+        Unit test for the path construction helper _build_boot_path.
+        """
+        from backend.imager import _build_boot_path
+        self.assertEqual(_build_boot_path("E"), "E:\\")
+        self.assertEqual(_build_boot_path("Z"), "Z:\\")
+        self.assertEqual(_build_boot_path(""), "")
+        self.assertEqual(_build_boot_path(None), "")
+        self.assertEqual(_build_boot_path("/mock/path/dir"), "/mock/path/dir")
+        self.assertEqual(_build_boot_path("C:\\temp\\dir"), "C:\\temp\\dir")
+
+    def test_inject_config_integration_real_write(self):
+        """
+        Verify inject_config end-to-end using a real temp directory.
+        We do not mock get_boot_drive_letter; instead, we mock subprocess.run inside it
+        to return the temp directory path.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch, MagicMock
+        
+        temp_boot = tempfile.mkdtemp()
+        try:
+            mock_res = MagicMock()
+            mock_res.returncode = 0
+            import json
+            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
+            
+            with patch("subprocess.run", return_value=mock_res):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-integration",
+                    wifi_ssid="MySSID",
+                    wifi_password="MyPassword",
+                    ssh_password="kacepwd123",
+                    dashboard_ui="mainsail",
+                    timezone="America/Sao_Paulo"
+                )
+                self.assertTrue(success)
+                
+                # Check that all expected files were actually written to the disk partition
+                userconf_path = os.path.join(temp_boot, "userconf.txt")
+                self.assertTrue(os.path.exists(userconf_path))
+                with open(userconf_path, "r", encoding="utf-8") as f:
+                    userconf_content = f.read()
+                self.assertTrue(userconf_content.startswith("kace:$6$"))
+                
+                wpa_path = os.path.join(temp_boot, "wpa_supplicant.conf")
+                self.assertTrue(os.path.exists(wpa_path))
+                
+                nm_path = os.path.join(temp_boot, "system-connections", "preconfigured-wifi.nmconnection")
+                self.assertTrue(os.path.exists(nm_path))
+                
+                bootstrap_cfg = os.path.join(temp_boot, "kace-bootstrap.txt")
+                self.assertTrue(os.path.exists(bootstrap_cfg))
+                
+                custom_toml_path = os.path.join(temp_boot, "custom.toml")
+                self.assertTrue(os.path.exists(custom_toml_path))
+                with open(custom_toml_path, "r", encoding="utf-8") as f:
+                    toml_content = f.read()
+                
+                ssh_path = os.path.join(temp_boot, "ssh")
+                self.assertTrue(os.path.exists(ssh_path))
+                ssh_txt_path = os.path.join(temp_boot, "ssh.txt")
+                self.assertTrue(os.path.exists(ssh_txt_path))
+                
+                # Verify that kace-bootstrap.txt has no leading whitespace on any line
+                with open(bootstrap_cfg, "r", encoding="utf-8") as f:
+                    for line in f:
+                        self.assertEqual(line, line.lstrip(), f"Line '{line}' has leading whitespace")
+                        
+                # Verify that custom.toml has no leading whitespace on keys
+                with open(custom_toml_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        stripped = line.strip()
+                        if stripped and not stripped.startswith("["):
+                            self.assertEqual(line.lstrip(), line, f"Line '{line}' has leading whitespace")
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_userconf_hash_verification(self):
+        """
+        Verify that userconf.txt contains a valid SHA-512 crypt hash (Modular Crypt Format)
+        and verifies successfully against the plaintext using pcrypt.
+        """
+        import tempfile
+        import shutil
+        import pcrypt
+        from backend.imager import inject_config
+        from unittest.mock import patch, MagicMock
+        
+        temp_boot = tempfile.mkdtemp()
+        try:
+            mock_res = MagicMock()
+            mock_res.returncode = 0
+            import json
+            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
+            
+            with patch("subprocess.run", return_value=mock_res):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-hash-test",
+                    wifi_ssid="MySSID",
+                    wifi_password="MyPassword",
+                    ssh_password="mysecretpassword",
+                    dashboard_ui="mainsail"
+                )
+                self.assertTrue(success)
+                
+                userconf_path = os.path.join(temp_boot, "userconf.txt")
+                self.assertTrue(os.path.exists(userconf_path))
+                with open(userconf_path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                
+                # Expected format: username:hash
+                parts = content.split(":")
+                self.assertEqual(len(parts), 2)
+                self.assertEqual(parts[0], "kace")
+                
+                hashed = parts[1]
+                self.assertTrue(hashed.startswith("$6$"))
+                
+                # Cryptographic verification against plaintext
+                verification = pcrypt.crypt("mysecretpassword", hashed)
+                self.assertEqual(verification, hashed)
+                
+                # Negative check
+                self.assertNotEqual(pcrypt.crypt("wrong_password", hashed), hashed)
+        finally:
+            shutil.rmtree(temp_boot)
+
 
 if __name__ == "__main__":
     unittest.main()

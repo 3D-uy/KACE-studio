@@ -88,16 +88,58 @@ def list_drives() -> list:
         
     return drives
 
-def get_boot_drive_letter(disk_number: int) -> str:
+def _build_boot_path(letter: str) -> str:
+    """
+    Constructs the absolute path to the boot drive volume root from a letter.
+    Allows easy unit testing in isolation by decoupling path formatting.
+    """
+    if not letter:
+        return ""
+    if len(letter) == 1 and letter.isalpha():
+        return f"{letter}:\\"
+    return letter
+
+def get_boot_drive_letter(disk_number: int):
     """
     Finds the FAT32/FAT partition drive letter of the flashed SD card.
     """
     if sys.platform != "win32":
-        return ""
+        return None
         
-    # Query partitions and find their drive letters
+    ps_cmd = f"""
+$ErrorActionPreference = 'Stop'
+try {{
+    $part = Get-Partition -DiskNumber {disk_number} -PartitionNumber 1 -ErrorAction Stop
+    if ($part) {{
+        $letter = $part.DriveLetter
+        if ($letter -eq [char]0 -or $letter -eq $null -or [string]::IsNullOrWhiteSpace($letter)) {{
+            $freeLetter = (3..25 | ForEach-Object {{ [char]($_ + 65) }} | Where-Object {{ (Get-Volume -DriveLetter $_ -ErrorAction SilentlyContinue) -eq $null }} | Select-Object -First 1)
+            if ($freeLetter) {{
+                $part | Set-Partition -NewDriveLetter $freeLetter -ErrorAction Stop
+                $part = Get-Partition -DiskNumber {disk_number} -PartitionNumber 1 -ErrorAction Stop
+                $letter = $part.DriveLetter
+            }}
+        }}
+        if ($letter -and $letter -ne [char]0) {{
+            [PSCustomObject]@{{ DriveLetter = [string]$letter; FileSystem = (Get-Volume -DriveLetter $letter -ErrorAction SilentlyContinue).FileSystem }} | ConvertTo-Json
+        }}
+    }}
+}} catch {{
+    if ($_.Exception.Message -like "*Access is denied*" -or $_.CategoryInfo.Category -eq "PermissionDenied") {{
+        Write-Output "ERROR: PRIVILEGE_REQUIRED"
+    }} else {{
+        Write-Error $_.Exception.Message
+    }}
+    exit 1
+}}
+"""
     for _ in range(5):  # Retry up to 5 times to let Windows mount the disk
-        res = subprocess.run(["powershell", "-Command", f"Get-Partition -DiskNumber {disk_number} | Get-Volume | Select-Object DriveLetter, FileSystem | ConvertTo-Json"], capture_output=True, text=True, encoding="utf-8", errors="replace", **SUBPROCESS_FLAGS)
+        res = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True, encoding="utf-8", errors="replace", **SUBPROCESS_FLAGS)
+        if "ERROR: PRIVILEGE_REQUIRED" in res.stdout or "PermissionDenied" in res.stdout or "PermissionDenied" in res.stderr:
+            print("ERROR: Failed to assign drive letter to boot partition.", file=sys.stderr)
+            print("Please re-run KACE Studio as Administrator.", file=sys.stderr)
+            return None
+            
         if res.returncode == 0 and res.stdout.strip():
             try:
                 data = json.loads(res.stdout.strip())
@@ -107,14 +149,21 @@ def get_boot_drive_letter(disk_number: int) -> str:
                 for vol in data:
                     letter = vol.get("DriveLetter")
                     fs = vol.get("FileSystem", "").upper()
-                    # We are looking for the FAT32 boot partition
                     if letter and fs in ("FAT32", "FAT"):
-                        return f"{letter}:\\"
+                        boot_path = _build_boot_path(letter)
+                        # Retry loop for OS to mount the volume path
+                        for _ in range(10):
+                            if os.path.exists(boot_path):
+                                break
+                            time.sleep(0.5)
+                            
+                        if os.path.exists(boot_path):
+                            return boot_path
             except Exception as e:
                 print(f"Error parsing partition volume: {e}", file=sys.stderr)
         time.sleep(1)
         
-    return ""
+    return None
 
 def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tuple:
     """
@@ -309,6 +358,7 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
     """
     # Wait for OS mount
     boot_path = get_boot_drive_letter(disk_number)
+    print(f"[DEBUG] get_boot_drive_letter({disk_number}) resolved to: '{boot_path}'", file=sys.stderr)
     if not boot_path or not os.path.exists(boot_path):
         print(f"FAT32 boot partition not mounted or not found on physical disk {disk_number}.", file=sys.stderr)
         return False
@@ -337,18 +387,41 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         # C. SSH Enablement
         if ssh_enabled:
             ssh_file = os.path.join(boot_path, "ssh")
-            with open(ssh_file, "w") as f:
-                pass # Writes empty file to enable SSH
+            try:
+                with open(ssh_file, "w") as f:
+                    pass # Writes empty file to enable SSH
+                if not os.path.exists(ssh_file):
+                    raise IOError(f"SSH enablement file not found at: {ssh_file}")
+            except Exception as e:
+                print(f"[ERROR] Failed to verify SSH enablement file: {e}", file=sys.stderr)
+                raise e
                 
             ssh_txt_file = os.path.join(boot_path, "ssh.txt")
-            with open(ssh_txt_file, "w") as f:
-                pass
+            try:
+                with open(ssh_txt_file, "w") as f:
+                    pass
+                if not os.path.exists(ssh_txt_file):
+                    raise IOError(f"SSH txt enablement file not found at: {ssh_txt_file}")
+            except Exception as e:
+                print(f"[ERROR] Failed to verify SSH txt enablement file: {e}", file=sys.stderr)
+                raise e
             
         # D. User Credentials configuration (userconf.txt)
         hashed_pw = hash_password(ssh_password)
         userconf_file = os.path.join(boot_path, "userconf.txt")
-        with open(userconf_file, "w", newline="\n") as f:
-            f.write(f"{DEFAULT_USERNAME}:{hashed_pw}\n")
+        try:
+            with open(userconf_file, "w", newline="\n") as f:
+                f.write(f"{DEFAULT_USERNAME}:{hashed_pw}\n")
+            if not os.path.exists(userconf_file):
+                raise IOError(f"userconf.txt file not found at: {userconf_file}")
+            with open(userconf_file, "r", encoding="utf-8") as f_check:
+                written_data = f_check.read()
+            if not written_data.startswith(f"{DEFAULT_USERNAME}:"):
+                raise ValueError("userconf.txt content is malformed or corrupted.")
+            print(f"[DEBUG] Successfully verified userconf.txt write at {userconf_file}", file=sys.stderr)
+        except Exception as e:
+            print(f"[ERROR] Failed writing or verifying userconf.txt: {e}", file=sys.stderr)
+            raise e
             
         # E. WiFi credentials
         if wifi_ssid:
@@ -365,8 +438,19 @@ network={{
     key_mgmt=WPA-PSK
 }}
 """
-            with open(wpa_conf, "w", newline="\n") as f:
-                f.write(wpa_content)
+            try:
+                with open(wpa_conf, "w", newline="\n") as f:
+                    f.write(wpa_content)
+                if not os.path.exists(wpa_conf):
+                    raise IOError(f"wpa_supplicant.conf not found at: {wpa_conf}")
+                with open(wpa_conf, "r", encoding="utf-8") as f_check:
+                    c = f_check.read()
+                if clean_wpa_ssid not in c or clean_wpa_password not in c:
+                    raise ValueError("wpa_supplicant.conf content is missing SSID or password credentials.")
+                print(f"[DEBUG] Successfully verified wpa_supplicant.conf write at {wpa_conf}", file=sys.stderr)
+            except Exception as e:
+                print(f"[ERROR] Failed writing or verifying wpa_supplicant.conf: {e}", file=sys.stderr)
+                raise e
                 
             # Modern: NetworkManager connection profile (for Bookworm compatibility)
             nm_dir = os.path.join(boot_path, "system-connections")
@@ -398,41 +482,73 @@ method=auto
 method=auto
 addr-gen-mode=default-or-eui64
 """
-            with open(nm_file, "w", newline="\n") as f:
-                f.write(nm_content)
+            try:
+                with open(nm_file, "w", newline="\n") as f:
+                    f.write(nm_content)
+                if not os.path.exists(nm_file):
+                    raise IOError(f"preconfigured-wifi.nmconnection connection profile not found at: {nm_file}")
+                with open(nm_file, "r", encoding="utf-8") as f_check:
+                    c = f_check.read()
+                if clean_nm_ssid not in c or clean_nm_password not in c:
+                    raise ValueError("preconfigured-wifi.nmconnection is missing SSID or password credentials.")
+                print(f"[DEBUG] Successfully verified NetworkManager connection profile at {nm_file}", file=sys.stderr)
+            except Exception as e:
+                print(f"[ERROR] Failed writing or verifying NetworkManager connection profile: {e}", file=sys.stderr)
+                raise e
                 
         # F. Hostname configuration injection via cmdline.txt boot arguments
         cmdline_file = os.path.join(boot_path, "cmdline.txt")
         if os.path.exists(cmdline_file) and clean_hostname:
-            with open(cmdline_file, "r") as f:
-                content = f.read().strip()
-            # If systemd.hostname boot parameter is not already set
-            if "systemd.hostname" not in content:
-                # Append parameter
-                content = f"{content} systemd.hostname={clean_hostname}"
-                with open(cmdline_file, "w", newline="\n") as f:
-                    f.write(content + "\n")
+            try:
+                with open(cmdline_file, "r") as f:
+                    content = f.read().strip()
+                # If systemd.hostname boot parameter is not already set
+                if "systemd.hostname" not in content:
+                    # Append parameter
+                    content = f"{content} systemd.hostname={clean_hostname}"
+                    with open(cmdline_file, "w", newline="\n") as f:
+                        f.write(content + "\n")
+                    # Verification check
+                    with open(cmdline_file, "r", encoding="utf-8") as f_check:
+                        c = f_check.read()
+                    if f"systemd.hostname={clean_hostname}" not in c:
+                        raise ValueError("cmdline.txt update verification failed.")
+                    print(f"[DEBUG] Successfully verified cmdline.txt update at {cmdline_file}", file=sys.stderr)
+            except Exception as e:
+                print(f"[ERROR] Failed updating or verifying cmdline.txt: {e}", file=sys.stderr)
+                raise e
                     
         # G. Bootstrap Config injection
         bootstrap_cfg = os.path.join(boot_path, "kace-bootstrap.txt")
-        with open(bootstrap_cfg, "w", newline="\n") as f:
-            f.write(f"DASHBOARD={dashboard_ui}\n")
-            f.write(f"CROWSNEST={'true' if crowsnest else 'false'}\n")
-            if timezone:
-                f.write(f"TIMEZONE={timezone}\n")
-            if pi_model:
-                f.write(f"PI_MODEL={pi_model}\n")
-            if os_arch:
-                f.write(f"OS_ARCH={os_arch}\n")
+        try:
+            with open(bootstrap_cfg, "w", newline="\n") as f:
+                f.write(f"DASHBOARD={dashboard_ui}\n")
+                f.write(f"CROWSNEST={'true' if crowsnest else 'false'}\n")
+                if timezone:
+                    f.write(f"TIMEZONE={timezone}\n")
+                if pi_model:
+                    f.write(f"PI_MODEL={pi_model}\n")
+                if os_arch:
+                    f.write(f"OS_ARCH={os_arch}\n")
+            if not os.path.exists(bootstrap_cfg):
+                raise IOError(f"kace-bootstrap.txt not found at: {bootstrap_cfg}")
+            with open(bootstrap_cfg, "r", encoding="utf-8") as f_check:
+                c = f_check.read()
+            if f"DASHBOARD={dashboard_ui}" not in c:
+                raise ValueError("kace-bootstrap.txt verification failed.")
+            print(f"[DEBUG] Successfully verified kace-bootstrap.txt write at {bootstrap_cfg}", file=sys.stderr)
+        except Exception as e:
+            print(f"[ERROR] Failed writing or verifying kace-bootstrap.txt: {e}", file=sys.stderr)
+            raise e
                 
         # H. Bookworm headless configuration (custom.toml)
         custom_toml_path = os.path.join(boot_path, "custom.toml")
         
         toml_content = f"""config_version = 1
- 
+
 [system]
 hostname = "{clean_hostname}"
- 
+
 [ssh]
 enabled = {"true" if ssh_enabled else "false"}
 password_authentication = true
@@ -446,8 +562,20 @@ password = "{clean_toml_password}"
 password_encrypted = false
 country = "{country_code}"
 """
-        with open(custom_toml_path, "w", newline="\n") as f:
-            f.write(toml_content)
+        try:
+            with open(custom_toml_path, "w", newline="\n") as f:
+                f.write(toml_content)
+            if not os.path.exists(custom_toml_path):
+                raise IOError(f"custom.toml not found at: {custom_toml_path}")
+            with open(custom_toml_path, "r", encoding="utf-8") as f_check:
+                c = f_check.read()
+            if f'hostname = "{clean_hostname}"' not in c:
+                raise ValueError("custom.toml verification failed.")
+            print(f"[DEBUG] Successfully verified custom.toml write at {custom_toml_path}", file=sys.stderr)
+        except Exception as e:
+            print(f"[ERROR] Failed writing or verifying custom.toml: {e}", file=sys.stderr)
+            raise e
+
         try:
             time.sleep(1)
             subprocess.run(["powershell", "-Command", "Update-HostStorageCache"], capture_output=True, **SUBPROCESS_FLAGS)
