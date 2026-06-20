@@ -51,8 +51,7 @@ def list_drives() -> list:
     if sys.platform == "win32":
         try:
             # Query physical disks
-            cmd = "powershell -Command \"Get-Disk | Select-Object Number, FriendlyName, Size, BusType, IsSystem, IsBoot | ConvertTo-Json\""
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding="utf-8")
+            res = subprocess.run(["powershell", "-Command", "Get-Disk | Select-Object Number, FriendlyName, Size, BusType, IsSystem, IsBoot | ConvertTo-Json"], capture_output=True, text=True, encoding="utf-8", errors="replace")
             if res.returncode == 0 and res.stdout.strip():
                 data = json.loads(res.stdout.strip())
                 # If there's only one disk, ConvertTo-Json returns a dict instead of a list
@@ -78,13 +77,8 @@ def list_drives() -> list:
             print(f"Error listing Windows drives: {e}", file=sys.stderr)
             
     else:
-        # Basic POSIX fallback for structure/testing
-        drives.append({
-            "id": "/dev/sdb",
-            "name": "Mock Removable Drive (Non-Windows)",
-            "size": "16.0 GB",
-            "bus": "USB"
-        })
+        # Basic POSIX fallback: return empty list on non-Windows to avoid false assumptions in CI
+        pass
         
     return drives
 
@@ -96,9 +90,8 @@ def get_boot_drive_letter(disk_number: int) -> str:
         return ""
         
     # Query partitions and find their drive letters
-    cmd = f"powershell -Command \"Get-Partition -DiskNumber {disk_number} | Get-Volume | Select-Object DriveLetter, FileSystem | ConvertTo-Json\""
     for _ in range(5):  # Retry up to 5 times to let Windows mount the disk
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding="utf-8")
+        res = subprocess.run(["powershell", "-Command", f"Get-Partition -DiskNumber {disk_number} | Get-Volume | Select-Object DriveLetter, FileSystem | ConvertTo-Json"], capture_output=True, text=True, encoding="utf-8", errors="replace")
         if res.returncode == 0 and res.stdout.strip():
             try:
                 data = json.loads(res.stdout.strip())
@@ -135,10 +128,14 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(current_dir)
     
-    # Create a temp file to track progress updates
-    temp_dir = os.environ.get("TEMP", os.environ.get("TMP", "C:\\Temp"))
-    if not os.path.exists(temp_dir):
-        os.makedirs(temp_dir, exist_ok=True)
+    # Create a secure temp directory inside the user's home profile to avoid public temp vulnerabilities
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile and os.path.exists(user_profile):
+        temp_dir = os.path.join(user_profile, ".kace", "temp")
+    else:
+        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
+        
+    os.makedirs(temp_dir, exist_ok=True)
     status_file = os.path.join(temp_dir, f"kace_flash_{disk_number}.json")
     if os.path.exists(status_file):
         try:
@@ -150,36 +147,110 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
     if hasattr(sys, '_MEIPASS') or not sys.executable.lower().endswith("python.exe"):
         # Packaged mode
         arg_list = [
-            "'--write-disk'",
-            f"'{disk_number}'",
-            "'" + str(image_path).replace("'", "''") + "'",
-            "'" + str(status_file).replace("'", "''") + "'"
+            "--write-disk",
+            str(disk_number),
+            str(image_path),
+            str(status_file)
         ]
         exec_path = sys.executable
     else:
         # Dev mode
         main_py = os.path.join(project_root, "main.py")
         arg_list = [
-            "'" + str(main_py).replace("'", "''") + "'",
-            "'--write-disk'",
-            f"'{disk_number}'",
-            "'" + str(image_path).replace("'", "''") + "'",
-            "'" + str(status_file).replace("'", "''") + "'"
+            main_py,
+            "--write-disk",
+            str(disk_number),
+            str(image_path),
+            str(status_file)
         ]
         exec_path = sys.executable
 
-    args_str = ", ".join(arg_list)
-    # Spawn elevated process via PowerShell Start-Process with -Verb RunAs
-    cmd = f"powershell -Command \"Start-Process -FilePath '{exec_path}' -ArgumentList {args_str} -Verb RunAs -Wait -WindowStyle Hidden\""
+    # Format arguments safely for Windows process creation (bypasses shell parser)
+    def escape_windows_arg(arg: str) -> str:
+        if not arg:
+            return '""'
+        if ' ' not in arg and '\t' not in arg and '"' not in arg:
+            return arg
+        escaped = []
+        bs_count = 0
+        for char in arg:
+            if char == '\\':
+                bs_count += 1
+            elif char == '"':
+                escaped.append('\\' * (2 * bs_count + 1))
+                escaped.append('"')
+                bs_count = 0
+            else:
+                if bs_count > 0:
+                    escaped.append('\\' * bs_count)
+                    bs_count = 0
+                escaped.append(char)
+        if bs_count > 0:
+            escaped.append('\\' * (2 * bs_count))
+        return '"' + ''.join(escaped) + '"'
+
+    params_str = " ".join(escape_windows_arg(x) for x in arg_list)
     
+    # Run using ctypes ShellExecuteExW to elevate securely
+    import ctypes
+    from ctypes import wintypes
+    
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("fMask", ctypes.c_ulong),
+            ("hwnd", wintypes.HANDLE),
+            ("lpOperation", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR),
+            ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR),
+            ("nShow", ctypes.c_int),
+            ("hInstApp", wintypes.HANDLE),
+            ("lpIDList", ctypes.c_void_p),
+            ("lpClass", wintypes.LPCWSTR),
+            ("hkeyClass", wintypes.HANDLE),
+            ("dwHotKey", wintypes.DWORD),
+            ("hIconOrMonitor", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
+        ]
+        
+    SEE_MASK_NOCLOSEPROCESS = 0x00000040
+    SW_HIDE = 0
+    
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(SHELLEXECUTEINFOW)
+    info.fMask = SEE_MASK_NOCLOSEPROCESS
+    info.hwnd = None
+    info.lpOperation = "runas"
+    info.lpFile = exec_path
+    info.lpParameters = params_str
+    info.lpDirectory = None
+    info.nShow = SW_HIDE
+    
+    shell32 = ctypes.windll.shell32
+    res = shell32.ShellExecuteExW(ctypes.byref(info))
+    if not res:
+        return False, "Administrative privilege prompt was declined or failed to launch."
+        
+    hProcess = info.hProcess
+    if not hProcess:
+        return False, "Failed to get process handle for the elevated helper."
+        
     error_msg = ""
+    success = False
     try:
-        proc = subprocess.Popen(cmd, shell=True)
+        kernel32 = ctypes.windll.kernel32
+        STILL_ACTIVE = 0x00000103
+        exit_code = wintypes.DWORD(STILL_ACTIVE)
         
         last_progress = 0
-        success = False
         
-        while proc.poll() is None:
+        while True:
+            if not kernel32.GetExitCodeProcess(hProcess, ctypes.byref(exit_code)):
+                break
+            if exit_code.value != STILL_ACTIVE:
+                break
+                
             time.sleep(0.2)
             if os.path.exists(status_file):
                 try:
@@ -218,14 +289,13 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
                 pass
                 
         if not success and not error_msg:
-            error_msg = "Administrative privilege prompt was declined or PowerShell failed to execute."
+            error_msg = "Elevated helper exited without writing completion status."
             
         return success, error_msg
         
-    except Exception as e:
-        err = f"Failed to execute elevated helper: {e}"
-        print(err, file=sys.stderr)
-        return False, err
+    finally:
+        ctypes.windll.kernel32.CloseHandle(hProcess)
+
 def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False) -> bool:
     """
     Injects SSH enablement, User credentials, WiFi configuration (wpa_supplicant + NetworkManager),
@@ -238,7 +308,27 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         return False
         
     try:
-        # A. SSH Enablement
+        # A. Hostname validation and sanitization
+        import re
+        if not hostname:
+            clean_hostname = "kace"
+        else:
+            clean_hostname = hostname.replace(".local", "")
+            # If invalid characters exist, raise ValueError (can be handled gracefully by UI/caller)
+            if ' ' in clean_hostname or not re.match(r'^[a-zA-Z0-9.-]+$', clean_hostname) or clean_hostname.startswith('.') or clean_hostname.endswith('.') or clean_hostname.startswith('-') or clean_hostname.endswith('-'):
+                raise ValueError("Invalid hostname. Hostname must contain only alphanumeric characters, dots, and hyphens, and cannot start or end with a dot or hyphen.")
+            
+        # B. WiFi input sanitization/escaping to prevent shell/ini/file structure injection
+        clean_wpa_ssid = wifi_ssid.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '')
+        clean_wpa_password = wifi_password.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '')
+        
+        clean_nm_ssid = wifi_ssid.replace('\n', '').replace('\r', '')
+        clean_nm_password = wifi_password.replace('\n', '').replace('\r', '')
+        
+        clean_toml_ssid = wifi_ssid.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '')
+        clean_toml_password = wifi_password.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '')
+
+        # C. SSH Enablement
         if ssh_enabled:
             ssh_file = os.path.join(boot_path, "ssh")
             with open(ssh_file, "w") as f:
@@ -248,13 +338,13 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
             with open(ssh_txt_file, "w") as f:
                 pass
             
-        # B. User Credentials configuration (userconf.txt)
+        # D. User Credentials configuration (userconf.txt)
         hashed_pw = hash_password(ssh_password)
         userconf_file = os.path.join(boot_path, "userconf.txt")
         with open(userconf_file, "w", newline="\n") as f:
             f.write(f"{DEFAULT_USERNAME}:{hashed_pw}\n")
             
-        # C. WiFi credentials
+        # E. WiFi credentials
         if wifi_ssid:
             # Legacy: wpa_supplicant.conf (for Buster/Bullseye compatibility)
             country_code = _get_country_from_timezone(timezone) if timezone else "US"
@@ -264,8 +354,8 @@ update_config=1
 country={country_code}
 
 network={{
-    ssid="{wifi_ssid}"
-    psk="{wifi_password}"
+    ssid="{clean_wpa_ssid}"
+    psk="{clean_wpa_password}"
     key_mgmt=WPA-PSK
 }}
 """
@@ -278,6 +368,7 @@ network={{
             nm_file = os.path.join(nm_dir, "preconfigured-wifi.nmconnection")
             
             # Generate a random UUID for the connection
+            import uuid
             conn_uuid = str(uuid.uuid4())
             nm_content = f"""[connection]
 id=preconfigured-wifi
@@ -287,12 +378,12 @@ interface-name=wlan0
 
 [wifi]
 mode=infrastructure
-ssid={wifi_ssid}
+ssid={clean_nm_ssid}
 
 [wifi-security]
 auth-alg=open
 key-mgmt=wpa-psk
-psk={wifi_password}
+psk={clean_nm_password}
 
 [ipv4]
 method=auto
@@ -304,19 +395,19 @@ addr-gen-mode=default-or-eui64
             with open(nm_file, "w", newline="\n") as f:
                 f.write(nm_content)
                 
-        # D. Hostname configuration injection via cmdline.txt boot arguments
+        # F. Hostname configuration injection via cmdline.txt boot arguments
         cmdline_file = os.path.join(boot_path, "cmdline.txt")
-        if os.path.exists(cmdline_file) and hostname:
+        if os.path.exists(cmdline_file) and clean_hostname:
             with open(cmdline_file, "r") as f:
                 content = f.read().strip()
             # If systemd.hostname boot parameter is not already set
             if "systemd.hostname" not in content:
                 # Append parameter
-                content = f"{content} systemd.hostname={hostname.replace('.local', '')}"
+                content = f"{content} systemd.hostname={clean_hostname}"
                 with open(cmdline_file, "w", newline="\n") as f:
                     f.write(content + "\n")
                     
-        # E. Bootstrap Config injection
+        # G. Bootstrap Config injection
         bootstrap_cfg = os.path.join(boot_path, "kace-bootstrap.txt")
         with open(bootstrap_cfg, "w", newline="\n") as f:
             f.write(f"DASHBOARD={dashboard_ui}\n")
@@ -327,37 +418,25 @@ addr-gen-mode=default-or-eui64
                 f.write(f"PI_MODEL={pi_model}\n")
             if os_arch:
                 f.write(f"OS_ARCH={os_arch}\n")
-                    
-        # F. Bookworm headless configuration (custom.toml)
+                
+        # H. Bookworm headless configuration (custom.toml)
         custom_toml_path = os.path.join(boot_path, "custom.toml")
-        clean_hostname = hostname.replace(".local", "") if hostname else "kace"
-        
-        esc_hostname = clean_hostname.replace('\\', '\\\\').replace('"', '\\"')
-        esc_username = DEFAULT_USERNAME.replace('\\', '\\\\').replace('"', '\\"')
-        esc_ssh_password = ssh_password.replace('\\', '\\\\').replace('"', '\\"')
         
         toml_content = f"""config_version = 1
-
+ 
 [system]
-hostname = "{esc_hostname}"
-
-[user]
-name = "{esc_username}"
-password = "{esc_ssh_password}"
-password_encrypted = false
-
+hostname = "{clean_hostname}"
+ 
 [ssh]
 enabled = {"true" if ssh_enabled else "false"}
 password_authentication = true
 """
         if wifi_ssid:
             country_code = _get_country_from_timezone(timezone) if timezone else "US"
-            esc_wifi_ssid = wifi_ssid.replace('\\', '\\\\').replace('"', '\\"')
-            esc_wifi_password = wifi_password.replace('\\', '\\\\').replace('"', '\\"')
             toml_content += f"""
 [wlan]
-ssid = "{esc_wifi_ssid}"
-password = "{esc_wifi_password}"
+ssid = "{clean_toml_ssid}"
+password = "{clean_toml_password}"
 password_encrypted = false
 country = "{country_code}"
 """
@@ -365,13 +444,15 @@ country = "{country_code}"
             f.write(toml_content)
         try:
             time.sleep(1)
-            subprocess.run("powershell -Command \"Update-HostStorageCache\"", shell=True, capture_output=True)
+            subprocess.run(["powershell", "-Command", "Update-HostStorageCache"], capture_output=True)
         except:
             pass
             
         return True
     except Exception as e:
         print(f"Error injecting boot configs: {e}", file=sys.stderr)
+        if isinstance(e, ValueError):
+            raise e
         return False
 
 if __name__ == "__main__":

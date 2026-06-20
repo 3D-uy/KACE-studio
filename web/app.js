@@ -781,6 +781,9 @@ function handleLoginInput(data) {
 function performSshLogin(username, password) {
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.connect_ssh(currentDeviceIp, username, password).then(success => {
+            // Securely wipe plaintext passwords from memory
+            loginPassword = '';
+            currentLoginInput = '';
             if (success) {
                 connectedUsername = username;
                 term.write("\x1b[1;32m[KACE Workspace] SSH connection established successfully.\x1b[0m\r\n");
@@ -792,6 +795,9 @@ function performSshLogin(username, password) {
                 promptTerminalLogin();
             }
         }).catch(err => {
+            // Securely wipe plaintext passwords from memory on error
+            loginPassword = '';
+            currentLoginInput = '';
             term.write(`\r\n\x1b[1;31m[Error] Connection error: ${err}\x1b[0m\r\n`);
             updateConnectionStatus(false);
             promptTerminalLogin();
@@ -799,6 +805,8 @@ function performSshLogin(username, password) {
     } else {
         // Mock connection
         setTimeout(() => {
+            loginPassword = '';
+            currentLoginInput = '';
             if (username === 'kace' && password === 'kace') {
                 connectedUsername = username;
                 term.write("\x1b[1;32m[KACE Workspace] (DEBUG MOCK) SSH connection established.\x1b[0m\r\n");
@@ -952,6 +960,14 @@ function startBootstrap() {
     if (!sshConnected) return;
     
     const selectedUi = document.getElementById('bootstrap-ui-select-imager').value || 'mainsail';
+    
+    // Strict allowlist validation to prevent remote SSH command injection
+    const validUis = ['mainsail', 'fluidd', 'both'];
+    if (!validUis.includes(selectedUi)) {
+        term.write(`\r\n\x1b[1;31m[Error] Invalid dashboard UI selection: ${selectedUi}\x1b[0m\r\n`);
+        return;
+    }
+    
     term.write(`\r\n\x1b[1;35m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
     const bootstrapCmd = `curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}\n`;
     

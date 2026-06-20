@@ -34,15 +34,45 @@ def probe_ip_ports(ip: str, ports: List[int] = [22, 7125], timeout: float = 0.5)
 def get_local_subnet_ips() -> List[str]:
     """
     Discovers the active network interface and returns a list of all host IPs in its /24 subnet.
+    Supports offline mode.
     """
     ips = []
+    local_ip = ""
+    
+    # Method 1: Try dummy socket to public DNS (fastest if online)
     try:
-        # Open a dummy socket to find active routing path
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
         s.connect(("8.8.8.8", 80))
         local_ip = s.getsockname()[0]
         s.close()
+    except Exception:
+        pass
         
+    # Method 2: Offline fallback via getaddrinfo on hostname
+    if not local_ip or local_ip.startswith("127."):
+        try:
+            hostname = socket.gethostname()
+            addr_infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
+            for info in addr_infos:
+                ip = info[4][0]
+                if ip and not ip.startswith("127."):
+                    local_ip = ip
+                    break
+        except Exception:
+            pass
+            
+    # Method 3: Offline socket binding check
+    if not local_ip or local_ip.startswith("127."):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("10.255.255.255", 1))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            pass
+
+    if local_ip and not local_ip.startswith("127."):
         parts = local_ip.split(".")
         if len(parts) == 4:
             subnet_prefix = f"{parts[0]}.{parts[1]}.{parts[2]}."
@@ -51,8 +81,7 @@ def get_local_subnet_ips() -> List[str]:
                 ip_str = f"{subnet_prefix}{i}"
                 if ip_str != local_ip:
                     ips.append(ip_str)
-    except Exception as e:
-        print(f"Error getting local subnet: {e}")
+    else:
         # Default fallback
         for i in range(1, 255):
             ips.append(f"192.168.1.{i}")

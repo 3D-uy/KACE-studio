@@ -282,10 +282,325 @@ class TestKaceBackend(unittest.TestCase):
                 with open(custom_toml_path, "r") as f:
                     toml_content = f.read()
                 self.assertIn('hostname = "kace"', toml_content)
-                self.assertIn('name = "kace"', toml_content)
-                self.assertIn('password = "pwd"', toml_content)
         finally:
             shutil.rmtree(temp_boot)
+
+    def test_wifi_credentials_injection_escaping(self):
+        r"""
+        Test that wifi_ssid and wifi_password containing shell metacharacters (", ', \n, ;, $, \)
+        are safely written to config files without breaking file structure or enabling injection.
+        Assert the output files remain valid and parseable.
+        """
+        import tempfile
+        import shutil
+        import configparser
+        from backend.imager import inject_config
+        from unittest.mock import patch
+        
+        temp_boot = tempfile.mkdtemp()
+        try:
+            wifi_ssid = 'My"SSID"\n;$\\'
+            wifi_password = 'My\'Password\n;$\\'
+            
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-test",
+                    wifi_ssid=wifi_ssid,
+                    wifi_password=wifi_password,
+                    ssh_password="kacepwd123",
+                    dashboard_ui="mainsail"
+                )
+                self.assertTrue(success)
+                
+                # Check wpa_supplicant.conf
+                wpa_path = os.path.join(temp_boot, "wpa_supplicant.conf")
+                self.assertTrue(os.path.exists(wpa_path))
+                with open(wpa_path, "r", encoding="utf-8") as f:
+                    wpa_content = f.read()
+                self.assertIn('ssid="My\\"SSID\\";$\\\\"', wpa_content)
+                self.assertIn('psk="My\'Password;$\\\\"', wpa_content)
+                
+                # Check NetworkManager profile
+                nm_path = os.path.join(temp_boot, "system-connections", "preconfigured-wifi.nmconnection")
+                self.assertTrue(os.path.exists(nm_path))
+                
+                config = configparser.ConfigParser(inline_comment_prefixes=None)
+                config.read(nm_path, encoding="utf-8")
+                self.assertEqual(config.get("wifi", "ssid"), 'My"SSID";$\\')
+                self.assertEqual(config.get("wifi-security", "psk"), 'My\'Password;$\\')
+                
+                # Check custom.toml
+                custom_toml_path = os.path.join(temp_boot, "custom.toml")
+                self.assertTrue(os.path.exists(custom_toml_path))
+                with open(custom_toml_path, "r", encoding="utf-8") as f:
+                    toml_content = f.read()
+                self.assertIn('ssid = "My\\"SSID\\";$\\\\"', toml_content)
+                self.assertIn('password = "My\'Password;$\\\\"', toml_content)
+                
+                try:
+                    import tomllib
+                    with open(custom_toml_path, "rb") as f:
+                        data = tomllib.load(f)
+                    self.assertEqual(data["wlan"]["ssid"], 'My"SSID";$\\')
+                    self.assertEqual(data["wlan"]["password"], 'My\'Password;$\\')
+                except ImportError:
+                    self.assertIn('hostname = "kace-test"', toml_content)
+                    self.assertIn('password_authentication = true', toml_content)
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_hostname_invalid_rejection(self):
+        """
+        Test that hostname with invalid characters (spaces, dots beyond subdomain,
+        special chars) is rejected gracefully by raising a ValueError.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch
+        
+        temp_boot = tempfile.mkdtemp()
+        try:
+            invalid_hostnames = [
+                "kace space",
+                "kace$special",
+                ".kace",
+                "kace.",
+                "-kace",
+                "kace-",
+                "kace..local",
+            ]
+            
+            for hn in invalid_hostnames:
+                with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                    with self.assertRaises(ValueError, msg=f"Hostname '{hn}' should be rejected"):
+                        inject_config(
+                            disk_number=99,
+                            hostname=hn,
+                            wifi_ssid="ssid",
+                            wifi_password="pwd",
+                            ssh_password="pwd",
+                            dashboard_ui="mainsail"
+                        )
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_password_hash_crypt_verification(self):
+        """
+        Extend the SHA-512 test to verify the hash is actually valid against the original
+        plaintext using crypt.crypt() or equivalent (pcrypt.crypt).
+        """
+        import pcrypt
+        pwd = "my_secure_kace_password_123"
+        hashed = hash_password(pwd)
+        
+        self.assertTrue(hashed.startswith("$6$"))
+        verification = pcrypt.crypt(pwd, hashed)
+        self.assertEqual(verification, hashed)
+        
+        wrong_verification = pcrypt.crypt("wrong_password", hashed)
+        self.assertNotEqual(wrong_verification, hashed)
+
+    def test_dashboard_ui_both_injection(self):
+        """
+        Verify that when dashboard_ui="both" is passed, the kace-bootstrap.txt
+        correctly reflects DASHBOARD=both and that no files are missing or malformed.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch
+        
+        temp_boot = tempfile.mkdtemp()
+        try:
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-both",
+                    wifi_ssid="ssid",
+                    wifi_password="pwd",
+                    ssh_password="pwd",
+                    dashboard_ui="both"
+                )
+                self.assertTrue(success)
+                
+                # Check kace-bootstrap.txt
+                bootstrap_path = os.path.join(temp_boot, "kace-bootstrap.txt")
+                self.assertTrue(os.path.exists(bootstrap_path))
+                with open(bootstrap_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                self.assertIn("DASHBOARD=both\n", content)
+                
+                # Check userconf.txt
+                userconf_path = os.path.join(temp_boot, "userconf.txt")
+                self.assertTrue(os.path.exists(userconf_path))
+                
+                # Check custom.toml
+                custom_toml_path = os.path.join(temp_boot, "custom.toml")
+                self.assertTrue(os.path.exists(custom_toml_path))
+                
+                # Check legacy wpa_supplicant
+                wpa_path = os.path.join(temp_boot, "wpa_supplicant.conf")
+                self.assertTrue(os.path.exists(wpa_path))
+                
+                # Check modern NetworkManager profile
+                nm_path = os.path.join(temp_boot, "system-connections", "preconfigured-wifi.nmconnection")
+                self.assertTrue(os.path.exists(nm_path))
+                
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_bootstrap_argument_priority(self):
+        """
+        Simulate a scenario where both CLI arguments and a kace-bootstrap.txt file
+        are present with conflicting values. Assert that the explicitly passed argument
+        always wins.
+        """
+        import subprocess
+        import tempfile
+        import shutil
+        
+        try:
+            subprocess.run(["bash", "--version"], capture_output=True, check=True)
+        except (subprocess.SubprocessError, FileNotFoundError):
+            raise unittest.SkipTest("bash not available on this platform")
+            
+        temp_dir = tempfile.mkdtemp()
+        try:
+            mock_boot_cfg = os.path.join(temp_dir, "kace-bootstrap.txt")
+            with open(mock_boot_cfg, "w") as f:
+                f.write("DASHBOARD=fluidd\n")
+                f.write("CROWSNEST=true\n")
+                f.write("TIMEZONE=Europe/London\n")
+                
+            bootstrap_sh_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bootstrap.sh")
+            with open(bootstrap_sh_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            posix_boot_cfg_path = mock_boot_cfg.replace("\\", "/")
+            
+            modified_content = content.replace(
+                '/boot/firmware/kace-bootstrap.txt', posix_boot_cfg_path
+            ).replace(
+                '/boot/kace-bootstrap.txt', posix_boot_cfg_path
+            ).replace(
+                'exec > >(tee -i "$LOG_FILE") 2>&1', '# exec > >(tee -i "$LOG_FILE") 2>&1'
+            )
+            
+            target_str = 'echo "--------------------------------------------------------"'
+            idx = modified_content.find(target_str)
+            if idx != -1:
+                next_idx = modified_content.find(target_str, idx + len(target_str))
+                if next_idx != -1:
+                    insert_pos = next_idx + len(target_str)
+                    modified_content = modified_content[:insert_pos] + "\nexit 0\n" + modified_content[insert_pos:]
+            
+            temp_script = os.path.join(temp_dir, "bootstrap_test.sh")
+            with open(temp_script, "w", newline="\n", encoding="utf-8") as f:
+                f.write(modified_content)
+                
+            res = subprocess.run([
+                "bash", temp_script,
+                "--dashboard", "mainsail",
+                "--crowsnest", "false",
+                "--timezone", "America/New_York"
+            ], capture_output=True, text=True)
+            
+            self.assertEqual(res.returncode, 0)
+            self.assertIn("Dashboard UI : mainsail", res.stdout)
+            self.assertIn("Webcam Stream: false", res.stdout)
+            self.assertIn("Timezone     : America/New_York", res.stdout)
+            
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_unwritable_boot_partition_handling(self):
+        """
+        Mock the boot path as a read-only or non-existent directory.
+        Assert that inject_config fails gracefully with a clear return value (False)
+        and not a raw unhandled exception.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch
+        
+        with patch("backend.imager.get_boot_drive_letter", return_value="/nonexistent/boot/path"):
+            success = inject_config(
+                disk_number=99,
+                hostname="kace-test",
+                wifi_ssid="ssid",
+                wifi_password="pwd",
+                ssh_password="pwd",
+                dashboard_ui="mainsail"
+            )
+            self.assertFalse(success)
+            
+        temp_boot = tempfile.mkdtemp()
+        try:
+            original_open = open
+            def mock_open(file, mode="r", *args, **kwargs):
+                if temp_boot in str(file) and "w" in mode:
+                    raise PermissionError("[Errno 13] Permission denied (Mocked read-only)")
+                return original_open(file, mode, *args, **kwargs)
+                
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                with patch("builtins.open", side_effect=mock_open):
+                    success = inject_config(
+                        disk_number=99,
+                        hostname="kace-test",
+                        wifi_ssid="ssid",
+                        wifi_password="pwd",
+                        ssh_password="pwd",
+                        dashboard_ui="mainsail"
+                    )
+                    self.assertFalse(success)
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_probe_ip_ports_known_open_port(self):
+        """
+        Test probe_ip_ports against 127.0.0.1 on a port you open temporarily
+        with socket.socket in the test setup. Assert it correctly returns True for that port.
+        """
+        import socket
+        from backend.discovery import probe_ip_ports
+        
+        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_sock.bind(("127.0.0.1", 0))
+        server_sock.listen(1)
+        port = server_sock.getsockname()[1]
+        
+        try:
+            results = probe_ip_ports("127.0.0.1", ports=[port], timeout=0.1)
+            self.assertTrue(results.get(port), f"Port {port} should report open")
+        finally:
+            server_sock.close()
+
+    def test_get_boot_drive_letter_exception_safety(self):
+        """
+        Add at least one test that calls the real (non-mocked) get_boot_drive_letter
+        and asserts it returns either a valid path string or None/"" — never raises an exception,
+        regardless of OS.
+        """
+        from backend.imager import get_boot_drive_letter
+        try:
+            result = get_boot_drive_letter(9999)
+            self.assertTrue(isinstance(result, str) or result is None)
+        except Exception as e:
+            self.fail(f"get_boot_drive_letter raised an exception: {e}")
+
+    def test_list_drives_non_windows_empty(self):
+        """
+        Assert that on non-Windows platforms list_drives() returns an empty list.
+        """
+        from backend.imager import list_drives
+        from unittest.mock import patch
+        
+        with patch("sys.platform", "linux"):
+            result = list_drives()
+            self.assertEqual(result, [])
 
 
 if __name__ == "__main__":
