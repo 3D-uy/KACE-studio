@@ -7,6 +7,12 @@ import uuid
 from pathlib import Path
 from backend.sha512_crypt import hash_password
 
+# Subprocess flags to run silent processes on Windows (CREATE_NO_WINDOW)
+SUBPROCESS_FLAGS = {}
+if sys.platform == "win32":
+    SUBPROCESS_FLAGS["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+
 # Default system username for the Pi provisioning
 DEFAULT_USERNAME = "kace"
 
@@ -51,7 +57,7 @@ def list_drives() -> list:
     if sys.platform == "win32":
         try:
             # Query physical disks
-            res = subprocess.run(["powershell", "-Command", "Get-Disk | Select-Object Number, FriendlyName, Size, BusType, IsSystem, IsBoot | ConvertTo-Json"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+            res = subprocess.run(["powershell", "-Command", "Get-Disk | Select-Object Number, FriendlyName, Size, BusType, IsSystem, IsBoot | ConvertTo-Json"], capture_output=True, text=True, encoding="utf-8", errors="replace", **SUBPROCESS_FLAGS)
             if res.returncode == 0 and res.stdout.strip():
                 data = json.loads(res.stdout.strip())
                 # If there's only one disk, ConvertTo-Json returns a dict instead of a list
@@ -91,7 +97,7 @@ def get_boot_drive_letter(disk_number: int) -> str:
         
     # Query partitions and find their drive letters
     for _ in range(5):  # Retry up to 5 times to let Windows mount the disk
-        res = subprocess.run(["powershell", "-Command", f"Get-Partition -DiskNumber {disk_number} | Get-Volume | Select-Object DriveLetter, FileSystem | ConvertTo-Json"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+        res = subprocess.run(["powershell", "-Command", f"Get-Partition -DiskNumber {disk_number} | Get-Volume | Select-Object DriveLetter, FileSystem | ConvertTo-Json"], capture_output=True, text=True, encoding="utf-8", errors="replace", **SUBPROCESS_FLAGS)
         if res.returncode == 0 and res.stdout.strip():
             try:
                 data = json.loads(res.stdout.strip())
@@ -444,7 +450,7 @@ country = "{country_code}"
             f.write(toml_content)
         try:
             time.sleep(1)
-            subprocess.run(["powershell", "-Command", "Update-HostStorageCache"], capture_output=True)
+            subprocess.run(["powershell", "-Command", "Update-HostStorageCache"], capture_output=True, **SUBPROCESS_FLAGS)
         except:
             pass
             

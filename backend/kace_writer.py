@@ -5,6 +5,12 @@ import subprocess
 import ctypes
 from ctypes import wintypes
 
+# Subprocess flags to run silent processes on Windows (CREATE_NO_WINDOW)
+SUBPROCESS_FLAGS = {}
+if sys.platform == "win32":
+    SUBPROCESS_FLAGS["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+
 class Win32DiskWriter:
     def __init__(self, physical_path, disk_number=None):
         self.physical_path = physical_path
@@ -122,7 +128,7 @@ class Win32DiskWriter:
 
     def _get_disk_volumes(self, disk_number):
         try:
-            res = subprocess.run(["powershell", "-Command", f"Get-Partition -DiskNumber {disk_number} | Select-Object -ExpandProperty AccessPaths"], capture_output=True, text=True, encoding="utf-8")
+            res = subprocess.run(["powershell", "-Command", f"Get-Partition -DiskNumber {disk_number} | Select-Object -ExpandProperty AccessPaths"], capture_output=True, text=True, encoding="utf-8", **SUBPROCESS_FLAGS)
             if res.returncode == 0:
                 paths = []
                 for line in res.stdout.splitlines():
@@ -259,7 +265,7 @@ def main():
         try:
             subprocess.run(
                 ["powershell", "-Command", f"Set-Disk -Number {disk_number} -IsOffline $true"],
-                check=True, capture_output=True
+                check=True, capture_output=True, **SUBPROCESS_FLAGS
             )
         except Exception as offline_err:
             # Non-fatal warning - log and continue to let raw file open handle sharing check
@@ -308,7 +314,7 @@ def main():
         try:
             subprocess.run(
                 ["powershell", "-Command", f"Set-Disk -Number {disk_number} -IsOffline $false"],
-                check=True, capture_output=True
+                check=True, capture_output=True, **SUBPROCESS_FLAGS
             )
         except Exception as online_err:
             warn_msg = f"Warning: Failed to online disk {disk_number}: {online_err}"
@@ -320,7 +326,7 @@ def main():
         try:
             subprocess.run(
                 ["powershell", "-Command", "Update-HostStorageCache"],
-                capture_output=True
+                capture_output=True, **SUBPROCESS_FLAGS
             )
         except Exception as cache_err:
             warn_msg = f"Warning: Failed to refresh storage cache: {cache_err}"
@@ -339,7 +345,7 @@ def main():
         try:
             subprocess.run(
                 ["powershell", "-Command", f"Set-Disk -Number {disk_number} -IsOffline $false"],
-                capture_output=True
+                capture_output=True, **SUBPROCESS_FLAGS
             )
         except:
             pass
@@ -352,7 +358,7 @@ def main():
         try:
             subprocess.run(
                 ["powershell", "-Command", f"Set-Disk -Number {disk_number} -IsOffline $false"],
-                capture_output=True
+                capture_output=True, **SUBPROCESS_FLAGS
             )
         except:
             pass
