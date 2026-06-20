@@ -46,6 +46,12 @@ def _get_country_from_timezone(timezone: str) -> str:
     return "US"  # Safe default
 
 
+def _compute_wpa_psk(ssid: str, password: str) -> str:
+    """Computes a WPA-PSK hash from SSID and password using PBKDF2."""
+    import hashlib
+    return hashlib.pbkdf2_hmac('sha1', password.encode(), ssid.encode(), 4096, 32).hex()
+
+
 
 def list_drives() -> list:
     """
@@ -576,12 +582,128 @@ country = "{country_code}"
             print(f"[ERROR] Failed writing or verifying custom.toml: {e}", file=sys.stderr)
             raise e
 
+        # I. cloud-init: user-data
+        import uuid
+        instance_uuid = str(uuid.uuid4())
+        userdata_path = os.path.join(boot_path, "user-data")
+        country_code = _get_country_from_timezone(timezone) if timezone else "US"
+        
+        userdata_content = f"""#cloud-config
+hostname: {clean_hostname}
+manage_etc_hosts: true
+packages:
+- avahi-daemon
+timezone: {timezone or "UTC"}
+users:
+- name: kace
+  groups: users,adm,dialout,audio,netdev,video,plugdev,cdrom,games,input,gpio,spi,i2c,render,sudo
+  shell: /bin/bash
+  lock_passwd: false
+  passwd: "{hashed_pw}"
+enable_ssh: true
+ssh_pwauth: true
+"""
+        try:
+            with open(userdata_path, "w", newline="\n") as f:
+                f.write(userdata_content)
+            if not os.path.exists(userdata_path):
+                raise IOError(f"user-data not found at: {userdata_path}")
+            with open(userdata_path, "r", encoding="utf-8") as f_check:
+                c = f_check.read()
+            if f"hostname: {clean_hostname}" not in c or f'passwd: "{hashed_pw}"' not in c:
+                raise ValueError("user-data verification failed.")
+            print(f"[DEBUG] Successfully verified user-data write at {userdata_path}", file=sys.stderr)
+        except Exception as e:
+            print(f"[ERROR] Failed writing or verifying user-data: {e}", file=sys.stderr)
+            raise e
+
+        # J. cloud-init: network-config
+        network_config_path = os.path.join(boot_path, "network-config")
+        if wifi_ssid:
+            wpa_psk_hex = _compute_wpa_psk(wifi_ssid, wifi_password)
+            network_content = f"""network:
+  version: 2
+  ethernets:
+    eth0:
+      dhcp4: true
+      optional: true
+  wifis:
+    wlan0:
+      dhcp4: true
+      regulatory-domain: "{country_code}"
+      access-points:
+        "{wifi_ssid}":
+          password: "{wpa_psk_hex}"
+      optional: true
+"""
+        else:
+            network_content = """network:
+  version: 2
+  ethernets:
+    eth0:
+      dhcp4: true
+      optional: true
+"""
+        try:
+            with open(network_config_path, "w", newline="\n") as f:
+                f.write(network_content)
+            if not os.path.exists(network_config_path):
+                raise IOError(f"network-config not found at: {network_config_path}")
+            with open(network_config_path, "r", encoding="utf-8") as f_check:
+                c = f_check.read()
+            if "version: 2" not in c:
+                raise ValueError("network-config verification failed.")
+            if wifi_ssid and wifi_ssid not in c:
+                raise ValueError("network-config verification failed (missing SSID).")
+            print(f"[DEBUG] Successfully verified network-config write at {network_config_path}", file=sys.stderr)
+        except Exception as e:
+            print(f"[ERROR] Failed writing or verifying network-config: {e}", file=sys.stderr)
+            raise e
+
+        # K. cloud-init: meta-data
+        metadata_path = os.path.join(boot_path, "meta-data")
+        metadata_content = f"instance-id: kace-{instance_uuid}\n"
+        try:
+            with open(metadata_path, "w", newline="\n") as f:
+                f.write(metadata_content)
+            if not os.path.exists(metadata_path):
+                raise IOError(f"meta-data not found at: {metadata_path}")
+            with open(metadata_path, "r", encoding="utf-8") as f_check:
+                c = f_check.read()
+            if f"kace-{instance_uuid}" not in c:
+                raise ValueError("meta-data verification failed.")
+            print(f"[DEBUG] Successfully verified meta-data write at {metadata_path}", file=sys.stderr)
+        except Exception as e:
+            print(f"[ERROR] Failed writing or verifying meta-data: {e}", file=sys.stderr)
+            raise e
+
+        # L. Patch cmdline.txt
+        cmdline_path = os.path.join(boot_path, "cmdline.txt")
+        if os.path.exists(cmdline_path):
+            try:
+                with open(cmdline_path, "r") as f:
+                    cmdline_content = f.read().strip()
+                if "ds=nocloud" not in cmdline_content:
+                    cmdline_content = f"{cmdline_content} cfg80211.ieee80211_regdom={country_code} ds=nocloud;i=kace-{instance_uuid}"
+                    with open(cmdline_path, "w", newline="\n") as f:
+                        f.write(cmdline_content + "\n")
+                    with open(cmdline_path, "r", encoding="utf-8") as f_check:
+                        c = f_check.read()
+                    if f"ds=nocloud;i=kace-{instance_uuid}" not in c:
+                        raise ValueError("cmdline.txt verification failed.")
+                    print(f"[DEBUG] Successfully verified cmdline.txt patch at {cmdline_path}", file=sys.stderr)
+            except Exception as e:
+                print(f"[ERROR] Failed patching or verifying cmdline.txt: {e}", file=sys.stderr)
+                raise e
+        else:
+            print(f"[WARNING] cmdline.txt not found at: {cmdline_path}. Skipping cmdline.txt patching.", file=sys.stderr)
+
         try:
             time.sleep(1)
             subprocess.run(["powershell", "-Command", "Update-HostStorageCache"], capture_output=True, **SUBPROCESS_FLAGS)
         except:
             pass
-            
+
         return True
     except Exception as e:
         print(f"Error injecting boot configs: {e}", file=sys.stderr)

@@ -735,6 +735,170 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    def test_compute_wpa_psk(self):
+        """
+        Verify that _compute_wpa_psk produces correct hex output for known SSID/password pairs.
+        """
+        from backend.imager import _compute_wpa_psk
+        result = _compute_wpa_psk("Root", "SalociN20")
+        self.assertEqual(result, "096995fe921ae6d8e570d57a8dcb56c14f11d7841a4e20843b4b5d5bc3b44021")
+
+    def test_cloud_init_injection(self):
+        """
+        Verify that user-data, network-config, meta-data are written with correct values,
+        and cmdline.txt is patched correctly.
+        """
+        import tempfile
+        import shutil
+        import re
+        from backend.imager import inject_config
+        from unittest.mock import patch, MagicMock
+        
+        temp_boot = tempfile.mkdtemp()
+        try:
+            # Create a mock cmdline.txt in the temp dir to simulate a real image
+            cmdline_path = os.path.join(temp_boot, "cmdline.txt")
+            with open(cmdline_path, "w") as f:
+                f.write("console=serial0,115200 root=/dev/mmcblk0p2 rootwait\n")
+                
+            mock_res = MagicMock()
+            mock_res.returncode = 0
+            import json
+            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
+            
+            with patch("subprocess.run", return_value=mock_res):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-cloud",
+                    wifi_ssid="MySSID",
+                    wifi_password="MyPassword",
+                    ssh_password="kacepwd123",
+                    dashboard_ui="mainsail",
+                    timezone="America/Sao_Paulo"
+                )
+                self.assertTrue(success)
+                
+                # 1. Verify user-data
+                userdata_path = os.path.join(temp_boot, "user-data")
+                self.assertTrue(os.path.exists(userdata_path))
+                with open(userdata_path, "r", encoding="utf-8") as f:
+                    userdata = f.read()
+                self.assertIn("hostname: kace-cloud", userdata)
+                self.assertIn("timezone: America/Sao_Paulo", userdata)
+                self.assertIn("name: kace", userdata)
+                self.assertIn('passwd: "$6$', userdata)  # Verify SHA-512 hash format
+                self.assertIn("enable_ssh: true", userdata)
+                self.assertIn("ssh_pwauth: true", userdata)
+                
+                # 2. Verify network-config
+                network_path = os.path.join(temp_boot, "network-config")
+                self.assertTrue(os.path.exists(network_path))
+                with open(network_path, "r", encoding="utf-8") as f:
+                    network_data = f.read()
+                self.assertIn('version: 2', network_data)
+                self.assertIn('wifis:', network_data)
+                self.assertIn('regulatory-domain: "BR"', network_data)
+                self.assertIn('"MySSID":', network_data)
+                from backend.imager import _compute_wpa_psk
+                expected_psk = _compute_wpa_psk("MySSID", "MyPassword")
+                self.assertIn(f'password: "{expected_psk}"', network_data)
+                
+                # 3. Verify meta-data
+                metadata_path = os.path.join(temp_boot, "meta-data")
+                self.assertTrue(os.path.exists(metadata_path))
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    metadata = f.read().strip()
+                match = re.match(r"^instance-id: kace-([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$", metadata)
+                self.assertIsNotNone(match, f"Invalid meta-data instance-id format: {metadata}")
+                instance_uuid = match.group(1)
+                
+                # 4. Verify cmdline.txt is patched correctly
+                with open(cmdline_path, "r", encoding="utf-8") as f:
+                    cmdline = f.read().strip()
+                self.assertIn("console=serial0,115200 root=/dev/mmcblk0p2 rootwait", cmdline)
+                self.assertIn("cfg80211.ieee80211_regdom=BR", cmdline)
+                self.assertIn(f"ds=nocloud;i=kace-{instance_uuid}", cmdline)
+                
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_cloud_init_empty_wifi(self):
+        """
+        Verify that the wifis section is omitted from network-config when wifi_ssid is empty.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch, MagicMock
+        
+        temp_boot = tempfile.mkdtemp()
+        try:
+            mock_res = MagicMock()
+            mock_res.returncode = 0
+            import json
+            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
+            
+            with patch("subprocess.run", return_value=mock_res):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-cloud",
+                    wifi_ssid="",
+                    wifi_password="",
+                    ssh_password="kacepwd123",
+                    dashboard_ui="mainsail"
+                )
+                self.assertTrue(success)
+                
+                network_path = os.path.join(temp_boot, "network-config")
+                self.assertTrue(os.path.exists(network_path))
+                with open(network_path, "r", encoding="utf-8") as f:
+                    network_data = f.read()
+                self.assertIn('version: 2', network_data)
+                self.assertIn('eth0:', network_data)
+                self.assertNotIn('wifis:', network_data)
+                self.assertNotIn('wlan0:', network_data)
+                
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_cloud_init_missing_cmdline_handling(self):
+        """
+        Verify that missing cmdline.txt is handled gracefully (skips patch without failing inject_config).
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch, MagicMock
+        
+        temp_boot = tempfile.mkdtemp()
+        try:
+            # cmdline.txt is deliberately NOT created in temp_boot
+            mock_res = MagicMock()
+            mock_res.returncode = 0
+            import json
+            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
+            
+            with patch("subprocess.run", return_value=mock_res):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-cloud",
+                    wifi_ssid="MySSID",
+                    wifi_password="MyPassword",
+                    ssh_password="kacepwd123",
+                    dashboard_ui="mainsail"
+                )
+                # Should return True because cmdline.txt missing is skipped gracefully
+                self.assertTrue(success)
+                
+                # Check other cloud-init files are still written
+                self.assertTrue(os.path.exists(os.path.join(temp_boot, "user-data")))
+                self.assertTrue(os.path.exists(os.path.join(temp_boot, "network-config")))
+                self.assertTrue(os.path.exists(os.path.join(temp_boot, "meta-data")))
+                self.assertFalse(os.path.exists(os.path.join(temp_boot, "cmdline.txt")))
+                
+        finally:
+            shutil.rmtree(temp_boot)
+
 
 if __name__ == "__main__":
     unittest.main()
