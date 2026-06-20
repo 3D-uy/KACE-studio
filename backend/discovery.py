@@ -1,0 +1,149 @@
+import socket
+import concurrent.futures
+from typing import List, Dict
+
+def resolve_hostname(hostname: str = "kace.local") -> str:
+    """
+    Attempts to resolve the hostname to an IP address.
+    """
+    try:
+        ip = socket.gethostbyname(hostname)
+        return ip
+    except socket.gaierror:
+        # Fallback in case of temporary failure
+        return ""
+
+def probe_ip_ports(ip: str, ports: List[int] = [22, 7125], timeout: float = 0.5) -> Dict[int, bool]:
+    """
+    Probes specific ports on an IP to check if they are open.
+    """
+    results = {}
+    for port in ports:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        try:
+            # Connect to port
+            res = s.connect_ex((ip, port))
+            results[port] = (res == 0)
+        except Exception:
+            results[port] = False
+        finally:
+            s.close()
+    return results
+
+def get_local_subnet_ips() -> List[str]:
+    """
+    Discovers the active network interface and returns a list of all host IPs in its /24 subnet.
+    """
+    ips = []
+    try:
+        # Open a dummy socket to find active routing path
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        
+        parts = local_ip.split(".")
+        if len(parts) == 4:
+            subnet_prefix = f"{parts[0]}.{parts[1]}.{parts[2]}."
+            for i in range(1, 255):
+                # Exclude local host IP to save time
+                ip_str = f"{subnet_prefix}{i}"
+                if ip_str != local_ip:
+                    ips.append(ip_str)
+    except Exception as e:
+        print(f"Error getting local subnet: {e}")
+        # Default fallback
+        for i in range(1, 255):
+            ips.append(f"192.168.1.{i}")
+    return ips
+
+def scan_network(custom_subnet_ips: List[str] = None) -> List[Dict]:
+    """
+    Scans the local network concurrently for active SSH and Moonraker ports.
+    Returns a list of discovered devices.
+    """
+    discovered = []
+    ips_to_scan = custom_subnet_ips if custom_subnet_ips is not None else get_local_subnet_ips()
+    
+    # We use a ThreadPoolExecutor for fast parallel socket probing
+    # 50 threads can scan 254 IPs on two ports in ~2-3 seconds with a 0.5s timeout
+    max_workers = 60
+    
+    def worker(ip: str):
+        ports_status = probe_ip_ports(ip)
+        ssh_open = ports_status.get(22, False)
+        moonraker_open = ports_status.get(7125, False)
+        
+        if ssh_open or moonraker_open:
+            # Retrieve hostname if possible
+            hostname = "kace-discovered.local"
+            try:
+                hostname_query = socket.gethostbyaddr(ip)
+                if hostname_query:
+                    hostname = hostname_query[0]
+            except Exception:
+                pass
+                
+            return {
+                "ip": ip,
+                "hostname": hostname,
+                "ssh": ssh_open,
+                "moonraker": moonraker_open
+            }
+        return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = executor.map(worker, ips_to_scan)
+        for r in results:
+            if r:
+                discovered.append(r)
+                
+    return discovered
+
+def probe_manual_ip(ip: str) -> dict:
+    """
+    Probes SSH and Moonraker ports on a single manual IP to check if it's active.
+    Supports custom ports specified in the format IP:PORT (e.g. 127.0.0.1:2222).
+    """
+    target_ip = ip
+    ssh_port = 22
+    if ":" in ip:
+        parts = ip.split(":")
+        target_ip = parts[0]
+        try:
+            ssh_port = int(parts[1])
+        except ValueError:
+            pass
+            
+    ports_status = probe_ip_ports(target_ip, [ssh_port, 7125], timeout=1.0)
+    ssh_open = ports_status.get(ssh_port, False)
+    moonraker_open = ports_status.get(7125, False)
+    
+    if ssh_open or moonraker_open:
+        hostname = "kace-manual.local"
+        try:
+            hostname_query = socket.gethostbyaddr(target_ip)
+            if hostname_query:
+                hostname = hostname_query[0]
+        except Exception:
+            pass
+        return {
+            "ip": ip,
+            "hostname": hostname,
+            "ssh": ssh_open,
+            "moonraker": moonraker_open
+        }
+    return None
+
+
+if __name__ == "__main__":
+    print("Testing resolve_hostname of kace.local:")
+    ip = resolve_hostname("kace.local")
+    print(f"Resolved: {ip}")
+    
+    print("\nScanning local subnet (this may take a few seconds)...")
+    devices = scan_network()
+    print(f"Found {len(devices)} active device(s):")
+    for d in devices:
+        print(f" - {d['hostname']} ({d['ip']}) | SSH: {d['ssh']} | Moonraker: {d['moonraker']}")

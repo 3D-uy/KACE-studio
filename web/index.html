@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+        // Shield window.native from enumeration to prevent recursive traversal and COM threading violations
+        (function() {
+            let nativeVal = window.native;
+            Object.defineProperty(window, 'native', {
+                get: function() {
+                    return nativeVal;
+                },
+                set: function(val) {
+                    nativeVal = val;
+                },
+                enumerable: false,
+                configurable: true
+            });
+        })();
+    </script>
+    <title>KACE Desktop MVP</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Xterm.js Terminal styles -->
+    <link rel="stylesheet" href="vendor/xterm/xterm.min.css">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="style.css?v=2.2.1">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="logo-area" style="flex-direction: column; align-items: stretch; margin-bottom: 24px; padding: 0;">
+                <img src="kace_banner.png?v=2.0.0" alt="KACE Studio" style="width: 100%; border-radius: 6px; border: 1px solid var(--border-color); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4); margin-bottom: 8px;">
+                <div class="logo-text" style="text-align: center;">
+                    <span style="font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1.5px;">SBC Bootstrap platform</span>
+                </div>
+            </div>
+            <nav class="nav-menu">
+                <button class="nav-item active" onclick="switchTab('imager-tab')">
+                    <i class="fa-solid fa-compact-disc"></i> <span class="nav-text">Smart Imager</span>
+                </button>
+                <button class="nav-item" onclick="switchTab('discovery-tab')">
+                    <i class="fa-solid fa-satellite-dish"></i> <span class="nav-text">Discovery</span>
+                </button>
+                <button class="nav-item" id="terminal-nav-btn" onclick="switchTab('terminal-tab')">
+                    <i class="fa-solid fa-terminal"></i> <span class="nav-text">SSH Workspace</span>
+                </button>
+            </nav>
+            <div class="sidebar-footer" style="display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+                <button class="theme-toggle-btn" onclick="toggleTheme()" id="theme-toggle-btn" title="Toggle Light/Dark Mode" style="background: transparent; border: 1px solid var(--border-color); color: var(--text-secondary); border-radius: 8px; padding: 8px; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s ease;">
+                    <i class="fa-solid fa-sun" id="theme-icon"></i> <span class="theme-text-lbl" id="theme-text">Light Mode</span>
+                </button>
+                <span class="status-indicator-offline" id="global-connection-status">
+                    <i class="fa-solid fa-circle-nodes"></i> Disconnected
+                </span>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="content-area">
+            <!-- Global Device State Tracker Header -->
+            <div class="state-tracker-bar">
+                <div class="state-step active" id="step-unknown">
+                    <span class="step-num">1</span>
+                    <span class="step-label">Drive</span>
+                </div>
+                <div class="state-step" id="step-flashing">
+                    <span class="step-num">2</span>
+                    <span class="step-label">Flash</span>
+                </div>
+                <div class="state-step" id="step-booting">
+                    <span class="step-num">3</span>
+                    <span class="step-label">Boot</span>
+                </div>
+                <div class="state-step" id="step-discovered">
+                    <span class="step-num">4</span>
+                    <span class="step-label">Discover</span>
+                </div>
+                <div class="state-step" id="step-ssh">
+                    <span class="step-num">5</span>
+                    <span class="step-label">SSH</span>
+                </div>
+                <div class="state-step" id="step-bootstrapped">
+                    <span class="step-num">6</span>
+                    <span class="step-label">Bootstrap</span>
+                </div>
+            </div>
+
+            <!-- Stage A: Smart SD Card Imager -->
+            <section id="imager-tab" class="tab-content active">
+                <div class="header">
+                    <h2>Stage A — Smart SD Card Imager</h2>
+                    <p>Prepare a bootable Raspberry Pi OS image pre-configured with WiFi, user accounts, and SSH.</p>
+                </div>
+                
+                <div class="card grid-2">
+                    <div class="form-section">
+                        <h3>Configuration Options</h3>
+                        
+                        <!-- Step 1: Select Raspberry Pi -->
+                        <div class="form-group">
+                            <label><span class="brand-orange">Step 1:</span> Raspberry Pi Model</label>
+                            <div class="custom-select-container" id="pi-model-dropdown-container">
+                                <div class="custom-select-trigger">
+                                    <img src="pi_icon.png" class="trigger-icon">
+                                    <div class="trigger-text-wrapper">
+                                        <span class="trigger-title">Raspberry Pi 4</span>
+                                        <span class="trigger-desc">Raspberry Pi 4 Model B, 400, and Compute Module 4 / 4S</span>
+                                    </div>
+                                    <i class="fa-solid fa-chevron-down trigger-arrow"></i>
+                                </div>
+                                <div class="custom-options-list">
+                                    <div class="custom-option" data-value="pi5">
+                                        <img src="pi_icon.png">
+                                        <div class="option-text-wrapper">
+                                            <span class="option-title">Raspberry Pi 5</span>
+                                            <span class="option-desc">Raspberry Pi 5, 500 / 500+, and Compute Module 5</span>
+                                        </div>
+                                    </div>
+                                    <div class="custom-option selected" data-value="pi4">
+                                        <img src="pi_icon.png">
+                                        <div class="option-text-wrapper">
+                                            <span class="option-title">Raspberry Pi 4</span>
+                                            <span class="option-desc">Raspberry Pi 4 Model B, 400, and Compute Module 4 / 4S</span>
+                                        </div>
+                                    </div>
+                                    <div class="custom-option" data-value="pi3">
+                                        <img src="pi_icon.png">
+                                        <div class="option-text-wrapper">
+                                            <span class="option-title">Raspberry Pi 3</span>
+                                            <span class="option-desc">Raspberry Pi 3 Model A+ / B / B+ and Compute Module 3 / 3+</span>
+                                        </div>
+                                    </div>
+                                    <div class="custom-option" data-value="pizero2w">
+                                        <img src="pi_icon.png">
+                                        <div class="option-text-wrapper">
+                                            <span class="option-title">Raspberry Pi Zero 2 W</span>
+                                            <span class="option-desc">Raspberry Pi Zero 2 W and Compute Module 2 W</span>
+                                        </div>
+                                    </div>
+                                    <div class="custom-option" data-value="pizerow">
+                                        <img src="pi_icon.png">
+                                        <div class="option-text-wrapper">
+                                            <span class="option-title">Raspberry Pi Zero W</span>
+                                            <span class="option-desc">Legacy single-core Raspberry Pi Zero W</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <input type="hidden" id="pi-model-select" value="pi4">
+                            </div>
+                        </div>
+
+                        <!-- Step 2: Select OS / Dashboard -->
+                        <div class="form-group">
+                            <label><span class="brand-orange">Step 2:</span> OS Dashboard & Architecture</label>
+                            <div class="custom-select-container" id="dashboard-dropdown-container" style="margin-bottom: 8px;">
+                                <div class="custom-select-trigger">
+                                    <div class="logo-group">
+                                        <img src="mainsail_logo.png">
+                                    </div>
+                                    <div class="trigger-text-wrapper">
+                                        <span class="trigger-title">Mainsail OS</span>
+                                        <span class="trigger-desc">Mainsail web dashboard control panel</span>
+                                    </div>
+                                    <i class="fa-solid fa-chevron-down trigger-arrow"></i>
+                                </div>
+                                <div class="custom-options-list">
+                                    <div class="custom-option selected" data-value="mainsail">
+                                        <img src="mainsail_logo.png">
+                                        <div class="option-text-wrapper">
+                                            <span class="option-title">Mainsail OS</span>
+                                            <span class="option-desc">Mainsail web dashboard control panel</span>
+                                        </div>
+                                    </div>
+                                    <div class="custom-option" data-value="fluidd">
+                                        <img src="fluidd_logo.png">
+                                        <div class="option-text-wrapper">
+                                            <span class="option-title">Fluidd OS</span>
+                                            <span class="option-desc">Fluidd web dashboard control panel</span>
+                                        </div>
+                                    </div>
+                                    <div class="custom-option" data-value="both">
+                                        <div class="logo-group">
+                                            <img src="mainsail_logo.png">
+                                            <img src="fluidd_logo.png">
+                                        </div>
+                                        <div class="option-text-wrapper">
+                                            <span class="option-title">Both (Mainsail & Fluidd)</span>
+                                            <span class="option-desc">Install both control interfaces side-by-side</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <input type="hidden" id="bootstrap-ui-select-imager" value="mainsail">
+                            </div>
+                            <div class="input-row">
+                                <select id="os-arch-select">
+                                    <option value="64bit" selected>64-bit (Recommended)</option>
+                                    <option value="32bit">32-bit (Legacy / 3D Pi OS)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Step 3: OS Image Source -->
+                        <div class="form-group">
+                            <label for="image-source-select"><span class="brand-orange">Step 3:</span> OS Image Source</label>
+                            <select id="image-source-select" onchange="toggleImageSource(this.value)">
+                                <option value="default" selected>Raspberry Pi OS Lite (Download & Cache)</option>
+                                <option value="custom">Custom OS Image (Local file)</option>
+                            </select>
+                            <div class="input-row" id="custom-image-wrapper" style="display: none; margin-top: 8px;">
+                                <input type="text" id="custom-image-path" readonly placeholder="Click Browse to select local image..." style="flex-grow: 1;">
+                                <button type="button" class="btn btn-secondary" onclick="browseLocalImage()">
+                                    <i class="fa-solid fa-folder-open"></i> Browse
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Step 4: Target Storage Device -->
+                        <div class="form-group">
+                            <label for="drive-select"><span class="brand-orange">Step 4:</span> Target SD Card / USB</label>
+                            <div class="input-row">
+                                <select id="drive-select">
+                                    <option value="">Scanning for removable drives...</option>
+                                </select>
+                                <button type="button" class="btn btn-secondary" onclick="refreshDrives()">
+                                    <i class="fa-solid fa-rotate"></i>
+                                </button>
+                            </div>
+                            <span class="tip-text"><i class="fa-solid fa-circle-exclamation"></i> Only removable drives are listed to prevent data loss.</span>
+                        </div>
+
+                        <!-- Step 5: Hostname -->
+                        <div class="form-group">
+                            <label for="hostname-input"><span class="brand-orange">Step 5:</span> Hostname</label>
+                            <input type="text" id="hostname-input" value="kace.local" placeholder="e.g. kace.local">
+                        </div>
+
+                        <!-- Step 6: Time Zone -->
+                        <div class="form-group">
+                            <label for="timezone-select"><span class="brand-orange">Step 6:</span> System Time Zone</label>
+                            <select id="timezone-select">
+                                <option value="America/Argentina/Buenos_Aires">America/Argentina/Buenos_Aires (GMT-3)</option>
+                                <option value="America/Sao_Paulo" selected>America/Sao_Paulo (GMT-3)</option>
+                                <option value="America/Santiago">America/Santiago (GMT-4/GMT-3)</option>
+                                <option value="America/Bogota">America/Bogota (GMT-5)</option>
+                                <option value="America/Lima">America/Lima (GMT-5)</option>
+                                <option value="America/Mexico_City">America/Mexico_City (GMT-6)</option>
+                                <option value="America/New_York">America/New_York (EST/EDT)</option>
+                                <option value="America/Chicago">America/Chicago (CST/CDT)</option>
+                                <option value="America/Denver">America/Denver (MST/MDT)</option>
+                                <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
+                                <option value="Europe/London">Europe/London (GMT/BST)</option>
+                                <option value="Europe/Paris">Europe/Paris (CET/CEST)</option>
+                                <option value="Europe/Berlin">Europe/Berlin (CET/CEST)</option>
+                                <option value="Europe/Moscow">Europe/Moscow (MSK)</option>
+                                <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+                                <option value="Asia/Shanghai">Asia/Shanghai (CST)</option>
+                                <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
+                                <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+                                <option value="Australia/Sydney">Australia/Sydney (AEST/AEDT)</option>
+                                <option value="UTC">Coordinated Universal Time (UTC)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-section border-left">
+                        <h3>Credentials & Services</h3>
+                        
+                        <!-- Step 7: Credentials -->
+                        <div class="form-group">
+                            <label><span class="brand-orange">Step 7:</span> Account User (kace)</label>
+                            <input type="text" value="kace" readonly style="background-color: rgba(255, 255, 255, 0.05); color: var(--text-secondary); cursor: not-allowed; margin-bottom: 8px;">
+                            <div class="password-wrapper" style="margin-bottom: 8px;">
+                                <input type="password" id="ssh-password" placeholder="Password">
+                                <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('ssh-password', this)"></i>
+                            </div>
+                            <div class="password-wrapper">
+                                <input type="password" id="ssh-password-confirm" placeholder="Confirm Password">
+                                <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('ssh-password-confirm', this)"></i>
+                            </div>
+                        </div>
+
+                        <!-- Step 8: WiFi Setup -->
+                        <div class="form-group">
+                            <label><span class="brand-orange">Step 8:</span> Wi-Fi Network</label>
+                            <input type="text" id="wifi-ssid" placeholder="Network Name / SSID" style="margin-bottom: 8px;">
+                            <div class="password-wrapper" style="margin-bottom: 8px;">
+                                <input type="password" id="wifi-password" placeholder="WiFi Password">
+                                <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('wifi-password', this)"></i>
+                            </div>
+                            <div class="password-wrapper">
+                                <input type="password" id="wifi-password-confirm" placeholder="Confirm WiFi Password">
+                                <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('wifi-password-confirm', this)"></i>
+                            </div>
+                        </div>
+
+                        <!-- Step 9: Enable SSH -->
+                        <div class="form-group">
+                            <label><span class="brand-orange">Step 9:</span> System Services</label>
+                            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 4px;">
+                                <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
+                                    <input type="checkbox" id="ssh-enable" checked style="width: auto; height: auto; cursor: pointer;"> Enable SSH Daemon
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
+                                    <input type="checkbox" id="ssh-password-auth" checked style="width: auto; height: auto; cursor: pointer;"> Enable Password Authentication
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
+                                    <input type="checkbox" id="crowsnest-enable" style="width: auto; height: auto; cursor: pointer;"> Install Crowsnest (Webcam Streamer)
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Step 10: Resume & Write Summary -->
+                        <div class="form-group" style="margin-top: 24px;">
+                            <label><span class="brand-orange">Step 10:</span> Resume & Write</label>
+                            <button class="btn btn-primary btn-block" onclick="openFormatModal()" id="flash-action-btn">
+                                <i class="fa-solid fa-fire"></i> Write
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Flashing Progress Card -->
+                <div class="card mt-20" id="progress-card" style="display: none;">
+                    <h3 id="progress-title">Writing Image to Storage...</h3>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="progress-fill">0%</div>
+                    </div>
+                    <p class="status-msg" id="flasher-status-msg">Preparing disk write loops...</p>
+                    <button class="btn btn-danger btn-block" id="cancel-flash-btn" onclick="cancelFlashing()" style="margin-top: 12px; display: none;">
+                        <i class="fa-solid fa-xmark"></i> Cancel
+                    </button>
+                </div>
+            </section>
+
+            <!-- Stage B: Integrated SSH Workspace & Discovery -->
+            <section id="discovery-tab" class="tab-content">
+                <div class="header">
+                    <h2>Stage B — Device Discovery</h2>
+                    <p>Search the local network for the booted KACE node and establish a connection.</p>
+                </div>
+
+                <div class="grid-2">
+                    <div class="card">
+                        <h3>Auto-Discovery Scan</h3>
+                        <p class="sub-text">Scanning local network subnet using mDNS and fast port checking.</p>
+                        
+                        <div class="scanning-wrapper" id="scanner-visual">
+                            <div class="pulse-ring"></div>
+                            <i class="fa-solid fa-radar-screen pulse-icon"></i>
+                            <span id="scan-status-text">Searching network...</span>
+                        </div>
+                        
+                        <button class="btn btn-secondary btn-block" onclick="triggerScan()">
+                            <i class="fa-solid fa-magnifying-glass"></i> Scan Subnet Now
+                        </button>
+                    </div>
+
+                    <div class="card">
+                        <h3>Discovered Nodes</h3>
+                        <div class="device-list" id="discovered-device-list">
+                            <div class="list-empty">
+                                <i class="fa-solid fa-hourglass-start"></i> No active nodes located yet.
+                            </div>
+                        </div>
+                        
+                        <div class="manual-connection-area">
+                            <h4>Manual Connection</h4>
+                            <div class="form-group">
+                                <label for="manual-ip">Device IP / Hostname</label>
+                                <input type="text" id="manual-ip" placeholder="e.g. 192.168.1.50 or kace.local">
+                            </div>
+                            <button class="btn btn-secondary btn-block" onclick="connectManually()">
+                                Connect to Target
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Stage C: Embedded SSH Terminal & Bootstrap -->
+            <section id="terminal-tab" class="tab-content">
+                <div class="terminal-workspace-container">
+                    <div class="workspace-header">
+                        <div class="connection-info">
+                            <i class="fa-solid fa-network-wired active-connection-icon"></i>
+                            <div>
+                                <h3 id="connection-title">SSH Session: Disconnected</h3>
+                                <p id="connection-subtitle">No active session. Select a device in the Discovery tab to connect.</p>
+                            </div>
+                        </div>
+                        <div class="workspace-actions">
+                            <button class="btn btn-success" id="bootstrap-btn" onclick="startBootstrap()" disabled>
+                                <i class="fa-solid fa-rocket"></i> Bootstrap KACE
+                            </button>
+                            <button class="btn btn-danger" id="disconnect-btn" onclick="disconnectSSH()" style="display:none;">
+                                Disconnect
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Terminal Search Bar -->
+                    <div class="terminal-search-bar" id="terminal-search-bar" style="display: none;">
+                        <input type="text" id="terminal-search-input" placeholder="Search terminal output..." style="flex-grow: 1; font-size: 13px;">
+                        <button class="btn btn-secondary btn-sm" onclick="terminalSearchPrev()" title="Previous match">
+                            <i class="fa-solid fa-chevron-up"></i>
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="terminalSearchNext()" title="Next match">
+                            <i class="fa-solid fa-chevron-down"></i>
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="toggleTerminalSearch()" title="Close search">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                    
+                    <!-- xterm.js Terminal Viewport -->
+                    <div class="terminal-card">
+                        <div id="terminal-container"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Format Confirmation Modal (Step 11) -->
+    <div id="format-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <i class="fa-solid fa-triangle-exclamation modal-warn-icon"></i>
+                <h3>Confirm & Write</h3>
+            </div>
+            <div class="modal-body">
+                <p><strong>Warning!</strong> This operation will completely format the selected storage device:</p>
+                <div class="target-drive-summary" id="modal-drive-name">Drive Selection: None</div>
+                <p>All existing partitions and data on this drive will be <strong>permanently destroyed</strong>. This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeFormatModal()">Cancel</button>
+                <button class="btn btn-danger" onclick="confirmAndFlash()" id="modal-agree-btn">Agree and Flash</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Flashing Success Modal -->
+    <div id="success-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 16px;">
+                <i class="fa-solid fa-circle-check" style="font-size: 26px; color: var(--success-color); text-shadow: 0 0 10px rgba(16, 185, 129, 0.3);"></i>
+                <h3 style="font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0;">Flashing Completed!</h3>
+            </div>
+            <div class="modal-body" style="font-size: 14px; line-height: 1.6; margin-bottom: 24px;">
+                <p style="font-weight: 700; font-size: 15px; color: var(--text-primary); margin-bottom: 10px;">SD Card successfully flashed and provisioned!</p>
+                <p style="color: var(--text-secondary); margin: 0;">Please insert the card into your Pi, power it on, and switch to the <strong style="color: var(--primary-color);">Discovery</strong> tab.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-success" onclick="closeSuccessModal()" style="font-weight: 600; padding: 10px 24px;">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Xterm.js and Addons (bundled locally) -->
+    <script src="vendor/xterm/xterm.min.js"></script>
+    <script src="vendor/xterm/xterm-addon-fit.min.js"></script>
+    <script src="vendor/xterm/xterm-addon-search.min.js"></script>
+    <script src="app.js?v=2.2.1"></script>
+</body>
+</html>
