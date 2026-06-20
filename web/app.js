@@ -953,7 +953,7 @@ function startBootstrap() {
     
     const selectedUi = document.getElementById('bootstrap-ui-select-imager').value || 'mainsail';
     term.write(`\r\n\x1b[1;35m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
-    const bootstrapCmd = `curl -sSL https://raw.githubusercontent.com/kace-studio/bootstrap/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}\n`;
+    const bootstrapCmd = `curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}\n`;
     
     if (window.pywebview && window.pywebview.api) {
         // Send the shell command to execute the bootstrap
