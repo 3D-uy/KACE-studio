@@ -952,11 +952,46 @@ function initTerminal() {
     });
 }
 
+let bootstrapBuffer = "";
+function parseBootstrapProgress(data) {
+    // Append and keep buffer bounded to prevent leaks
+    bootstrapBuffer += data;
+    if (bootstrapBuffer.length > 5000) {
+        bootstrapBuffer = bootstrapBuffer.slice(-2000);
+    }
+    
+    const connSubtitle = document.getElementById('connection-subtitle');
+    if (!connSubtitle) return;
+    
+    if (bootstrapBuffer.includes("Cloning Klipper repository...") || 
+        bootstrapBuffer.includes("Installing Klipper dependencies") ||
+        bootstrapBuffer.includes("Patching Klipper installer")) {
+        connSubtitle.innerHTML = `<span style="color: var(--primary-color); font-weight: 600;"><i class="fa-solid fa-spinner fa-spin"></i> Status: Installing Klipper...</span>`;
+    }
+    else if (bootstrapBuffer.includes("Cloning Moonraker repository...") || 
+             bootstrapBuffer.includes("Installing Moonraker dependencies")) {
+        connSubtitle.innerHTML = `<span style="color: var(--primary-color); font-weight: 600;"><i class="fa-solid fa-spinner fa-spin"></i> Status: Klipper installed! Installing Moonraker...</span>`;
+    }
+    else if (bootstrapBuffer.includes("Installing Mainsail control interface...") || 
+             bootstrapBuffer.includes("Installing Fluidd control interface...") ||
+             bootstrapBuffer.includes("Setting up Nginx")) {
+        connSubtitle.innerHTML = `<span style="color: var(--primary-color); font-weight: 600;"><i class="fa-solid fa-spinner fa-spin"></i> Status: Moonraker installed! Installing Web Dashboard...</span>`;
+    }
+    else if (bootstrapBuffer.includes("Installing Crowsnest webcam streaming engine...")) {
+        connSubtitle.innerHTML = `<span style="color: var(--primary-color); font-weight: 600;"><i class="fa-solid fa-spinner fa-spin"></i> Status: Dashboard installed! Installing Crowsnest...</span>`;
+    }
+    else if (bootstrapBuffer.includes("Bootstrap complete! KACE Node is fully ready.")) {
+        connSubtitle.innerHTML = `<span style="color: var(--success-color); font-weight: 600;"><i class="fa-solid fa-circle-check"></i> Status: Bootstrap complete! KACE Node is fully ready.</span>`;
+        updateTrackerBar('BOOTSTRAPPED');
+    }
+}
+
 // Push data from Python SSH output stream into xterm terminal
 window.writeTerminalData = function(data) {
     if (term) {
         term.write(data);
     }
+    parseBootstrapProgress(data);
 };
 
 function updateConnectionStatus(connected) {
@@ -1012,30 +1047,41 @@ function startBootstrap() {
     term.write(`\r\n\x1b[1;36m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
     const bootstrapCmd = `if [ -f /boot/firmware/bootstrap.sh ]; then sudo bash /boot/firmware/bootstrap.sh --dashboard ${selectedUi}; elif [ -f /boot/bootstrap.sh ]; then sudo bash /boot/bootstrap.sh --dashboard ${selectedUi}; else curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}; fi\n`;
     
+    // Reset buffer at start
+    bootstrapBuffer = "";
+    
     if (window.pywebview && window.pywebview.api) {
         // Send the shell command to execute the bootstrap
         window.pywebview.api.send_ssh_input(bootstrapCmd);
     } else {
-        // Mock terminal output for bootstrap process in pure UI debug mode
+        // Mock terminal output matching the real shell script logs
         let steps = [
-            `Starting Klipper & Moonraker installers...`,
-            `Downloading selected dashboard components for: ${selectedUi.toUpperCase()}`,
-            "Installing system dependencies: python3-venv libjpeg-dev...",
-            "Configuring service permissions...",
-            `KACE Bootstrapper: Setup complete! ${selectedUi.toUpperCase()} interface ready.`
+            "Updating apt repositories...",
+            "Installing core dependencies...",
+            "Cloning Klipper repository...",
+            "Installing Klipper dependencies and systemd service...",
+            "Cloning Moonraker repository...",
+            "Installing Moonraker dependencies and systemd service...",
+            "Setting up Nginx and downloading selected web interfaces...",
+            `Installing ${selectedUi.charAt(0).toUpperCase() + selectedUi.slice(1)} control interface...`,
+            "Installing Crowsnest webcam streaming engine...",
+            "Bootstrap complete! KACE Node is fully ready."
         ];
         
         term.write(`$ ${bootstrapCmd}`);
         let idx = 0;
         const interval = setInterval(() => {
             if (idx < steps.length) {
-                term.write(`\r\n\x1b[1;32m[Progress]\x1b[0m ${steps[idx]}\r\n`);
+                const stepText = steps[idx];
+                term.write(`\r\n${stepText}\r\n`);
+                // Manually trigger the parser callback to simulate streaming behavior
+                parseBootstrapProgress(stepText);
                 idx++;
             } else {
                 clearInterval(interval);
                 term.write("\r\nkace@kace:~ $ ");
             }
-        }, 1200);
+        }, 1500);
     }
 }
 
