@@ -106,7 +106,7 @@
                         
                         <!-- Step 1: Select Raspberry Pi -->
                         <div class="form-group">
-                            <label><span class="brand-orange">Step 1:</span> Raspberry Pi Model</label>
+                            <label><span class="brand-orange">STEP 1:</span> RASPBERRY PI MODEL</label>
                             <div class="custom-select-container" id="pi-model-dropdown-container">
                                 <div class="custom-select-trigger">
                                     <img src="pi_icon.png" class="trigger-icon">
@@ -159,57 +159,61 @@
 
                         <!-- Step 2: Select OS / Dashboard -->
                         <div class="form-group">
-                            <label><span class="brand-orange">Step 2:</span> OS Dashboard & Architecture</label>
-                            <div class="custom-select-container" id="dashboard-dropdown-container" style="margin-bottom: 8px;">
-                                <div class="custom-select-trigger">
-                                    <div class="logo-group">
-                                        <img src="mainsail_logo.png">
+                            <label><span class="brand-orange">STEP 2:</span> OS DASHBOARD & ARCHITECTURE</label>
+                            <div class="form-row" style="display: flex; gap: 16px; align-items: flex-start;">
+                                <div style="flex: 1.2;">
+                                    <div class="custom-select-container" id="dashboard-dropdown-container">
+                                        <div class="custom-select-trigger">
+                                            <div class="logo-group">
+                                                <img src="mainsail_logo.png">
+                                            </div>
+                                            <div class="trigger-text-wrapper">
+                                                <span class="trigger-title">Mainsail OS</span>
+                                                <span class="trigger-desc">Mainsail web dashboard control panel</span>
+                                            </div>
+                                            <i class="fa-solid fa-chevron-down trigger-arrow"></i>
+                                        </div>
+                                        <div class="custom-options-list">
+                                            <div class="custom-option selected" data-value="mainsail">
+                                                <img src="mainsail_logo.png">
+                                                <div class="option-text-wrapper">
+                                                    <span class="option-title">Mainsail OS</span>
+                                                    <span class="option-desc">Mainsail web dashboard control panel</span>
+                                                </div>
+                                            </div>
+                                            <div class="custom-option" data-value="fluidd">
+                                                <img src="fluidd_logo.png">
+                                                <div class="option-text-wrapper">
+                                                    <span class="option-title">Fluidd OS</span>
+                                                    <span class="option-desc">Fluidd web dashboard control panel</span>
+                                                </div>
+                                            </div>
+                                            <div class="custom-option" data-value="both">
+                                                <div class="logo-group">
+                                                    <img src="mainsail_logo.png">
+                                                    <img src="fluidd_logo.png">
+                                                </div>
+                                                <div class="option-text-wrapper">
+                                                    <span class="option-title">Both (Mainsail & Fluidd)</span>
+                                                    <span class="option-desc">Install both control interfaces side-by-side</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <input type="hidden" id="bootstrap-ui-select-imager" value="mainsail">
                                     </div>
-                                    <div class="trigger-text-wrapper">
-                                        <span class="trigger-title">Mainsail OS</span>
-                                        <span class="trigger-desc">Mainsail web dashboard control panel</span>
-                                    </div>
-                                    <i class="fa-solid fa-chevron-down trigger-arrow"></i>
                                 </div>
-                                <div class="custom-options-list">
-                                    <div class="custom-option selected" data-value="mainsail">
-                                        <img src="mainsail_logo.png">
-                                        <div class="option-text-wrapper">
-                                            <span class="option-title">Mainsail OS</span>
-                                            <span class="option-desc">Mainsail web dashboard control panel</span>
-                                        </div>
-                                    </div>
-                                    <div class="custom-option" data-value="fluidd">
-                                        <img src="fluidd_logo.png">
-                                        <div class="option-text-wrapper">
-                                            <span class="option-title">Fluidd OS</span>
-                                            <span class="option-desc">Fluidd web dashboard control panel</span>
-                                        </div>
-                                    </div>
-                                    <div class="custom-option" data-value="both">
-                                        <div class="logo-group">
-                                            <img src="mainsail_logo.png">
-                                            <img src="fluidd_logo.png">
-                                        </div>
-                                        <div class="option-text-wrapper">
-                                            <span class="option-title">Both (Mainsail & Fluidd)</span>
-                                            <span class="option-desc">Install both control interfaces side-by-side</span>
-                                        </div>
-                                    </div>
+                                <div style="flex: 1;">
+                                    <select id="os-arch-select">
+                                        <option value="64bit" selected>64-bit (Recommended)</option>
+                                        <option value="32bit">32-bit (Legacy / 3D Pi OS)</option>
+                                    </select>
                                 </div>
-                                <input type="hidden" id="bootstrap-ui-select-imager" value="mainsail">
-                            </div>
-                            <div class="input-row">
-                                <select id="os-arch-select">
-                                    <option value="64bit" selected>64-bit (Recommended)</option>
-                                    <option value="32bit">32-bit (Legacy / 3D Pi OS)</option>
-                                </select>
                             </div>
                         </div>
 
                         <!-- Step 3: OS Image Source -->
                         <div class="form-group">
-                            <label for="image-source-select"><span class="brand-orange">Step 3:</span> OS Image Source</label>
+                            <label for="image-source-select"><span class="brand-orange">STEP 3:</span> OS IMAGE SOURCE</label>
                             <select id="image-source-select" onchange="toggleImageSource(this.value)">
                                 <option value="default" selected>Raspberry Pi OS Lite (Download & Cache)</option>
                                 <option value="custom">Custom OS Image (Local file)</option>
@@ -224,7 +228,7 @@
 
                         <!-- Step 4: Target Storage Device -->
                         <div class="form-group">
-                            <label for="drive-select"><span class="brand-orange">Step 4:</span> Target SD Card / USB</label>
+                            <label for="drive-select"><span class="brand-orange">STEP 4:</span> TARGET SD CARD / USB</label>
                             <div class="input-row">
                                 <select id="drive-select">
                                     <option value="">Scanning for removable drives...</option>
@@ -236,37 +240,40 @@
                             <span class="tip-text"><i class="fa-solid fa-circle-exclamation"></i> Only removable drives are listed to prevent data loss.</span>
                         </div>
 
-                        <!-- Step 5: Hostname -->
-                        <div class="form-group">
-                            <label for="hostname-input"><span class="brand-orange">Step 5:</span> Hostname</label>
-                            <input type="text" id="hostname-input" value="kace.local" placeholder="e.g. kace.local">
-                        </div>
+                        <!-- Steps 5 & 6: Hostname & Time Zone side-by-side -->
+                        <div class="form-row" style="display: flex; gap: 16px; width: 100%;">
+                            <!-- Step 5: Hostname -->
+                            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                                <label for="hostname-input"><span class="brand-orange">STEP 5:</span> HOSTNAME</label>
+                                <input type="text" id="hostname-input" value="kace.local" placeholder="e.g. kace.local">
+                            </div>
 
-                        <!-- Step 6: Time Zone -->
-                        <div class="form-group">
-                            <label for="timezone-select"><span class="brand-orange">Step 6:</span> System Time Zone</label>
-                            <select id="timezone-select">
-                                <option value="America/Argentina/Buenos_Aires">America/Argentina/Buenos_Aires (GMT-3)</option>
-                                <option value="America/Sao_Paulo" selected>America/Sao_Paulo (GMT-3)</option>
-                                <option value="America/Santiago">America/Santiago (GMT-4/GMT-3)</option>
-                                <option value="America/Bogota">America/Bogota (GMT-5)</option>
-                                <option value="America/Lima">America/Lima (GMT-5)</option>
-                                <option value="America/Mexico_City">America/Mexico_City (GMT-6)</option>
-                                <option value="America/New_York">America/New_York (EST/EDT)</option>
-                                <option value="America/Chicago">America/Chicago (CST/CDT)</option>
-                                <option value="America/Denver">America/Denver (MST/MDT)</option>
-                                <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
-                                <option value="Europe/London">Europe/London (GMT/BST)</option>
-                                <option value="Europe/Paris">Europe/Paris (CET/CEST)</option>
-                                <option value="Europe/Berlin">Europe/Berlin (CET/CEST)</option>
-                                <option value="Europe/Moscow">Europe/Moscow (MSK)</option>
-                                <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
-                                <option value="Asia/Shanghai">Asia/Shanghai (CST)</option>
-                                <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
-                                <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
-                                <option value="Australia/Sydney">Australia/Sydney (AEST/AEDT)</option>
-                                <option value="UTC">Coordinated Universal Time (UTC)</option>
-                            </select>
+                            <!-- Step 6: Time Zone -->
+                            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                                <label for="timezone-select"><span class="brand-orange">STEP 6:</span> SYSTEM TIME ZONE</label>
+                                <select id="timezone-select">
+                                    <option value="America/Argentina/Buenos_Aires">America/Argentina/Buenos_Aires (GMT-3)</option>
+                                    <option value="America/Sao_Paulo" selected>America/Sao_Paulo (GMT-3)</option>
+                                    <option value="America/Santiago">America/Santiago (GMT-4/GMT-3)</option>
+                                    <option value="America/Bogota">America/Bogota (GMT-5)</option>
+                                    <option value="America/Lima">America/Lima (GMT-5)</option>
+                                    <option value="America/Mexico_City">America/Mexico_City (GMT-6)</option>
+                                    <option value="America/New_York">America/New_York (EST/EDT)</option>
+                                    <option value="America/Chicago">America/Chicago (CST/CDT)</option>
+                                    <option value="America/Denver">America/Denver (MST/MDT)</option>
+                                    <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
+                                    <option value="Europe/London">Europe/London (GMT/BST)</option>
+                                    <option value="Europe/Paris">Europe/Paris (CET/CEST)</option>
+                                    <option value="Europe/Berlin">Europe/Berlin (CET/CEST)</option>
+                                    <option value="Europe/Moscow">Europe/Moscow (MSK)</option>
+                                    <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+                                    <option value="Asia/Shanghai">Asia/Shanghai (CST)</option>
+                                    <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
+                                    <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+                                    <option value="Australia/Sydney">Australia/Sydney (AEST/AEDT)</option>
+                                    <option value="UTC">Coordinated Universal Time (UTC)</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -285,7 +292,7 @@
                         
                         <!-- Step 7: Credentials -->
                         <div class="form-group">
-                            <label><span class="brand-orange">Step 7:</span> Account User (kace)</label>
+                            <label><span class="brand-orange">STEP 7:</span> ACCOUNT USER (kace)</label>
                             <input type="text" value="kace" readonly style="background-color: rgba(255, 255, 255, 0.05); color: var(--text-secondary); cursor: not-allowed; margin-bottom: 8px;">
                             <div class="password-wrapper" style="margin-bottom: 8px;">
                                 <input type="password" id="ssh-password" placeholder="Password">
@@ -299,7 +306,7 @@
 
                         <!-- Step 8: WiFi Setup -->
                         <div class="form-group">
-                            <label><span class="brand-orange">Step 8:</span> Wi-Fi Network</label>
+                            <label><span class="brand-orange">STEP 8:</span> WI-FI NETWORK</label>
                             <input type="text" id="wifi-ssid" placeholder="Network Name / SSID" style="margin-bottom: 8px;">
                             <div class="password-wrapper" style="margin-bottom: 8px;">
                                 <input type="password" id="wifi-password" placeholder="WiFi Password">
@@ -313,7 +320,7 @@
 
                         <!-- Step 9: Enable SSH -->
                         <div class="form-group">
-                            <label><span class="brand-orange">Step 9:</span> System Services</label>
+                            <label><span class="brand-orange">STEP 9:</span> SYSTEM SERVICES</label>
                             <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 4px;">
                                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
                                     <input type="checkbox" id="ssh-enable" checked style="width: auto; height: auto; cursor: pointer;"> Enable SSH Daemon
@@ -329,7 +336,7 @@
 
                         <!-- Step 10: Resume & Write Summary -->
                         <div class="form-group" style="margin-top: 24px;">
-                            <label><span class="brand-orange">Step 10:</span> Resume & Write</label>
+                            <label><span class="brand-orange">STEP 10:</span> RESUME & WRITE</label>
                             <div class="write-action-container" style="position: relative;">
                                 <button class="btn btn-primary btn-block progress-btn" onclick="openFormatModal()" id="flash-action-btn">
                                     <span class="btn-progress-fill" id="btn-progress-fill"></span>
