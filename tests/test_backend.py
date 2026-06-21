@@ -899,6 +899,52 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    def test_bootstrap_local_copy_and_version_injection(self):
+        """
+        Verify that inject_config copies bootstrap.sh to the boot partition,
+        injects a version comment at the top, and uses Unix line endings (\n).
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch, MagicMock
+        
+        temp_boot = tempfile.mkdtemp()
+        try:
+            mock_res = MagicMock()
+            mock_res.returncode = 0
+            import json
+            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
+            
+            with patch("subprocess.run", return_value=mock_res):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-local-test",
+                    wifi_ssid="MySSID",
+                    wifi_password="MyPassword",
+                    ssh_password="kacepwd123",
+                    dashboard_ui="mainsail"
+                )
+                self.assertTrue(success)
+                
+                # Check that bootstrap.sh was copied to temp_boot
+                dest_bootstrap = os.path.join(temp_boot, "bootstrap.sh")
+                self.assertTrue(os.path.exists(dest_bootstrap))
+                
+                # Read content as binary to verify Unix line endings and check the first line version comment
+                with open(dest_bootstrap, "rb") as f:
+                    content_bytes = f.read()
+                    
+                # Ensure no \r\n (CRLF) exists in the file
+                self.assertNotIn(b"\r\n", content_bytes)
+                
+                # Verify that it starts with the KACE Bootstrap Version comment
+                lines = content_bytes.split(b"\n")
+                self.assertTrue(lines[0].startswith(b"# KACE Bootstrap Version:"))
+                
+        finally:
+            shutil.rmtree(temp_boot)
+
 
 if __name__ == "__main__":
     unittest.main()

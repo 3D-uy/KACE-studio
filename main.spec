@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('web', 'web')],  # Includes vendor/ subdirectory (xterm, fontawesome)
+    datas=[('web', 'web'), ('bootstrap.sh', '.')],  # Includes vendor/ subdirectory (xterm, fontawesome)
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

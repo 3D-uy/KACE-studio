@@ -698,6 +698,50 @@ ssh_pwauth: true
         else:
             print(f"[WARNING] cmdline.txt not found at: {cmdline_path}. Skipping cmdline.txt patching.", file=sys.stderr)
 
+        # M. Copy bootstrap.sh with version comment and Unix line endings
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(current_dir)
+            if hasattr(sys, '_MEIPASS'):
+                local_bootstrap_src = os.path.join(sys._MEIPASS, "bootstrap.sh")
+            else:
+                local_bootstrap_src = os.path.join(project_root, "bootstrap.sh")
+
+            if os.path.exists(local_bootstrap_src):
+                git_hash = ""
+                try:
+                    res = subprocess.run(["git", "rev-parse", "--short", "HEAD"], 
+                                         capture_output=True, text=True, cwd=project_root)
+                    if res.returncode == 0:
+                        git_hash = res.stdout.strip()
+                except Exception:
+                    pass
+
+                if not git_hash:
+                    import datetime
+                    git_hash = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+                version_line = f"# KACE Bootstrap Version: {git_hash}\n"
+                dest_bootstrap_path = os.path.join(boot_path, "bootstrap.sh")
+
+                with open(local_bootstrap_src, 'r', encoding='utf-8', errors='ignore') as f_in, \
+                     open(dest_bootstrap_path, 'w', encoding='utf-8', newline='\n') as f_out:
+                    f_out.write(version_line)
+                    while True:
+                        chunk = f_in.read(65536)
+                        if not chunk:
+                            break
+                        f_out.write(chunk)
+                
+                if not os.path.exists(dest_bootstrap_path):
+                    raise IOError(f"bootstrap.sh not found at: {dest_bootstrap_path}")
+                print(f"[DEBUG] Successfully verified bootstrap.sh local copy at {dest_bootstrap_path}", file=sys.stderr)
+            else:
+                print(f"[WARNING] Local bootstrap.sh source not found at: {local_bootstrap_src}", file=sys.stderr)
+        except Exception as e:
+            print(f"[ERROR] Failed copying bootstrap.sh: {e}", file=sys.stderr)
+            raise e
+
         try:
             time.sleep(1)
             subprocess.run(["powershell", "-Command", "Update-HostStorageCache"], capture_output=True, **SUBPROCESS_FLAGS)

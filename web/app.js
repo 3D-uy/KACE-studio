@@ -997,7 +997,7 @@ function startBootstrap() {
     }
     
     term.write(`\r\n\x1b[1;36m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
-    const bootstrapCmd = `curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}\n`;
+    const bootstrapCmd = `if [ -f /boot/firmware/bootstrap.sh ]; then sudo bash /boot/firmware/bootstrap.sh --dashboard ${selectedUi}; elif [ -f /boot/bootstrap.sh ]; then sudo bash /boot/bootstrap.sh --dashboard ${selectedUi}; else curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}; fi\n`;
     
     if (window.pywebview && window.pywebview.api) {
         // Send the shell command to execute the bootstrap
