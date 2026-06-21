@@ -1145,22 +1145,38 @@ body.light-mode .modal-card {
     }
 }
 
-/* Top Center Brand Banner */
-.main-banner-container {
-    text-align: center;
-    margin-bottom: 32px;
+/* Sidebar Logo styling */
+.logo-container {
+    padding: 16px 12px 24px 12px;
     display: flex;
     justify-content: center;
+    align-items: center;
     width: 100%;
+    box-sizing: border-box;
 }
 
-.main-banner-img {
+.sidebar-logo {
     width: 100%;
-    max-width: 680px;
+    max-width: 120px;
     height: auto;
-    border-radius: 8px;
+    border-radius: 12px;
     border: 1px solid var(--border-color);
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-logo:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5), 0 0 8px var(--primary-glow);
+    border-color: var(--primary-color);
+}
+
+body.light-mode .sidebar-logo {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .sidebar-logo:hover {
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12), 0 0 8px var(--primary-glow);
 }
 
 /* Vertical Progress Status Tracker */
