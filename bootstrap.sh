@@ -273,11 +273,11 @@ if [ "$CROWSNEST" = "true" ]; then
     fi
     cd "$HOME/crowsnest"
     # Verify installer script exists
-    if [ ! -f "./install.sh" ]; then
-        echo "ERROR: Crowsnest install script not found at $HOME/crowsnest/install.sh" >&2
+    if [ ! -f "./tools/install.sh" ]; then
+        echo "ERROR: Crowsnest install script not found at $HOME/crowsnest/tools/install.sh" >&2
         exit 1
     fi
-    $SUDO ./install.sh --non-interactive
+    $SUDO env CROWSNEST_UNATTENDED=1 CROWSNEST_SKIP_REBOOT_PROMPT=1 ./tools/install.sh
     cd "$HOME"
 else
     echo "Crowsnest was not selected. Skipping webcam setup."
