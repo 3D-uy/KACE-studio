@@ -147,6 +147,10 @@ if [ ! -f "$HOME/klipper/scripts/install-debian.sh" ]; then
     echo "ERROR: Klipper Debian install script not found at $HOME/klipper/scripts/install-debian.sh" >&2
     exit 1
 fi
+# Patch Klipper installer script to use Python 3 on modern Debian/Ubuntu distributions
+echo "Patching Klipper installer script for Python 3 support..."
+sed -i 's/python-dev/python3-dev/g' "$HOME/klipper/scripts/install-debian.sh"
+sed -i 's/virtualenv -p python2/virtualenv -p python3/g' "$HOME/klipper/scripts/install-debian.sh"
 # Run the official Klipper Debian installer script
 "$HOME/klipper/scripts/install-debian.sh"
 
