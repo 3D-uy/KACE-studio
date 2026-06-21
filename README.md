@@ -1,7 +1,7 @@
-# KACE Studio
+# 🚀 KACE Studio
 
 <p align="center">
-  <img src="web/kace_banner.png" alt="KACE Studio Banner" width="100%" />
+  <img src="web/KACE-studio-banner.png" alt="KACE Studio Banner" width="100%" />
 </p>
 
 <p align="center">
@@ -26,9 +26,17 @@
 
 ## 📖 About KACE Studio
 
-**KACE Studio** (Klipper Automated Configuration Ecosystem) is a unified, single-executable desktop application designed to streamline the provisioning, configuration, and stack installation on Single Board Computers (SBCs) for Klipper-based 3D printers.
+**KACE Studio** is the unified desktop application used to provision and deploy KACE on Single Board Computers (SBCs) for Klipper-based 3D printers. 
 
-Historically, configuring a new Raspberry Pi to run Klipper required juggling multiple fragmented tools: disk imagers, credentials setup files, IP subnet scanners, SSH clients, text editors, and terminal consoles. KACE Studio consolidates this entire onboarding pipeline into a guided visual desktop workflow requiring **zero CLI expertise** from the end-user.
+Historically, configuring a new Raspberry Pi to run Klipper required juggling multiple fragmented tools: disk imagers, credentials setup files, IP subnet scanners, SSH clients, text editors, and terminal consoles. KACE Studio consolidates this entire onboarding pipeline into a single, guided visual desktop workflow requiring **zero CLI expertise** from the end-user.
+
+| Project | Purpose |
+|:---|:---|
+| **KACE Studio** | Desktop provisioning & deployment tool |
+| **KACE** | Klipper Automatic Configuration Ecosystem |
+
+*   ➡️ **Looking for KACE itself?** [github.com/3D-uy/kace](https://github.com/3D-uy/kace)
+*   ➡️ **Looking for the desktop installer and provisioning tool?** [github.com/3D-uy/KACE-studio](https://github.com/3D-uy/KACE-studio)
 
 Built using a hybrid desktop architecture (**Python + PyWebView + Vanilla HTML5/JS/CSS**), it provides premium aesthetics, smooth animations, and active state transitions while ensuring system safety.
 
@@ -36,18 +44,20 @@ Built using a hybrid desktop architecture (**Python + PyWebView + Vanilla HTML5/
 
 ## 🚀 Key Features
 
-*   **Stage A: Smart SD Card Imager**
-    *   **OS Image Caching**: Automatically downloads, validates, and decompresses (`lzma` extraction) official Raspberry Pi OS Lite images, caching them for future use.
-    *   **Custom Selectors**: Guided dropdowns for board selection, dashboard layout, and target architectures.
-    *   **Administrative Separation**: Employs a secure partition layout. The main app runs in user-space, launching a UAC-elevated helper script (`backend/kace_writer.py`) only for block-writing physical disks.
-    *   **Config Injection**: Automatically mounts boot partitions to inject Wi-Fi profiles (WPA-supplicant & modern NetworkManager connection profiles), user credentials (with cryptographically salted SHA-512 passwords), hostnames, and bootstrap settings (`kace-bootstrap.txt`).
-*   **Stage B: Subnet Auto-Discovery**
-    *   **Subnet Scans**: Parallelized port scanners look up Port 22 (SSH) and Port 7125 (Moonraker) to automatically find the Pi on the local network.
-    *   **Manual Entry fallback**: Allows manual IP entry and probes connection ports dynamically.
-    *   **Visual Badges**: Discovered endpoints show visual state indicators (`SSH Enabled`, `Moonraker`).
-*   **Stage C: Interactive SSH Workspace**
-    *   **Embedded Terminal**: Integrates `xterm.js` for real-time terminal output streaming directly in the app.
-    *   **Automated Installer Pipeline**: Triggers remote KACE bootstrapping installer scripts via SSH to download and install Klipper, Moonraker, control interfaces (Mainsail/Fluidd), and webcam services (Crowsnest) in a single click.
+### 💾 Stage A: Smart SD Card Imager
+*   **OS Image Caching**: Automatically downloads, validates, and decompresses (`lzma` extraction) official Raspberry Pi OS Lite images, caching them for future use.
+*   **Custom Selectors**: Guided dropdowns for board selection, dashboard layout, and target architectures.
+*   **Administrative Separation**: Employs a secure partition layout. The main app runs in user-space, launching a UAC-elevated helper script (`backend/kace_writer.py`) only for block-writing physical disks.
+*   **Config Injection**: Automatically mounts boot partitions to inject Wi-Fi profiles (WPA-supplicant & modern NetworkManager connection profiles), user credentials (with cryptographically salted SHA-512 passwords), hostnames, and bootstrap settings (`kace-bootstrap.txt`).
+
+### 🔍 Stage B: Subnet Auto-Discovery
+*   **Subnet Scans**: Parallelized port scanners look up Port 22 (SSH) and Port 7125 (Moonraker) to automatically find the Pi on the local network.
+*   **Manual Entry Fallback**: Allows manual IP entry and probes connection ports dynamically.
+*   **Visual Badges**: Discovered endpoints show visual state indicators (`SSH Enabled`, `Moonraker`).
+
+### 💻 Stage C: Interactive SSH Workspace
+*   **Embedded Terminal**: Integrates `xterm.js` for real-time terminal output streaming directly in the app.
+*   **Automated Installer Pipeline**: Triggers remote KACE bootstrapping installer scripts via SSH to download and install Klipper, Moonraker, control interfaces (Mainsail/Fluidd), and webcam services (Crowsnest) in a single click.
 
 ---
 
@@ -62,11 +72,11 @@ graph TD
 
 1.  **Step 1: Configuration & Flashing**: The user selects their Pi model, desired dashboard UI (Mainsail, Fluidd, or both), credentials, and Wi-Fi networks. The SD card is flashed, and KACE Studio injects `kace-bootstrap.txt` along with networking files into the `/boot` partition.
 2.  **Step 2: Network Discovery**: The Pi boots, automatically connects to the network using the injected details, and registers on the local subnet. KACE Studio discovers it.
-3.  **Step 3: Bootstrapping**: The user connects to the device via the embedded SSH tab, and clicks **"Bootstrap KACE"**, which streams the installer script:
+3.  **Step 3: Bootstrapping**: The user connects to the device via the embedded SSH tab and clicks **"Bootstrap KACE"**, which streams the installer command directly to the host:
     ```bash
-    curl -sSL https://raw.githubusercontent.com/kace-studio/bootstrap/main/bootstrap.sh | bash -s -- --dashboard <mainsail|fluidd|both>
+    curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard <mainsail|fluidd|both>
     ```
-    This script downloads and configures Klipper, Moonraker, control interfaces, and Crowsnest webcam streamer, creating a functional 3D printing control hub.
+    This script downloads and configures Klipper (automatically patched for Python 3 compatibility on modern distros), Moonraker, control interfaces, and the Crowsnest webcam streamer, creating a functional 3D printing control hub.
 
 ---
 
@@ -88,13 +98,13 @@ KACE Studio features a curated aesthetic system supporting both Dark and Light t
 
 ### Installing Dependencies
 
-Install the python requirements listed in `requirements.txt`:
+Install the Python requirements listed in `requirements.txt`:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Running the Application locally
+### Running the Application Locally
 
 Start the main application launcher:
 
@@ -110,7 +120,7 @@ To bundle the application, web assets, and background helper binaries into a sin
 pyinstaller main.spec
 ```
 
-The output executable will be created in `dist/main.exe`.
+The output executable will be created in `dist/KACE-studio.exe`.
 
 ---
 
