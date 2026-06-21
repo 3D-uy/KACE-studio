@@ -34,15 +34,12 @@
     <div class="app-container">
         <!-- Sidebar Navigation -->
         <aside class="sidebar">
-            <div class="logo-area" style="flex-direction: column; align-items: stretch; margin-bottom: 24px; padding: 0;">
-                <img src="kace_banner.png?v=2.0.0" alt="KACE Studio" style="width: 100%; border-radius: 6px; border: 1px solid var(--border-color); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4); margin-bottom: 8px;">
-                <div class="logo-text" style="text-align: center;">
-                    <span style="font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1.5px;">SBC Bootstrap platform</span>
-                </div>
-            </div>
             <nav class="nav-menu">
                 <button class="nav-item active" onclick="switchTab('imager-tab')">
                     <i class="fa-solid fa-compact-disc"></i> <span class="nav-text">Smart Imager</span>
+                </button>
+                <button class="nav-item" onclick="switchTab('credentials-tab')" id="credentials-nav-btn">
+                    <i class="fa-solid fa-key"></i> <span class="nav-text">Credentials</span>
                 </button>
                 <button class="nav-item" onclick="switchTab('discovery-tab')">
                     <i class="fa-solid fa-satellite-dish"></i> <span class="nav-text">Discovery</span>
@@ -51,7 +48,37 @@
                     <i class="fa-solid fa-terminal"></i> <span class="nav-text">SSH Workspace</span>
                 </button>
             </nav>
-            <div class="sidebar-footer" style="display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+
+            <!-- Vertical Progress Status Tracker -->
+            <div class="vertical-progress-container">
+                <div class="vertical-progress-line"></div>
+                <div class="vertical-step active" id="step-unknown">
+                    <span class="step-num">1</span>
+                    <span class="step-label">Drive</span>
+                </div>
+                <div class="vertical-step" id="step-flashing">
+                    <span class="step-num">2</span>
+                    <span class="step-label">Flash</span>
+                </div>
+                <div class="vertical-step" id="step-booting">
+                    <span class="step-num">3</span>
+                    <span class="step-label">Boot</span>
+                </div>
+                <div class="vertical-step" id="step-discovered">
+                    <span class="step-num">4</span>
+                    <span class="step-label">Discover</span>
+                </div>
+                <div class="vertical-step" id="step-ssh">
+                    <span class="step-num">5</span>
+                    <span class="step-label">SSH</span>
+                </div>
+                <div class="vertical-step" id="step-bootstrapped">
+                    <span class="step-num">6</span>
+                    <span class="step-label">Bootstrap</span>
+                </div>
+            </div>
+
+            <div class="sidebar-footer" style="display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border-color); margin-top: auto;">
                 <button class="theme-toggle-btn" onclick="toggleTheme()" id="theme-toggle-btn" title="Toggle Light/Dark Mode" style="background: transparent; border: 1px solid var(--border-color); color: var(--text-secondary); border-radius: 8px; padding: 8px; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s ease;">
                     <i class="fa-solid fa-sun" id="theme-icon"></i> <span class="theme-text-lbl" id="theme-text">Light Mode</span>
                 </button>
@@ -63,42 +90,19 @@
 
         <!-- Main Content Area -->
         <main class="content-area">
-            <!-- Global Device State Tracker Header -->
-            <div class="state-tracker-bar">
-                <div class="state-step active" id="step-unknown">
-                    <span class="step-num">1</span>
-                    <span class="step-label">Drive</span>
-                </div>
-                <div class="state-step" id="step-flashing">
-                    <span class="step-num">2</span>
-                    <span class="step-label">Flash</span>
-                </div>
-                <div class="state-step" id="step-booting">
-                    <span class="step-num">3</span>
-                    <span class="step-label">Boot</span>
-                </div>
-                <div class="state-step" id="step-discovered">
-                    <span class="step-num">4</span>
-                    <span class="step-label">Discover</span>
-                </div>
-                <div class="state-step" id="step-ssh">
-                    <span class="step-num">5</span>
-                    <span class="step-label">SSH</span>
-                </div>
-                <div class="state-step" id="step-bootstrapped">
-                    <span class="step-num">6</span>
-                    <span class="step-label">Bootstrap</span>
-                </div>
+            <!-- Top Center Brand Banner -->
+            <div class="main-banner-container">
+                <img src="KACE-studio-banner.png" alt="KACE Studio" class="main-banner-img">
             </div>
 
             <!-- Stage A: Smart SD Card Imager -->
             <section id="imager-tab" class="tab-content active">
                 <div class="header">
                     <h2>Stage A — Smart SD Card Imager</h2>
-                    <p>Prepare a bootable Raspberry Pi OS image pre-configured with WiFi, user accounts, and SSH.</p>
+                    <p>Prepare a bootable Raspberry Pi OS image pre-configured with primary settings.</p>
                 </div>
                 
-                <div class="card grid-2">
+                <div class="card">
                     <div class="form-section">
                         <h3>Configuration Options</h3>
                         
@@ -267,8 +271,18 @@
                             </select>
                         </div>
                     </div>
+                </div>
+            </section>
 
-                    <div class="form-section border-left">
+            <!-- Stage A2: Credentials & Services -->
+            <section id="credentials-tab" class="tab-content">
+                <div class="header">
+                    <h2>Stage A2 — Credentials & Services</h2>
+                    <p>Configure account credentials, WiFi networks, choose services, and run write tasks.</p>
+                </div>
+                
+                <div class="card">
+                    <div class="form-section">
                         <h3>Credentials & Services</h3>
                         
                         <!-- Step 7: Credentials -->

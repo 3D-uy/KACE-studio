@@ -59,7 +59,7 @@ body {
 
 /* Sidebar */
 .sidebar {
-    width: 260px;
+    width: 280px;
     background-color: var(--bg-sidebar);
     border-right: 1px solid var(--border-color);
     display: flex;
@@ -1144,5 +1144,97 @@ body.light-mode .modal-card {
         font-size: 16px !important;
     }
 }
+
+/* Top Center Brand Banner */
+.main-banner-container {
+    text-align: center;
+    margin-bottom: 32px;
+    display: flex;
+    justify-content: center;
+    width: 100%;
+}
+
+.main-banner-img {
+    max-width: 100%;
+    height: auto;
+    max-height: 80px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+/* Vertical Progress Status Tracker */
+.vertical-progress-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    position: relative;
+    margin-top: 24px;
+    margin-bottom: 24px;
+    padding-left: 12px;
+}
+
+.vertical-progress-line {
+    position: absolute;
+    top: 10px;
+    bottom: 10px;
+    left: 22px; /* Aligned with 20px circle center (padding-left 12px + 10px center) */
+    width: 2px;
+    background-color: var(--border-color);
+    z-index: 0;
+}
+
+.vertical-step {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    position: relative;
+    z-index: 1;
+    opacity: 0.55;
+    transition: all 0.3s ease;
+}
+
+.vertical-step.active {
+    color: var(--text-primary);
+    opacity: 1;
+}
+
+.vertical-step.completed {
+    color: var(--success-color);
+    opacity: 1;
+}
+
+.vertical-step .step-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-secondary);
+    background-color: var(--bg-sidebar); /* Matches sidebar bg to hide line behind number */
+    font-size: 10px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    z-index: 2;
+    flex-shrink: 0;
+}
+
+.vertical-step.active .step-num {
+    border-color: var(--primary-color);
+    background-color: var(--primary-color);
+    color: #ffffff;
+    box-shadow: 0 0 10px var(--primary-glow);
+}
+
+.vertical-step.completed .step-num {
+    border-color: var(--success-color);
+    background-color: var(--success-color);
+    color: #ffffff;
+}
+
 
 

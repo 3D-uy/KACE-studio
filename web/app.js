@@ -65,8 +65,10 @@ function switchTab(tabId) {
     // Highlight sidebar nav item
     if (tabId === 'imager-tab') {
         document.querySelector('.nav-item:nth-child(1)').classList.add('active');
+    } else if (tabId === 'credentials-tab') {
+        document.getElementById('credentials-nav-btn').classList.add('active');
     } else if (tabId === 'discovery-tab') {
-        document.querySelector('.nav-item:nth-child(2)').classList.add('active');
+        document.querySelector('.nav-item:nth-child(3)').classList.add('active');
     } else if (tabId === 'terminal-tab') {
         document.getElementById('terminal-nav-btn').classList.add('active');
         // Fit terminal viewport on window display
@@ -276,6 +278,7 @@ function initValidationListeners() {
 function openFormatModal() {
     clearInputErrors();
     let hasErrors = false;
+    let errTab = null;
     
     const imageSource = document.getElementById('image-source-select').value;
     if (imageSource === 'custom') {
@@ -283,6 +286,7 @@ function openFormatModal() {
         if (!customPath) {
             showInputError('custom-image-path', "Please browse and select a custom local OS image.");
             hasErrors = true;
+            if (!errTab) errTab = 'imager-tab';
         }
     }
     
@@ -291,27 +295,31 @@ function openFormatModal() {
     if (!driveId) {
         showInputError('drive-select', "Please select a target storage drive.");
         hasErrors = true;
+        if (!errTab) errTab = 'imager-tab';
     }
     
     const hostname = document.getElementById('hostname-input').value.trim();
     if (!hostname) {
         showInputError('hostname-input', "Please specify a Hostname.");
         hasErrors = true;
+        if (!errTab) errTab = 'imager-tab';
     }
     
-    // Step 6: User Credentials check
+    // Step 7: User Credentials check
     const password = document.getElementById('ssh-password').value;
     const passwordConfirm = document.getElementById('ssh-password-confirm').value;
     if (!password) {
         showInputError('ssh-password', "An SSH password must be specified for user 'kace'.");
         hasErrors = true;
+        if (!errTab) errTab = 'credentials-tab';
     }
     if (password !== passwordConfirm) {
         showInputError('ssh-password-confirm', "User credentials passwords do not match.");
         hasErrors = true;
+        if (!errTab) errTab = 'credentials-tab';
     }
     
-    // Step 7: WiFi credentials check
+    // Step 8: WiFi credentials check
     const wifiSsid = document.getElementById('wifi-ssid').value.trim();
     const wifiPassword = document.getElementById('wifi-password').value;
     const wifiPasswordConfirm = document.getElementById('wifi-password-confirm').value;
@@ -320,14 +328,19 @@ function openFormatModal() {
         if (!wifiSsid) {
             showInputError('wifi-ssid', "SSID is required when Wi-Fi passwords are provided.");
             hasErrors = true;
+            if (!errTab) errTab = 'credentials-tab';
         }
         if (wifiPassword !== wifiPasswordConfirm) {
             showInputError('wifi-password-confirm', "Wi-Fi passwords do not match.");
             hasErrors = true;
+            if (!errTab) errTab = 'credentials-tab';
         }
     }
     
     if (hasErrors) {
+        if (errTab) {
+            switchTab(errTab);
+        }
         return;
     }
     
@@ -538,7 +551,7 @@ window.updateDeviceState = function(state, progress, message) {
             const cancelBtnErr = document.getElementById('cancel-flash-btn');
             if (cancelBtnErr) { cancelBtnErr.style.display = 'none'; cancelBtnErr.disabled = false; cancelBtnErr.innerHTML = '<i class="fa-solid fa-xmark"></i> Cancel'; }
             
-            if (activeTab === 'imager-tab') {
+            if (activeTab === 'imager-tab' || activeTab === 'credentials-tab') {
                 updateProgress(0, `Error: ${message}`);
             } else if (activeTab === 'terminal-tab') {
                 updateConnectionStatus(false);
