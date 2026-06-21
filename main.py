@@ -476,7 +476,7 @@ def main():
         js_api=api,
         width=1050,
         height=700,
-        min_size=(800, 600),
+        resizable=False,
         background_color="#0b0f19"
     )
     api.set_window(window)
