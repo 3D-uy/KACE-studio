@@ -50,9 +50,32 @@
                 <button class="nav-item" id="terminal-nav-btn" onclick="switchTab('terminal-tab')">
                     <i class="fa-solid fa-terminal"></i> <span class="nav-text">SSH Workspace</span>
                 </button>
+                
+                <!-- SFTP File Browser Panel -->
+                <div class="sftp-browser-card" id="sftp-browser-panel" style="display: none; margin-top: 8px;">
+                    <div class="sftp-header">
+                        <span class="sftp-title"><i class="fa-solid fa-folder-open"></i> SSH browser (SFTP)</span>
+                        <div class="sftp-path-container">
+                            <input type="text" id="sftp-current-path" value="/home/kace" readonly>
+                            <button class="btn btn-secondary btn-sm" onclick="navigateSftpUp()" title="Go up a directory"><i class="fa-solid fa-arrow-up"></i></button>
+                            <button class="btn btn-secondary btn-sm" id="sftp-download-btn" onclick="downloadSelectedSftpFile()" disabled title="Download selected file"><i class="fa-solid fa-download"></i></button>
+                        </div>
+                    </div>
+                    <div class="sftp-file-list" id="sftp-file-list">
+                        <!-- Populated dynamically via JS -->
+                    </div>
+                </div>
             </nav>
 
-            <!-- Vertical Progress Status Tracker -->
+            <div class="sidebar-footer" style="display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border-color); margin-top: auto;">
+                <button class="theme-toggle-btn" onclick="toggleTheme()" id="theme-toggle-btn" title="Toggle Light/Dark Mode" style="background: transparent; border: 1px solid var(--border-color); color: var(--text-secondary); border-radius: 8px; padding: 6px 8px; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s ease;">
+                    <i class="fa-solid fa-sun" id="theme-icon"></i> <span class="theme-text-lbl" id="theme-text">Light Mode</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Vertical Progress Status Tracker Column -->
+        <div class="progress-column">
             <div class="vertical-progress-container">
                 <div class="vertical-progress-line"></div>
                 <div class="vertical-step active" id="step-unknown">
@@ -80,16 +103,7 @@
                     <span class="step-label">Bootstrap</span>
                 </div>
             </div>
-
-            <div class="sidebar-footer" style="display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border-color); margin-top: auto;">
-                <button class="theme-toggle-btn" onclick="toggleTheme()" id="theme-toggle-btn" title="Toggle Light/Dark Mode" style="background: transparent; border: 1px solid var(--border-color); color: var(--text-secondary); border-radius: 8px; padding: 8px; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s ease;">
-                    <i class="fa-solid fa-sun" id="theme-icon"></i> <span class="theme-text-lbl" id="theme-text">Light Mode</span>
-                </button>
-                <span class="status-indicator-offline" id="global-connection-status">
-                    <i class="fa-solid fa-circle-nodes"></i> Disconnected
-                </span>
-            </div>
-        </aside>
+        </div>
 
         <!-- Main Content Area -->
         <main class="content-area">
@@ -290,31 +304,34 @@
                     <div class="form-section">
                         <h3>Credentials & Services</h3>
                         
-                        <!-- Step 7: Credentials -->
-                        <div class="form-group">
-                            <label><span class="brand-orange">STEP 7:</span> ACCOUNT USER (kace)</label>
-                            <input type="text" value="kace" readonly style="background-color: rgba(255, 255, 255, 0.05); color: var(--text-secondary); cursor: not-allowed; margin-bottom: 8px;">
-                            <div class="password-wrapper" style="margin-bottom: 8px;">
-                                <input type="password" id="ssh-password" placeholder="Password">
-                                <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('ssh-password', this)"></i>
+                        <!-- Steps 7 & 8: Credentials & WiFi side-by-side -->
+                        <div class="form-row" style="display: flex; gap: 16px; width: 100%;">
+                            <!-- Step 7: Credentials -->
+                            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                                <label for="ssh-username"><span class="brand-orange">STEP 7:</span> ACCOUNT USERNAME</label>
+                                <input type="text" id="ssh-username" value="kace" placeholder="Username" style="margin-bottom: 8px;">
+                                <div class="password-wrapper" style="margin-bottom: 8px;">
+                                    <input type="password" id="ssh-password" placeholder="Password">
+                                    <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('ssh-password', this)"></i>
+                                </div>
+                                <div class="password-wrapper">
+                                    <input type="password" id="ssh-password-confirm" placeholder="Confirm Password">
+                                    <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('ssh-password-confirm', this)"></i>
+                                </div>
                             </div>
-                            <div class="password-wrapper">
-                                <input type="password" id="ssh-password-confirm" placeholder="Confirm Password">
-                                <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('ssh-password-confirm', this)"></i>
-                            </div>
-                        </div>
 
-                        <!-- Step 8: WiFi Setup -->
-                        <div class="form-group">
-                            <label><span class="brand-orange">STEP 8:</span> WI-FI NETWORK</label>
-                            <input type="text" id="wifi-ssid" placeholder="Network Name / SSID" style="margin-bottom: 8px;">
-                            <div class="password-wrapper" style="margin-bottom: 8px;">
-                                <input type="password" id="wifi-password" placeholder="WiFi Password">
-                                <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('wifi-password', this)"></i>
-                            </div>
-                            <div class="password-wrapper">
-                                <input type="password" id="wifi-password-confirm" placeholder="Confirm WiFi Password">
-                                <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('wifi-password-confirm', this)"></i>
+                            <!-- Step 8: WiFi Setup -->
+                            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                                <label for="wifi-ssid"><span class="brand-orange">STEP 8:</span> WI-FI NETWORK</label>
+                                <input type="text" id="wifi-ssid" placeholder="Network Name / SSID" style="margin-bottom: 8px;">
+                                <div class="password-wrapper" style="margin-bottom: 8px;">
+                                    <input type="password" id="wifi-password" placeholder="WiFi Password">
+                                    <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('wifi-password', this)"></i>
+                                </div>
+                                <div class="password-wrapper">
+                                    <input type="password" id="wifi-password-confirm" placeholder="Confirm WiFi Password">
+                                    <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('wifi-password-confirm', this)"></i>
+                                </div>
                             </div>
                         </div>
 
@@ -438,6 +455,7 @@
                     <div class="terminal-card">
                         <div id="terminal-container"></div>
                     </div>
+
                 </div>
             </section>
         </main>
@@ -483,6 +501,13 @@
     <script src="vendor/xterm/xterm.min.js"></script>
     <script src="vendor/xterm/xterm-addon-fit.min.js"></script>
     <script src="vendor/xterm/xterm-addon-search.min.js"></script>
+    <!-- Custom Terminal Context Menu -->
+    <div id="terminal-context-menu" class="custom-context-menu" style="display: none;">
+        <button onclick="terminalContextMenuAction('copy')"><i class="fa-solid fa-copy"></i> Copy</button>
+        <button onclick="terminalContextMenuAction('paste')"><i class="fa-solid fa-paste"></i> Paste</button>
+        <button onclick="terminalContextMenuAction('clear')"><i class="fa-solid fa-trash-can"></i> Clear</button>
+    </div>
+
     <script src="app.js?v=2.2.1"></script>
 </body>
 </html>

@@ -78,6 +78,9 @@ function switchTab(tabId) {
     }
     
     activeTab = tabId;
+    
+    // Refresh SFTP Panel status
+    refreshSftpBrowser();
 }
 
 // Drive Management (Stage A)
@@ -235,7 +238,8 @@ function initValidationListeners() {
     const monitoredIds = [
         'drive-select',
         'hostname-input',
-        'wifi-ssid'
+        'wifi-ssid',
+        'ssh-username'
     ];
     monitoredIds.forEach(id => {
         const el = document.getElementById(id);
@@ -306,10 +310,21 @@ function openFormatModal() {
     }
     
     // Step 7: User Credentials check
+    const username = document.getElementById('ssh-username').value.trim();
+    if (!username) {
+        showInputError('ssh-username', "An SSH username must be specified.");
+        hasErrors = true;
+        if (!errTab) errTab = 'credentials-tab';
+    } else if (!/^[a-z_][a-z0-9_-]*$/.test(username)) {
+        showInputError('ssh-username', "Username must start with a lowercase letter or underscore, and only contain lowercase letters, numbers, hyphens, or underscores.");
+        hasErrors = true;
+        if (!errTab) errTab = 'credentials-tab';
+    }
+
     const password = document.getElementById('ssh-password').value;
     const passwordConfirm = document.getElementById('ssh-password-confirm').value;
     if (!password) {
-        showInputError('ssh-password', "An SSH password must be specified for user 'kace'.");
+        showInputError('ssh-password', `An SSH password must be specified for user '${username || 'kace'}'.`);
         hasErrors = true;
         if (!errTab) errTab = 'credentials-tab';
     }
@@ -378,6 +393,7 @@ function startFlashing() {
     const timezone = document.getElementById('timezone-select').value;
     
     // Credentials
+    const sshUsername = document.getElementById('ssh-username').value.trim() || 'kace';
     const sshPassword = document.getElementById('ssh-password').value;
     
     // WiFi setup
@@ -420,7 +436,8 @@ function startFlashing() {
             piModel,
             osArch,
             sshEnabled,
-            crowsnest
+            crowsnest,
+            sshUsername
         ).then(res => {
             if (!res) {
                 window.updateDeviceState("ERROR", 0, "Flashing aborted or failed.");
@@ -467,18 +484,12 @@ window.updateDeviceState = function(state, progress, message) {
     
     updateTrackerBar(state);
     
-    const globalStatus = document.getElementById('global-connection-status');
     const flashBtn = document.getElementById('flash-action-btn');
     
     switch(state) {
         case 'UNKNOWN':
-            globalStatus.className = 'status-indicator-offline';
-            globalStatus.innerHTML = '<i class="fa-solid fa-circle-nodes"></i> Disconnected';
             break;
         case 'FLASHING':
-            globalStatus.className = 'status-indicator-online';
-            globalStatus.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Flashing: ${progress}%`;
-            
             const statusContainer = document.getElementById('flash-status-container');
             if (statusContainer) statusContainer.style.display = 'flex';
             flashBtn.disabled = true;
@@ -491,8 +502,6 @@ window.updateDeviceState = function(state, progress, message) {
             }
             break;
         case 'FLASHED':
-            globalStatus.className = 'status-indicator-online';
-            globalStatus.innerHTML = '<i class="fa-solid fa-compact-disc"></i> Flipped & Flashed';
             flashBtn.disabled = false;
             updateProgress(100, message);
             
@@ -515,30 +524,20 @@ window.updateDeviceState = function(state, progress, message) {
             showFlashNotification();
             break;
         case 'CONNECTING':
-            globalStatus.className = 'status-indicator-online';
-            globalStatus.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Connecting...';
             if (term) term.write(`\x1b[1;33m[Status] ${message}\x1b[0m\r\n`);
             break;
         case 'DISCOVERED':
-            globalStatus.className = 'status-indicator-online';
-            globalStatus.innerHTML = '<i class="fa-solid fa-satellite-dish"></i> Discovered';
             if (term) term.write(`\x1b[1;36m[Status] ${message}\x1b[0m\r\n`);
             break;
         case 'SSH_READY':
-            globalStatus.className = 'status-indicator-online';
-            globalStatus.innerHTML = '<i class="fa-solid fa-circle-check"></i> Connected (SSH)';
             updateConnectionStatus(true);
             if (term) term.write(`\x1b[1;32m[Status] ${message}\x1b[0m\r\n`);
             break;
         case 'BOOTSTRAPPED':
-            globalStatus.className = 'status-indicator-online';
-            globalStatus.innerHTML = '<i class="fa-solid fa-rocket"></i> Bootstrapped';
             updateConnectionStatus(true);
             if (term) term.write(`\x1b[1;32m[Status] ${message}\x1b[0m\r\n`);
             break;
         case 'ERROR':
-            globalStatus.className = 'status-indicator-offline';
-            globalStatus.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Error';
             flashBtn.disabled = false;
             
             // Hide progress container and reset progress fill
@@ -558,7 +557,6 @@ window.updateDeviceState = function(state, progress, message) {
                 if (term) term.write(`\x1b[1;31m[Error] ${message}\x1b[0m\r\n`);
                 showTroubleshootingPrompt(message);
             }
-            break;
     }
 };
 
@@ -568,7 +566,7 @@ function showTroubleshootingPrompt(errorMsg) {
     term.write(" 1. \x1b[1;37mPower Check:\x1b[0m Verify the Raspberry Pi is powered on and ACT green LED is blinking.\r\n");
     term.write(" 2. \x1b[1;37mNetwork Subnet:\x1b[0m Ensure your PC and the Pi are connected to the same WiFi SSID / Subnet.\r\n");
     term.write(" 3. \x1b[1;37mWiFi Band:\x1b[0m Confirm you didn't connect a 2.4GHz-only Pi model (like Zero W or 3B) to a 5GHz band.\r\n");
-    term.write(" 4. \x1b[1;37mPassword Check:\x1b[0m Double-check the SSH password for user 'kace'.\r\n");
+    term.write(" 4. \x1b[1;37mPassword Check:\x1b[0m Double-check the SSH password for the user.\r\n");
     term.write(" 5. \x1b[1;37mRouter isolation:\x1b[0m Confirm Client/AP Isolation is disabled on your router.\r\n\r\n");
 }
 
@@ -848,15 +846,17 @@ function performSshLogin(username, password) {
         setTimeout(() => {
             loginPassword = '';
             currentLoginInput = '';
-            if (username === 'kace' && password === 'kace') {
+            const expectedUser = document.getElementById('ssh-username').value.trim() || 'kace';
+            const expectedPass = document.getElementById('ssh-password').value || 'kace';
+            if (username === expectedUser && password === expectedPass) {
                 connectedUsername = username;
                 term.write("\x1b[1;32m[KACE Workspace] (DEBUG MOCK) SSH connection established.\x1b[0m\r\n");
-                term.write("kace@kace:~ $ ");
+                term.write(`${username}@${currentDeviceName || 'kace'}:~ $ `);
                 updateConnectionStatus(true);
                 loginState = 'DISCONNECTED';
                 window.updateDeviceState("SSH_READY", 100, "Connected to mock node.");
             } else {
-                term.write("\r\n\x1b[1;31m[Error] (DEBUG MOCK) Login failed. Hint: use kace/kace.\x1b[0m\r\n");
+                term.write(`\r\n\x1b[1;31m[Error] (DEBUG MOCK) Login failed. Hint: use ${expectedUser}/${expectedPass}.\x1b[0m\r\n`);
                 updateConnectionStatus(false);
                 promptTerminalLogin();
             }
@@ -908,6 +908,26 @@ function initTerminal() {
     
     term.open(container);
     fitAddon.fit();
+    
+    // Intercept right-click context menu inside the terminal container
+    container.addEventListener('contextmenu', (e) => {
+        if (!sshConnected) return; // Completely non-functional if no SSH session is active
+        e.preventDefault();
+        const contextMenu = document.getElementById('terminal-context-menu');
+        if (contextMenu) {
+            contextMenu.style.left = `${e.clientX}px`;
+            contextMenu.style.top = `${e.clientY}px`;
+            contextMenu.style.display = 'flex';
+        }
+    });
+    
+    // Dismiss custom context menu when clicking anywhere else
+    document.addEventListener('click', (e) => {
+        const contextMenu = document.getElementById('terminal-context-menu');
+        if (contextMenu) {
+            contextMenu.style.display = 'none';
+        }
+    });
     
     // Bind window resize event
     window.addEventListener('resize', () => {
@@ -996,27 +1016,25 @@ window.writeTerminalData = function(data) {
 
 function updateConnectionStatus(connected) {
     sshConnected = connected;
-    const globalStatus = document.getElementById('global-connection-status');
     const bootstrapBtn = document.getElementById('bootstrap-btn');
     const disconnectBtn = document.getElementById('disconnect-btn');
     const connTitle = document.getElementById('connection-title');
     const connSubtitle = document.getElementById('connection-subtitle');
     
     if (connected) {
-        globalStatus.className = 'status-indicator-online';
-        globalStatus.innerHTML = '<i class="fa-solid fa-circle-check"></i> Connected';
         bootstrapBtn.disabled = false;
         disconnectBtn.style.display = 'block';
         connTitle.textContent = `SSH Workspace — Connected`;
         connSubtitle.textContent = `Active session: ${connectedUsername}@${currentDeviceName} (${currentDeviceIp})`;
     } else {
-        globalStatus.className = 'status-indicator-offline';
-        globalStatus.innerHTML = '<i class="fa-solid fa-circle-nodes"></i> Disconnected';
         bootstrapBtn.disabled = true;
         disconnectBtn.style.display = 'none';
         connTitle.textContent = `SSH Session: Disconnected`;
         connSubtitle.textContent = `No active session. Select a device in the Discovery tab to connect.`;
     }
+    
+    // Refresh SFTP Panel status
+    refreshSftpBrowser();
 }
 
 function disconnectSSH() {
@@ -1045,7 +1063,7 @@ function startBootstrap() {
     }
     
     term.write(`\r\n\x1b[1;36m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
-    const bootstrapCmd = `if [ -f /boot/firmware/bootstrap.sh ]; then sudo bash /boot/firmware/bootstrap.sh --dashboard ${selectedUi}; elif [ -f /boot/bootstrap.sh ]; then sudo bash /boot/bootstrap.sh --dashboard ${selectedUi}; else curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}; fi\n`;
+    const bootstrapCmd = `if [ -f /boot/firmware/bootstrap.sh ]; then bash /boot/firmware/bootstrap.sh --dashboard ${selectedUi}; elif [ -f /boot/bootstrap.sh ]; then bash /boot/bootstrap.sh --dashboard ${selectedUi}; else curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}; fi\n`;
     
     // Reset buffer at start
     bootstrapBuffer = "";
@@ -1079,7 +1097,7 @@ function startBootstrap() {
                 idx++;
             } else {
                 clearInterval(interval);
-                term.write("\r\nkace@kace:~ $ ");
+                term.write(`\r\n${connectedUsername}@${currentDeviceName || 'kace'}:~ $ `);
             }
         }, 1500);
     }
@@ -1188,6 +1206,7 @@ const PERSISTED_FIELDS = [
     { id: 'bootstrap-ui-select-imager', type: 'hidden' },
     { id: 'ssh-enable', type: 'checked' },
     { id: 'crowsnest-enable', type: 'checked' },
+    { id: 'ssh-username', type: 'value' },
 ];
 
 function saveFormState() {
@@ -1363,5 +1382,225 @@ function showFlashNotification() {
                 }
             });
         }
+    }
+}
+
+// ── SFTP File Browser & Context Menu Logic ─────────────────────────────────
+
+let sftpCurrentPath = "/home/kace";
+let sftpSelectedFile = null;
+
+function clearSftpSelection() {
+    sftpSelectedFile = null;
+    const dlBtn = document.getElementById('sftp-download-btn');
+    if (dlBtn) {
+        dlBtn.disabled = true;
+    }
+    document.querySelectorAll('.sftp-item.file').forEach(el => {
+        el.classList.remove('selected');
+    });
+}
+
+window.refreshSftpBrowser = function() {
+    const panel = document.getElementById('sftp-browser-panel');
+    if (!panel) return;
+    
+    if (sshConnected && activeTab === 'terminal-tab') {
+        panel.style.display = 'flex';
+        loadSftpDirectory(sftpCurrentPath);
+    } else {
+        panel.style.display = 'none';
+        clearSftpSelection();
+        sftpCurrentPath = "/home/kace";
+        const listContainer = document.getElementById('sftp-file-list');
+        if (listContainer) listContainer.innerHTML = '';
+    }
+};
+
+window.loadSftpDirectory = function(path) {
+    sftpCurrentPath = path;
+    const pathInput = document.getElementById('sftp-current-path');
+    if (pathInput) pathInput.value = sftpCurrentPath;
+    
+    fetch(`/api/sftp/list?path=${encodeURIComponent(path)}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            renderSftpList(data.items);
+        })
+        .catch(err => {
+            console.error("Failed to load SFTP directory:", err);
+            const listContainer = document.getElementById('sftp-file-list');
+            if (listContainer) {
+                listContainer.innerHTML = `
+                    <div class="list-empty">
+                        <i class="fa-solid fa-triangle-exclamation"></i> Error loading directory.
+                    </div>
+                `;
+            }
+        });
+};
+
+function renderSftpList(items) {
+    const listContainer = document.getElementById('sftp-file-list');
+    if (!listContainer) return;
+    
+    listContainer.innerHTML = '';
+    
+    if (!items || items.length === 0) {
+        listContainer.innerHTML = `
+            <div class="list-empty">
+                <i class="fa-solid fa-folder-open"></i> This directory is empty.
+            </div>
+        `;
+        return;
+    }
+    
+    items.sort((a, b) => {
+        if (a.is_dir && !b.is_dir) return -1;
+        if (!a.is_dir && b.is_dir) return 1;
+        return a.name.localeCompare(b.name);
+    });
+    
+    items.forEach(item => {
+        const itemEl = document.createElement('div');
+        itemEl.className = `sftp-item ${item.is_dir ? 'folder' : 'file'}`;
+        
+        if (!item.is_dir && sftpSelectedFile === item.name) {
+            itemEl.classList.add('selected');
+        }
+        
+        const iconClass = item.is_dir 
+            ? 'fa-solid fa-folder' 
+            : (item.name.endsWith('.cfg') || item.name.endsWith('.conf') ? 'fa-solid fa-file-code' : 'fa-solid fa-file');
+            
+        itemEl.innerHTML = `<div class="sftp-item-left"><i class="${iconClass}"></i><span class="sftp-item-name">${item.name}</span></div>`;
+        
+        if (item.is_dir) {
+            itemEl.addEventListener('click', () => {
+                navigateSftpInto(item.name);
+            });
+        } else {
+            itemEl.addEventListener('click', (e) => {
+                if (sftpSelectedFile === item.name) {
+                    clearSftpSelection();
+                } else {
+                    document.querySelectorAll('.sftp-item.file').forEach(el => {
+                        el.classList.remove('selected');
+                    });
+                    itemEl.classList.add('selected');
+                    sftpSelectedFile = item.name;
+                    const dlBtn = document.getElementById('sftp-download-btn');
+                    if (dlBtn) dlBtn.disabled = false;
+                }
+            });
+        }
+        listContainer.appendChild(itemEl);
+    });
+}
+
+// Real implementation using POST and triggers browser file download using blob URL
+window.downloadSelectedSftpFile = function() {
+    if (sftpSelectedFile) {
+        downloadSftpFile(sftpSelectedFile);
+    }
+};
+
+window.downloadSftpFile = function(fileName) {
+    const fullPath = sftpCurrentPath === "/" ? "/" + fileName : sftpCurrentPath + "/" + fileName;
+    console.log(`SFTP Native Download requested for file: ${fullPath}`);
+    
+    const dlBtn = document.getElementById('sftp-download-btn');
+    if (dlBtn) dlBtn.disabled = true;
+    
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.download_file(fullPath)
+            .then(success => {
+                if (success) {
+                    console.log(`Successfully downloaded ${fileName} natively.`);
+                } else {
+                    console.log(`SFTP download cancelled or failed for ${fileName}.`);
+                }
+            })
+            .catch(err => {
+                console.error("Native SFTP Download error:", err);
+                alert(`Error downloading file: ${err.message || err}`);
+            })
+            .finally(() => {
+                if (dlBtn && sftpSelectedFile) {
+                    dlBtn.disabled = false;
+                }
+            });
+    } else {
+        console.warn("Pywebview API not available for native download.");
+        if (dlBtn && sftpSelectedFile) {
+            dlBtn.disabled = false;
+        }
+    }
+};
+
+window.navigateSftpInto = function(folderName) {
+    clearSftpSelection();
+    if (sftpCurrentPath === "/") {
+        sftpCurrentPath = "/" + folderName;
+    } else {
+        sftpCurrentPath = sftpCurrentPath + "/" + folderName;
+    }
+    loadSftpDirectory(sftpCurrentPath);
+};
+
+window.navigateSftpUp = function() {
+    clearSftpSelection();
+    if (sftpCurrentPath === "/") return;
+    
+    const parts = sftpCurrentPath.split('/');
+    parts.pop();
+    let parentPath = parts.join('/');
+    if (parentPath === "") {
+        parentPath = "/";
+    }
+    sftpCurrentPath = parentPath;
+    loadSftpDirectory(sftpCurrentPath);
+};
+
+window.terminalContextMenuAction = function(action) {
+    const contextMenu = document.getElementById('terminal-context-menu');
+    if (contextMenu) contextMenu.style.display = 'none';
+    
+    if (action === 'copy') {
+        if (term) {
+            const selection = term.getSelection();
+            if (selection) {
+                navigator.clipboard.writeText(selection)
+                    .then(() => console.log('Copied selection to clipboard'))
+                    .catch(err => console.error('Failed to copy selection: ', err));
+            }
+        }
+    } else if (action === 'paste') {
+        navigator.clipboard.readText()
+            .then(text => {
+                if (text) {
+                    handleTerminalPaste(text);
+                }
+            })
+            .catch(err => console.error('Failed to read from clipboard: ', err));
+    } else if (action === 'clear') {
+        if (term) term.clear();
+    }
+};
+
+function handleTerminalPaste(text) {
+    if (sshConnected && window.pywebview && window.pywebview.api) {
+        window.pywebview.api.send_ssh_input(text);
+    } else if (loginState === 'PROMPTING_USER' || loginState === 'PROMPTING_PASS') {
+        for (let i = 0; i < text.length; i++) {
+            handleLoginInput(text[i]);
+        }
+    } else if (!sshConnected) {
+        term.write(text);
     }
 }

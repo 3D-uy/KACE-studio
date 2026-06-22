@@ -945,6 +945,86 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    def test_sftp_list_directory_returns_empty_when_not_connected(self):
+        from backend.ssh_client import SSHSession
+        session = SSHSession()
+        self.assertEqual(session.list_directory("/home/kace"), [])
+
+    def test_sftp_download_file_returns_false_when_not_connected(self):
+        from backend.ssh_client import SSHSession
+        session = SSHSession()
+        self.assertFalse(session.download_file("/home/kace/file.txt", "/tmp/file.txt"))
+
+    def test_sftp_list_directory_mocked_sftp(self):
+        from backend.ssh_client import SSHSession
+        from unittest.mock import MagicMock, patch
+        import stat
+        
+        session = SSHSession()
+        session.client = MagicMock()
+        mock_sftp = MagicMock()
+        
+        mock_attr1 = MagicMock()
+        mock_attr1.filename = "file.txt"
+        mock_attr1.st_mode = stat.S_IFREG | 0o644
+        mock_attr1.st_size = 123
+        mock_attr1.st_mtime = 1600000000
+        
+        mock_attr2 = MagicMock()
+        mock_attr2.filename = "folder"
+        mock_attr2.st_mode = stat.S_IFDIR | 0o755
+        mock_attr2.st_size = 4096
+        mock_attr2.st_mtime = 1600000001
+        
+        mock_sftp.listdir_attr.return_value = [mock_attr1, mock_attr2]
+        
+        with patch.object(session, "get_sftp", return_value=mock_sftp):
+            res = session.list_directory("/home/kace")
+            self.assertEqual(len(res), 2)
+            self.assertEqual(res[0]["name"], "file.txt")
+            self.assertFalse(res[0]["is_dir"])
+            self.assertEqual(res[0]["size"], 123)
+            self.assertEqual(res[0]["modified"], 1600000000)
+            
+            self.assertEqual(res[1]["name"], "folder")
+            self.assertTrue(res[1]["is_dir"])
+            self.assertEqual(res[1]["size"], 4096)
+            self.assertEqual(res[1]["modified"], 1600000001)
+            
+            mock_sftp.close.assert_called_once()
+
+    def test_api_sftp_list_connected(self):
+        from main import Api, KaceWsgiApp
+        from unittest.mock import MagicMock, patch
+        import json
+        
+        api = Api()
+        api._ssh = MagicMock()
+        api._ssh.list_directory.return_value = [
+            {"name": "file.txt", "is_dir": False, "size": 123, "modified": 1600000000}
+        ]
+        
+        app = KaceWsgiApp(".", api)
+        
+        environ = {
+            "PATH_INFO": "/api/sftp/list",
+            "QUERY_STRING": "path=/home/kace"
+        }
+        
+        headers = []
+        def start_response(status, response_headers):
+            headers.append(status)
+            headers.extend(response_headers)
+            
+        response = app(environ, start_response)
+        
+        self.assertIn("200 OK", headers[0])
+        response_body = b"".join(response).decode("utf-8")
+        data = json.loads(response_body)
+        self.assertEqual(data["path"], "/home/kace")
+        self.assertEqual(len(data["items"]), 1)
+        self.assertEqual(data["items"][0]["name"], "file.txt")
+
 
 if __name__ == "__main__":
     unittest.main()

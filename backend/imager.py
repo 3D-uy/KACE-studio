@@ -357,7 +357,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
     finally:
         ctypes.windll.kernel32.CloseHandle(hProcess)
 
-def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False) -> bool:
+def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace") -> bool:
     """
     Injects SSH enablement, User credentials, WiFi configuration (wpa_supplicant + NetworkManager),
     and hostname parameters directly to the FAT32 boot partition.
@@ -417,12 +417,12 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         userconf_file = os.path.join(boot_path, "userconf.txt")
         try:
             with open(userconf_file, "w", newline="\n") as f:
-                f.write(f"{DEFAULT_USERNAME}:{hashed_pw}\n")
+                f.write(f"{username}:{hashed_pw}\n")
             if not os.path.exists(userconf_file):
                 raise IOError(f"userconf.txt file not found at: {userconf_file}")
             with open(userconf_file, "r", encoding="utf-8") as f_check:
                 written_data = f_check.read()
-            if not written_data.startswith(f"{DEFAULT_USERNAME}:"):
+            if not written_data.startswith(f"{username}:"):
                 raise ValueError("userconf.txt content is malformed or corrupted.")
             print(f"[DEBUG] Successfully verified userconf.txt write at {userconf_file}", file=sys.stderr)
         except Exception as e:
@@ -595,7 +595,7 @@ packages:
 - avahi-daemon
 timezone: {timezone or "UTC"}
 users:
-- name: kace
+- name: {username}
   groups: users,adm,dialout,audio,netdev,video,plugdev,cdrom,games,input,gpio,spi,i2c,render,sudo
   shell: /bin/bash
   lock_passwd: false

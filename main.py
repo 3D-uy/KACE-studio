@@ -11,6 +11,73 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from backend.imager import list_drives, flash_drive, inject_config
 from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
+import mimetypes
+
+# Prevent Windows registry pollution from overriding MIME types
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('text/css', '.css')
+mimetypes.add_type('text/html', '.html')
+
+class KaceWsgiApp:
+    def __init__(self, web_dir, api_instance):
+        self.web_dir = os.path.abspath(web_dir)
+        self.api = api_instance
+
+    def __call__(self, environ, start_response):
+        path = environ.get('PATH_INFO', '')
+        
+        # Route: GET /api/sftp/list
+        if path == '/api/sftp/list':
+            import urllib.parse
+            query = environ.get('QUERY_STRING', '')
+            params = urllib.parse.parse_qs(query)
+            sftp_path = params.get('path', ['/home/kace'])[0]
+            
+            try:
+                files = self.api._ssh.list_directory(sftp_path)
+                data = json.dumps({"path": sftp_path, "items": files}).encode('utf-8')
+                start_response('200 OK', [
+                    ('Content-Type', 'application/json'),
+                    ('Content-Length', str(len(data))),
+                    ('Access-Control-Allow-Origin', '*')
+                ])
+                return [data]
+            except Exception as e:
+                err_msg = json.dumps({"error": str(e)}).encode('utf-8')
+                start_response('500 Internal Server Error', [
+                    ('Content-Type', 'application/json'),
+                    ('Content-Length', str(len(err_msg)))
+                ])
+                return [err_msg]
+        # Serve static files from web_dir
+        else:
+            # Prevent directory traversal
+            clean_path = path.lstrip('/')
+            if not clean_path or clean_path == 'index.html':
+                clean_path = 'index.html'
+                
+            file_path = os.path.abspath(os.path.join(self.web_dir, clean_path))
+            if not file_path.startswith(self.web_dir):
+                start_response('403 Forbidden', [('Content-Type', 'text/plain')])
+                return [b'Forbidden']
+                
+            if os.path.exists(file_path) and os.path.isfile(file_path):
+                # Use mimetypes to guess the Content-Type
+                mime_type, _ = mimetypes.guess_type(file_path)
+                if not mime_type:
+                    mime_type = 'application/octet-stream'
+                
+                with open(file_path, 'rb') as f:
+                    file_data = f.read()
+                    
+                start_response('200 OK', [
+                    ('Content-Type', mime_type),
+                    ('Content-Length', str(len(file_data)))
+                ])
+                return [file_data]
+            else:
+                start_response('404 Not Found', [('Content-Type', 'text/plain')])
+                return [b'Not Found']
 
 class Api:
     def __init__(self):
@@ -72,14 +139,14 @@ class Api:
         self._flash_cancelled = True
         return True
 
-    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False):
+    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace"):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
         """
         self._flash_cancelled = False
         thread = threading.Thread(
             target=self._flash_worker,
-            args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest),
+            args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username),
             daemon=True
         )
         thread.start()
@@ -358,7 +425,7 @@ class Api:
 
     # ── Flash Worker Orchestrator ─────────────────────────────────────────
 
-    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool):
+    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str):
         try:
             self.set_device_state("FLASHING", 0, "Initializing physical block-writing...")
 
@@ -383,7 +450,7 @@ class Api:
 
             # Stage 3: Inject boot configuration files
             self.set_device_state("FLASHING", 95, "Injecting system configuration files...")
-            inject_success = inject_config(drive_id, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest)
+            inject_success = inject_config(drive_id, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username)
 
             if inject_success:
                 self.set_device_state("FLASHED", 100, "SD Card successfully flashed and provisioned!")
@@ -458,21 +525,48 @@ class Api:
         self._ssh.close()
         return True
 
+    def download_file(self, remote_path: str) -> bool:
+        """
+        Exposes a native save file dialog to select target location and downloads the file.
+        """
+        if not self._window:
+            return False
+        
+        filename = os.path.basename(remote_path)
+        chosen_path = self._window.create_file_dialog(
+            webview.SAVE_DIALOG, 
+            save_filename=filename
+        )
+        
+        if not chosen_path:
+            return False # Cancelled
+            
+        if isinstance(chosen_path, (list, tuple)):
+            if len(chosen_path) > 0:
+                chosen_path = chosen_path[0]
+            else:
+                return False
+                
+        return self._ssh.download_file(remote_path, chosen_path)
+
 def main():
     api = Api()
     if hasattr(sys, '_MEIPASS'):
         current_dir = sys._MEIPASS
     else:
         current_dir = os.path.dirname(os.path.abspath(__file__))
-    html_path = os.path.join(current_dir, "web", "index.html")
+    web_dir = os.path.join(current_dir, "web")
+    html_path = os.path.join(web_dir, "index.html")
     
     if not os.path.exists(html_path):
         print(f"Error: Frontend assets not found at {html_path}", file=sys.stderr)
         sys.exit(1)
         
+    wsgi_app = KaceWsgiApp(web_dir, api)
+    
     window = webview.create_window(
         title="KACE Studio Desktop Launcher",
-        url=html_path,
+        url=wsgi_app,
         js_api=api,
         width=1050,
         height=700,

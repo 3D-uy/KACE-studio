@@ -170,6 +170,64 @@ if [ ! -f "$HOME/moonraker/scripts/install-moonraker.sh" ]; then
 fi
 "$HOME/moonraker/scripts/install-moonraker.sh"
 
+# Create printer_data config directory if it doesn't exist
+echo "Creating printer data configuration directories..."
+mkdir -p "$HOME/printer_data/config"
+mkdir -p "$HOME/printer_data/gcodes"
+
+# Create a default moonraker.conf if not present
+if [ ! -f "$HOME/printer_data/config/moonraker.conf" ]; then
+    echo "Creating default moonraker.conf..."
+    cat <<EOF > "$HOME/printer_data/config/moonraker.conf"
+[server]
+host: 0.0.0.0
+port: 7125
+klippy_uds_address: $HOME/printer_data/comms/klippy.sock
+
+[authorization]
+trusted_clients:
+    127.0.0.1
+    10.0.0.0/8
+    127.0.0.0/8
+    162.254.206.0/24
+    172.16.0.0/12
+    192.168.0.0/16
+    FE80::/10
+    ::1/128
+cors_domains:
+    *.lan
+    *.local
+    *://my.mainsail.xyz
+    *://app.fluidd.xyz
+
+[octoprint_compat]
+
+[history]
+
+[file_manager]
+enable_object_processing: True
+EOF
+fi
+
+# Create a default printer.cfg if not present
+if [ ! -f "$HOME/printer_data/config/printer.cfg" ]; then
+    echo "Creating default printer.cfg..."
+    cat <<EOF > "$HOME/printer_data/config/printer.cfg"
+[mcu]
+serial: /dev/serial/by-id/change-me-to-your-mcu-id
+
+[printer]
+kinematics: none
+max_velocity: 300
+max_accel: 3000
+EOF
+fi
+
+# Restart Klipper and Moonraker to pick up configurations
+echo "Restarting Klipper and Moonraker services..."
+$SUDO systemctl restart klipper || true
+$SUDO systemctl restart moonraker || true
+
 # 9. Installing Mainsail/Fluidd Dashboard
 echo "Setting up Nginx and downloading selected web interfaces..."
 

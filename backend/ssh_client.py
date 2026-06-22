@@ -116,3 +116,62 @@ class SSHSession:
                 pass
         self.channel = None
         self.client = None
+
+    def get_sftp(self):
+        """Returns an open paramiko SFTP client, or None if not connected."""
+        if self.client and self.client.get_transport() and self.client.get_transport().is_active():
+            try:
+                return self.client.open_sftp()
+            except Exception:
+                return None
+        return None
+
+    def list_directory(self, path: str) -> list:
+        """Returns list of dicts: {name, is_dir, size, modified}"""
+        sftp = self.get_sftp()
+        if not sftp:
+            return []
+        try:
+            import stat
+            results = []
+            for attr in sftp.listdir_attr(path):
+                is_dir = stat.S_ISDIR(attr.st_mode)
+                results.append({
+                    "name": attr.filename,
+                    "is_dir": is_dir,
+                    "size": attr.st_size,
+                    "modified": int(attr.st_mtime) if attr.st_mtime else 0
+                })
+            return results
+        except Exception as e:
+            print(f"SFTP list_directory error on path '{path}': {e}")
+            return []
+        finally:
+            if sftp:
+                try:
+                    sftp.close()
+                except Exception:
+                    pass
+
+    def download_file(self, remote_path: str, local_path: str) -> bool:
+        """Downloads a file from the Pi to local_path. Returns True on success."""
+        sftp = self.get_sftp()
+        if not sftp:
+            return False
+        try:
+            import os
+            # Ensure local parent directories exist
+            local_dir = os.path.dirname(local_path)
+            if local_dir:
+                os.makedirs(local_dir, exist_ok=True)
+            sftp.get(remote_path, local_path)
+            return True
+        except Exception as e:
+            print(f"SFTP download_file error from '{remote_path}' to '{local_path}': {e}")
+            return False
+        finally:
+            if sftp:
+                try:
+                    sftp.close()
+                except Exception:
+                    pass
