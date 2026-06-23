@@ -131,7 +131,7 @@ echo "Updating apt repositories..."
 $SUDO apt-get update -y
 
 echo "Installing core dependencies..."
-$SUDO apt-get install -y git curl python3-pip python3-virtualenv unzip nginx
+$SUDO apt-get install -y git curl python3-pip python3-virtualenv unzip nginx file
 
 # 7. Installing Klipper (Firmware Engine)
 if [ ! -d "$HOME/klipper" ]; then
@@ -237,17 +237,53 @@ $SUDO mkdir -p /var/www
 setup_mainsail() {
     echo "Installing Mainsail control interface..."
     $SUDO mkdir -p /var/www/mainsail
-    curl -L https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip -o /tmp/mainsail.zip
+    # Download with retry and fail-on-error to catch HTTP error responses
+    if ! curl -fsSL --retry 3 --retry-delay 5 \
+        "https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip" \
+        -o /tmp/mainsail.zip; then
+        echo "ERROR: Failed to download Mainsail release archive from GitHub." >&2
+        exit 1
+    fi
+    # Validate zip file magic bytes (PK header) before attempting extraction
+    if ! file /tmp/mainsail.zip 2>/dev/null | grep -q 'Zip archive'; then
+        echo "ERROR: Downloaded Mainsail archive is not a valid ZIP file (possible redirect or rate-limit error)." >&2
+        rm -f /tmp/mainsail.zip
+        exit 1
+    fi
     $SUDO unzip -o /tmp/mainsail.zip -d /var/www/mainsail
     rm -f /tmp/mainsail.zip
+    # Verify critical entry point was extracted
+    if [ ! -f "/var/www/mainsail/index.html" ]; then
+        echo "ERROR: Mainsail extraction failed — index.html not found in /var/www/mainsail." >&2
+        exit 1
+    fi
+    echo "Mainsail installed successfully."
 }
 
 setup_fluidd() {
     echo "Installing Fluidd control interface..."
     $SUDO mkdir -p /var/www/fluidd
-    curl -L https://github.com/fluidd-core/fluidd/releases/latest/download/fluidd.zip -o /tmp/fluidd.zip
+    # Download with retry and fail-on-error to catch HTTP error responses
+    if ! curl -fsSL --retry 3 --retry-delay 5 \
+        "https://github.com/fluidd-core/fluidd/releases/latest/download/fluidd.zip" \
+        -o /tmp/fluidd.zip; then
+        echo "ERROR: Failed to download Fluidd release archive from GitHub." >&2
+        exit 1
+    fi
+    # Validate zip file magic bytes (PK header) before attempting extraction
+    if ! file /tmp/fluidd.zip 2>/dev/null | grep -q 'Zip archive'; then
+        echo "ERROR: Downloaded Fluidd archive is not a valid ZIP file (possible redirect or rate-limit error)." >&2
+        rm -f /tmp/fluidd.zip
+        exit 1
+    fi
     $SUDO unzip -o /tmp/fluidd.zip -d /var/www/fluidd
     rm -f /tmp/fluidd.zip
+    # Verify critical entry point was extracted
+    if [ ! -f "/var/www/fluidd/index.html" ]; then
+        echo "ERROR: Fluidd extraction failed — index.html not found in /var/www/fluidd." >&2
+        exit 1
+    fi
+    echo "Fluidd installed successfully."
 }
 
 if [ "$DASHBOARD" = "mainsail" ]; then
