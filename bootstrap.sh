@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # KACE Studio Bootstrapper Script
 # Auto-installs Klipper, Moonraker, Mainsail/Fluidd, and Crowsnest based on user selections.
 
@@ -57,7 +57,7 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         --dashboard) DASHBOARD="$2"; shift ;;
         --crowsnest) CROWSNEST="$2"; shift ;;
-        --timezone) TIMEZONE="$2"; shift ;;
+        --timezone)  TIMEZONE="$2";  shift ;;
     esac
     shift
 done
@@ -73,16 +73,16 @@ fi
 if [ -n "$BOOT_CFG" ]; then
     echo "Found injected KACE configurations at $BOOT_CFG:"
     grep -E "^(DASHBOARD|CROWSNEST|TIMEZONE)=" "$BOOT_CFG" || true
-    
+
     # Parse file variables manually to avoid malicious shell execution
     FILE_DASHBOARD=$(grep -E "^DASHBOARD=" "$BOOT_CFG" | cut -d'=' -f2 || true)
     FILE_CROWSNEST=$(grep -E "^CROWSNEST=" "$BOOT_CFG" | cut -d'=' -f2 || true)
-    FILE_TIMEZONE=$(grep -E "^TIMEZONE=" "$BOOT_CFG" | cut -d'=' -f2 || true)
-    
+    FILE_TIMEZONE=$(grep -E "^TIMEZONE="  "$BOOT_CFG" | cut -d'=' -f2 || true)
+
     # Overwrite only if arguments were not explicitly passed
     [ -z "$DASHBOARD" ] && DASHBOARD="$FILE_DASHBOARD"
     [ -z "$CROWSNEST" ] && CROWSNEST="$FILE_CROWSNEST"
-    [ -z "$TIMEZONE" ] && TIMEZONE="$FILE_TIMEZONE"
+    [ -z "$TIMEZONE"  ] && TIMEZONE="$FILE_TIMEZONE"
 fi
 
 # 4. Input Sanitization & Allowlist Validation
@@ -119,6 +119,7 @@ echo "  Webcam Stream: $CROWSNEST"
 echo "  Timezone     : ${TIMEZONE:-'(Keep system default)'}"
 echo "--------------------------------------------------------"
 
+# 5. Timezone Configuration
 if [ -n "$TIMEZONE" ]; then
     echo "Setting system timezone to $TIMEZONE..."
     if ! $SUDO timedatectl set-timezone "$TIMEZONE" 2>/dev/null; then
@@ -139,8 +140,9 @@ if [ ! -d "$HOME/klipper" ]; then
     git clone https://github.com/Klipper3d/klipper.git "$HOME/klipper"
 else
     echo "Klipper repository already exists. Updating..."
-    cd "$HOME/klipper" && git pull && cd "$HOME"
+    pushd "$HOME/klipper" > /dev/null && git pull && popd > /dev/null
 fi
+
 echo "Installing Klipper dependencies and systemd service..."
 # Verify installer script exists
 if [ ! -f "$HOME/klipper/scripts/install-debian.sh" ]; then
@@ -149,10 +151,15 @@ if [ ! -f "$HOME/klipper/scripts/install-debian.sh" ]; then
 fi
 # Patch Klipper installer script to use Python 3 on modern Debian/Ubuntu distributions
 echo "Patching Klipper installer script for Python 3 support..."
-sed -i 's/python-dev/python3-dev/g' "$HOME/klipper/scripts/install-debian.sh"
+sed -i 's/python-dev/python3-dev/g'               "$HOME/klipper/scripts/install-debian.sh"
 sed -i 's/virtualenv -p python2/virtualenv -p python3/g' "$HOME/klipper/scripts/install-debian.sh"
-# Run the official Klipper Debian installer script
-"$HOME/klipper/scripts/install-debian.sh"
+
+# Idempotency guard: skip full reinstall if Klipper service is already active
+if systemctl is-active --quiet klipper 2>/dev/null; then
+    echo "Klipper service already active. Skipping reinstall."
+else
+    "$HOME/klipper/scripts/install-debian.sh"
+fi
 
 # 8. Installing Moonraker (API Web Server Backend)
 if [ ! -d "$HOME/moonraker" ]; then
@@ -160,8 +167,9 @@ if [ ! -d "$HOME/moonraker" ]; then
     git clone https://github.com/Arksine/moonraker.git "$HOME/moonraker"
 else
     echo "Moonraker repository already exists. Updating..."
-    cd "$HOME/moonraker" && git pull && cd "$HOME"
+    pushd "$HOME/moonraker" > /dev/null && git pull && popd > /dev/null
 fi
+
 echo "Installing Moonraker dependencies and systemd service..."
 # Verify installer script exists
 if [ ! -f "$HOME/moonraker/scripts/install-moonraker.sh" ]; then
@@ -170,12 +178,14 @@ if [ ! -f "$HOME/moonraker/scripts/install-moonraker.sh" ]; then
 fi
 "$HOME/moonraker/scripts/install-moonraker.sh"
 
-# Create printer_data config directory if it doesn't exist
+# Create printer_data directories if they don't exist
 echo "Creating printer data configuration directories..."
 mkdir -p "$HOME/printer_data/config"
 mkdir -p "$HOME/printer_data/gcodes"
+mkdir -p "$HOME/printer_data/comms"    # Required: Moonraker klippy.sock socket lives here
 
-# Create a default moonraker.conf if not present
+# Create a default moonraker.conf if not present.
+# Note: heredoc is intentionally unquoted (<<EOF) so $HOME expands to the real user home path.
 if [ ! -f "$HOME/printer_data/config/moonraker.conf" ]; then
     echo "Creating default moonraker.conf..."
     cat <<EOF > "$HOME/printer_data/config/moonraker.conf"
@@ -223,15 +233,10 @@ max_accel: 3000
 EOF
 fi
 
-# Restart Klipper and Moonraker to pick up configurations
-echo "Restarting Klipper and Moonraker services..."
-$SUDO systemctl restart klipper || true
-$SUDO systemctl restart moonraker || true
-
 # 9. Installing Mainsail/Fluidd Dashboard
 echo "Setting up Nginx and downloading selected web interfaces..."
 
-# Make webroot directories
+# Make webroot parent directory
 $SUDO mkdir -p /var/www
 
 setup_mainsail() {
@@ -254,7 +259,7 @@ setup_mainsail() {
     rm -f /tmp/mainsail.zip
     # Verify critical entry point was extracted
     if [ ! -f "/var/www/mainsail/index.html" ]; then
-        echo "ERROR: Mainsail extraction failed — index.html not found in /var/www/mainsail." >&2
+        echo "ERROR: Mainsail extraction failed â€” index.html not found in /var/www/mainsail." >&2
         exit 1
     fi
     echo "Mainsail installed successfully."
@@ -280,7 +285,7 @@ setup_fluidd() {
     rm -f /tmp/fluidd.zip
     # Verify critical entry point was extracted
     if [ ! -f "/var/www/fluidd/index.html" ]; then
-        echo "ERROR: Fluidd extraction failed — index.html not found in /var/www/fluidd." >&2
+        echo "ERROR: Fluidd extraction failed â€” index.html not found in /var/www/fluidd." >&2
         exit 1
     fi
     echo "Fluidd installed successfully."
@@ -295,7 +300,7 @@ elif [ "$DASHBOARD" = "fluidd" ]; then
 elif [ "$DASHBOARD" = "both" ]; then
     setup_mainsail
     setup_fluidd
-    DEFAULT_UI="mainsail" # Default entry point for double setup
+    DEFAULT_UI="mainsail"   # Default entry point for double setup
 else
     setup_mainsail
     DEFAULT_UI="mainsail"
@@ -324,7 +329,7 @@ server {
         try_files \$uri \$uri/ /index.html;
     }
 
-    # Proxy Moonraker API requests
+    # Proxy Moonraker WebSocket connection
     location /websocket {
         proxy_pass http://apiserver;
         proxy_http_version 1.1;
@@ -336,9 +341,10 @@ server {
         proxy_read_timeout 86400;
     }
 
-    # Proxy Moonraker HTTP Server API
-    location /server {
+    # Proxy all Moonraker HTTP API routes
+    location ~ ^/(printer|api|access|machine|server|files|history)(/.*)?$ {
         proxy_pass http://apiserver;
+        proxy_http_version 1.1;
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -352,27 +358,43 @@ upstream apiserver {
 }
 EOF
 
-# Enable configuration
+# Validate generated Nginx config before applying it
+echo "Validating Nginx configuration..."
+if ! $SUDO nginx -t 2>&1; then
+    echo "ERROR: Nginx configuration test failed. Aborting to prevent breaking the web server." >&2
+    exit 1
+fi
+
+# Enable configuration and reload Nginx
 $SUDO ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
 $SUDO rm -f /etc/nginx/sites-enabled/default
 $SUDO systemctl restart nginx
 
-# 11. Installing Crowsnest (Webcam Streamer)
+# 11. Starting Klipper and Moonraker Services
+# Services are (re)started after Nginx is fully configured so the full stack
+# becomes available atomically â€” Moonraker is not exposed before the reverse proxy is live.
+echo "Restarting Klipper and Moonraker services..."
+$SUDO systemctl restart klipper   || true
+$SUDO systemctl restart moonraker || true
+
+# 12. Installing Crowsnest (Webcam Streamer)
 if [ "$CROWSNEST" = "true" ]; then
     echo "Installing Crowsnest webcam streaming engine..."
     if [ ! -d "$HOME/crowsnest" ]; then
         git clone https://github.com/mainsail-crew/crowsnest.git "$HOME/crowsnest"
     else
-        cd "$HOME/crowsnest" && git pull && cd "$HOME"
+        pushd "$HOME/crowsnest" > /dev/null && git pull && popd > /dev/null
     fi
-    cd "$HOME/crowsnest"
     # Verify installer script exists
-    if [ ! -f "./tools/install.sh" ]; then
+    if [ ! -f "$HOME/crowsnest/tools/install.sh" ]; then
         echo "ERROR: Crowsnest install script not found at $HOME/crowsnest/tools/install.sh" >&2
         exit 1
     fi
-    $SUDO env CROWSNEST_UNATTENDED=1 CROWSNEST_SKIP_REBOOT_PROMPT=1 ./tools/install.sh
-    cd "$HOME"
+    # Use sudo -E to preserve the caller's HOME and environment so Crowsnest installs
+    # its systemd service files pointing at the correct user home, not /root.
+    pushd "$HOME/crowsnest" > /dev/null
+    sudo -E env CROWSNEST_UNATTENDED=1 CROWSNEST_SKIP_REBOOT_PROMPT=1 ./tools/install.sh
+    popd > /dev/null
 else
     echo "Crowsnest was not selected. Skipping webcam setup."
 fi
