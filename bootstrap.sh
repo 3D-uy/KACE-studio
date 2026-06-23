@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 # KACE Studio Bootstrapper Script
 # Auto-installs Klipper, Moonraker, Mainsail/Fluidd, and Crowsnest based on user selections.
 
@@ -132,7 +132,7 @@ echo "Updating apt repositories..."
 $SUDO apt-get update -y
 
 echo "Installing core dependencies..."
-$SUDO apt-get install -y git curl python3-pip python3-virtualenv unzip nginx file
+$SUDO apt-get install -y git curl unzip nginx file
 
 # 7. Installing Klipper (Firmware Engine)
 if [ ! -d "$HOME/klipper" ]; then

@@ -74,13 +74,17 @@ class TestKaceBackend(unittest.TestCase):
                     userconf_content = f.read()
                 self.assertTrue(userconf_content.startswith("kace:$6$"))
                 
-                # Check legacy wpa_supplicant
+                # Check legacy wpa_supplicant — password is stored as PBKDF2 hex PSK, NOT plain text
                 wpa_path = os.path.join(temp_boot, "wpa_supplicant.conf")
                 self.assertTrue(os.path.exists(wpa_path))
                 with open(wpa_path, "r") as f:
                     wpa_content = f.read()
                 self.assertIn('ssid="MySSID"', wpa_content)
-                self.assertIn('psk="MyPassword"', wpa_content)
+                # Verify the hex PSK (64 char hex, no quotes) is present instead of plain text password
+                from backend.imager import _compute_wpa_psk
+                expected_hex_psk = _compute_wpa_psk("MySSID", "MyPassword")
+                self.assertIn(f'psk={expected_hex_psk}', wpa_content)
+                self.assertNotIn('psk="MyPassword"', wpa_content, "Plain text password must NOT appear in wpa_supplicant.conf")
                 
                 # Check modern NetworkManager profile
                 nm_path = os.path.join(temp_boot, "system-connections", "preconfigured-wifi.nmconnection")
@@ -176,6 +180,14 @@ class TestKaceBackend(unittest.TestCase):
                 self.assertIn('country = "BR"', toml_content)
                 self.assertIn('ssid = "TestSSID"', toml_content)
                 self.assertIn('password = "TestPass"', toml_content)
+
+                # wpa_supplicant.conf must use hex PSK, not plain text
+                from backend.imager import _compute_wpa_psk
+                expected_psk = _compute_wpa_psk("TestSSID", "TestPass")
+                with open(wpa_path, "r") as f:
+                    wpa_content2 = f.read()
+                self.assertIn(f'psk={expected_psk}', wpa_content2)
+                self.assertNotIn('psk="TestPass"', wpa_content2)
         finally:
             shutil.rmtree(temp_boot)
 
@@ -313,13 +325,15 @@ class TestKaceBackend(unittest.TestCase):
                 )
                 self.assertTrue(success)
                 
-                # Check wpa_supplicant.conf
+                # Check wpa_supplicant.conf — must use hex PSK, never plain text
                 wpa_path = os.path.join(temp_boot, "wpa_supplicant.conf")
                 self.assertTrue(os.path.exists(wpa_path))
                 with open(wpa_path, "r", encoding="utf-8") as f:
                     wpa_content = f.read()
+                # SSID is still quoted in wpa_supplicant (with special chars escaped)
                 self.assertIn('ssid="My\\"SSID\\";$\\\\"', wpa_content)
-                self.assertIn('psk="My\'Password;$\\\\"', wpa_content)
+                # Plain text password must NOT appear — verify hex PSK is present
+                self.assertNotIn('psk="', wpa_content, "Plain text password must NOT appear in wpa_supplicant.conf")
                 
                 # Check NetworkManager profile
                 nm_path = os.path.join(temp_boot, "system-connections", "preconfigured-wifi.nmconnection")

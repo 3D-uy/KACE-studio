@@ -1,0 +1,2 @@
+# Development / build-time dependencies (not needed at runtime)
+pyinstaller>=6.21.0,<7.0

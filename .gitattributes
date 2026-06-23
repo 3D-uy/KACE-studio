@@ -1,2 +1,8 @@
 # Force LF line endings for shell scripts on all platforms
 *.sh text eol=lf
+# Force LF line endings for PyInstaller spec files
+*.spec text eol=lf
+# Treat font binaries as binary (no diff / no line-ending conversion)
+*.ttf binary
+*.woff binary
+*.woff2 binary

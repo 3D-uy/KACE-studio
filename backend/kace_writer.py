@@ -3,6 +3,7 @@ import sys
 import json
 import subprocess
 import ctypes
+from pathlib import Path
 from ctypes import wintypes
 
 # Subprocess flags to run silent processes on Windows (CREATE_NO_WINDOW)
@@ -226,13 +227,12 @@ def write_status(file_path, status, progress=0, message=""):
             "progress": progress,
             "message": message
         }
-        # Write to a temporary file first, then rename it to ensure atomic writes
+        # Write to a temp file then atomically replace the target.
+        # Path.replace() is atomic on both POSIX and Windows (unlike os.remove + os.rename).
         temp_path = file_path + ".tmp"
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(data, f)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        os.rename(temp_path, file_path)
+        Path(temp_path).replace(file_path)
     except Exception as e:
         safe_print_err(f"Failed to write progress status file: {e}")
 
@@ -347,8 +347,8 @@ def main():
                 ["powershell", "-Command", f"Set-Disk -Number {disk_number} -IsOffline $false"],
                 capture_output=True, **SUBPROCESS_FLAGS
             )
-        except:
-            pass
+        except Exception as online_err:
+            safe_print_err(f"Warning: Failed to re-online disk after error: {online_err}")
         sys.exit(2)
     except Exception as e:
         err_msg = str(e)
@@ -360,8 +360,8 @@ def main():
                 ["powershell", "-Command", f"Set-Disk -Number {disk_number} -IsOffline $false"],
                 capture_output=True, **SUBPROCESS_FLAGS
             )
-        except:
-            pass
+        except Exception as online_err:
+            safe_print_err(f"Warning: Failed to re-online disk after error: {online_err}")
         sys.exit(2)
 
 if __name__ == "__main__":

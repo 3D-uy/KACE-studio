@@ -1,5 +1,5 @@
-pywebview
-paramiko
-pcrypt
-pyinstaller
-pytz
+# Runtime dependencies (pinned to tested versions)
+pywebview>=6.2.1,<7.0
+paramiko>=5.0.0,<6.0
+pcrypt>=1.0.5,<2.0
+pytz>=2026.2,<2027.0

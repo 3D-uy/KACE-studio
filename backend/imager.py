@@ -4,8 +4,18 @@ import json
 import time
 import subprocess
 import uuid
+import re
 from pathlib import Path
 from backend.sha512_crypt import hash_password
+
+# Set KACE_DEBUG=1 in the environment to enable verbose path/status logging.
+# Do NOT enable in packaged/production builds — logs leak filesystem paths.
+_DEBUG = os.environ.get("KACE_DEBUG", "0") == "1"
+
+def _dbg(msg: str):
+    """Print a debug message to stderr only when KACE_DEBUG=1."""
+    if _DEBUG:
+        print(f"[DEBUG] {msg}", file=sys.stderr)
 
 # Subprocess flags to run silent processes on Windows (CREATE_NO_WINDOW)
 SUBPROCESS_FLAGS = {}
@@ -364,21 +374,28 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
     """
     # Wait for OS mount
     boot_path = get_boot_drive_letter(disk_number)
-    print(f"[DEBUG] get_boot_drive_letter({disk_number}) resolved to: '{boot_path}'", file=sys.stderr)
+    _dbg(f"get_boot_drive_letter({disk_number}) resolved to: '{boot_path}'")
     if not boot_path or not os.path.exists(boot_path):
         print(f"FAT32 boot partition not mounted or not found on physical disk {disk_number}.", file=sys.stderr)
         return False
         
     try:
         # A. Hostname validation and sanitization
-        import re
+        # Regex: must start/end with alphanumeric, no consecutive dots, only [a-zA-Z0-9.-]
+        _HOSTNAME_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$')
         if not hostname:
             clean_hostname = "kace"
         else:
             clean_hostname = hostname.replace(".local", "")
-            # If invalid characters exist, raise ValueError (can be handled gracefully by UI/caller)
-            if ' ' in clean_hostname or not re.match(r'^[a-zA-Z0-9.-]+$', clean_hostname) or clean_hostname.startswith('.') or clean_hostname.endswith('.') or clean_hostname.startswith('-') or clean_hostname.endswith('-'):
-                raise ValueError("Invalid hostname. Hostname must contain only alphanumeric characters, dots, and hyphens, and cannot start or end with a dot or hyphen.")
+            # Reject spaces, consecutive dots, leading/trailing dots or hyphens, and any other invalid chars
+            if (' ' in clean_hostname
+                    or '..' in clean_hostname
+                    or clean_hostname.startswith('.')
+                    or clean_hostname.endswith('.')
+                    or clean_hostname.startswith('-')
+                    or clean_hostname.endswith('-')
+                    or not _HOSTNAME_RE.match(clean_hostname)):
+                raise ValueError("Invalid hostname. Hostname must contain only alphanumeric characters, dots, and hyphens, and cannot start or end with a dot or hyphen, and must not contain consecutive dots.")
             
         # B. WiFi input sanitization/escaping to prevent shell/ini/file structure injection
         clean_wpa_ssid = wifi_ssid.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '')
@@ -424,7 +441,7 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
                 written_data = f_check.read()
             if not written_data.startswith(f"{username}:"):
                 raise ValueError("userconf.txt content is malformed or corrupted.")
-            print(f"[DEBUG] Successfully verified userconf.txt write at {userconf_file}", file=sys.stderr)
+            _dbg(f"Successfully verified userconf.txt write at {userconf_file}")
         except Exception as e:
             print(f"[ERROR] Failed writing or verifying userconf.txt: {e}", file=sys.stderr)
             raise e
@@ -433,6 +450,10 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         if wifi_ssid:
             # Legacy: wpa_supplicant.conf (for Buster/Bullseye compatibility)
             country_code = _get_country_from_timezone(timezone) if timezone else "US"
+            # C2: Use pre-computed PBKDF2 hex PSK — never store plain text password.
+            # When psk= is a 64-char hex string (no quotes), wpa_supplicant treats it as the
+            # raw WPA-PSK key, which is cryptographically equivalent but not reversible.
+            wpa_psk_hex = _compute_wpa_psk(wifi_ssid, wifi_password)
             wpa_conf = os.path.join(boot_path, "wpa_supplicant.conf")
             wpa_content = f"""ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
@@ -440,7 +461,7 @@ country={country_code}
 
 network={{
     ssid="{clean_wpa_ssid}"
-    psk="{clean_wpa_password}"
+    psk={wpa_psk_hex}
     key_mgmt=WPA-PSK
 }}
 """
@@ -451,9 +472,9 @@ network={{
                     raise IOError(f"wpa_supplicant.conf not found at: {wpa_conf}")
                 with open(wpa_conf, "r", encoding="utf-8") as f_check:
                     c = f_check.read()
-                if clean_wpa_ssid not in c or clean_wpa_password not in c:
-                    raise ValueError("wpa_supplicant.conf content is missing SSID or password credentials.")
-                print(f"[DEBUG] Successfully verified wpa_supplicant.conf write at {wpa_conf}", file=sys.stderr)
+                if clean_wpa_ssid not in c or wpa_psk_hex not in c:
+                    raise ValueError("wpa_supplicant.conf content is missing SSID or PSK credentials.")
+                _dbg(f"Successfully verified wpa_supplicant.conf write at {wpa_conf}")
             except Exception as e:
                 print(f"[ERROR] Failed writing or verifying wpa_supplicant.conf: {e}", file=sys.stderr)
                 raise e
@@ -462,9 +483,8 @@ network={{
             nm_dir = os.path.join(boot_path, "system-connections")
             os.makedirs(nm_dir, exist_ok=True)
             nm_file = os.path.join(nm_dir, "preconfigured-wifi.nmconnection")
-            
-            # Generate a random UUID for the connection
-            import uuid
+
+            # Generate a random UUID for the connection (uuid already imported at top of file)
             conn_uuid = str(uuid.uuid4())
             nm_content = f"""[connection]
 id=preconfigured-wifi
@@ -497,7 +517,7 @@ addr-gen-mode=default-or-eui64
                     c = f_check.read()
                 if clean_nm_ssid not in c or clean_nm_password not in c:
                     raise ValueError("preconfigured-wifi.nmconnection is missing SSID or password credentials.")
-                print(f"[DEBUG] Successfully verified NetworkManager connection profile at {nm_file}", file=sys.stderr)
+                _dbg(f"Successfully verified NetworkManager connection profile at {nm_file}")
             except Exception as e:
                 print(f"[ERROR] Failed writing or verifying NetworkManager connection profile: {e}", file=sys.stderr)
                 raise e
@@ -519,7 +539,7 @@ addr-gen-mode=default-or-eui64
                         c = f_check.read()
                     if f"systemd.hostname={clean_hostname}" not in c:
                         raise ValueError("cmdline.txt update verification failed.")
-                    print(f"[DEBUG] Successfully verified cmdline.txt update at {cmdline_file}", file=sys.stderr)
+                    _dbg(f"Successfully verified cmdline.txt update at {cmdline_file}")
             except Exception as e:
                 print(f"[ERROR] Failed updating or verifying cmdline.txt: {e}", file=sys.stderr)
                 raise e
@@ -542,7 +562,7 @@ addr-gen-mode=default-or-eui64
                 c = f_check.read()
             if f"DASHBOARD={dashboard_ui}" not in c:
                 raise ValueError("kace-bootstrap.txt verification failed.")
-            print(f"[DEBUG] Successfully verified kace-bootstrap.txt write at {bootstrap_cfg}", file=sys.stderr)
+            _dbg(f"Successfully verified kace-bootstrap.txt write at {bootstrap_cfg}")
         except Exception as e:
             print(f"[ERROR] Failed writing or verifying kace-bootstrap.txt: {e}", file=sys.stderr)
             raise e
@@ -577,14 +597,13 @@ country = "{country_code}"
                 c = f_check.read()
             if f'hostname = "{clean_hostname}"' not in c:
                 raise ValueError("custom.toml verification failed.")
-            print(f"[DEBUG] Successfully verified custom.toml write at {custom_toml_path}", file=sys.stderr)
+            _dbg(f"Successfully verified custom.toml write at {custom_toml_path}")
         except Exception as e:
             print(f"[ERROR] Failed writing or verifying custom.toml: {e}", file=sys.stderr)
             raise e
 
         # I. cloud-init: user-data
-        import uuid
-        instance_uuid = str(uuid.uuid4())
+        instance_uuid = str(uuid.uuid4())  # uuid imported at top of module
         userdata_path = os.path.join(boot_path, "user-data")
         country_code = _get_country_from_timezone(timezone) if timezone else "US"
         
@@ -612,7 +631,7 @@ ssh_pwauth: true
                 c = f_check.read()
             if f"hostname: {clean_hostname}" not in c or f'passwd: "{hashed_pw}"' not in c:
                 raise ValueError("user-data verification failed.")
-            print(f"[DEBUG] Successfully verified user-data write at {userdata_path}", file=sys.stderr)
+            _dbg(f"Successfully verified user-data write at {userdata_path}")
         except Exception as e:
             print(f"[ERROR] Failed writing or verifying user-data: {e}", file=sys.stderr)
             raise e
@@ -655,7 +674,7 @@ ssh_pwauth: true
                 raise ValueError("network-config verification failed.")
             if wifi_ssid and wifi_ssid not in c:
                 raise ValueError("network-config verification failed (missing SSID).")
-            print(f"[DEBUG] Successfully verified network-config write at {network_config_path}", file=sys.stderr)
+            _dbg(f"Successfully verified network-config write at {network_config_path}")
         except Exception as e:
             print(f"[ERROR] Failed writing or verifying network-config: {e}", file=sys.stderr)
             raise e
@@ -672,7 +691,7 @@ ssh_pwauth: true
                 c = f_check.read()
             if f"kace-{instance_uuid}" not in c:
                 raise ValueError("meta-data verification failed.")
-            print(f"[DEBUG] Successfully verified meta-data write at {metadata_path}", file=sys.stderr)
+            _dbg(f"Successfully verified meta-data write at {metadata_path}")
         except Exception as e:
             print(f"[ERROR] Failed writing or verifying meta-data: {e}", file=sys.stderr)
             raise e
@@ -691,7 +710,7 @@ ssh_pwauth: true
                         c = f_check.read()
                     if f"ds=nocloud;i=kace-{instance_uuid}" not in c:
                         raise ValueError("cmdline.txt verification failed.")
-                    print(f"[DEBUG] Successfully verified cmdline.txt patch at {cmdline_path}", file=sys.stderr)
+                    _dbg(f"Successfully verified cmdline.txt patch at {cmdline_path}")
             except Exception as e:
                 print(f"[ERROR] Failed patching or verifying cmdline.txt: {e}", file=sys.stderr)
                 raise e
@@ -735,7 +754,7 @@ ssh_pwauth: true
                 
                 if not os.path.exists(dest_bootstrap_path):
                     raise IOError(f"bootstrap.sh not found at: {dest_bootstrap_path}")
-                print(f"[DEBUG] Successfully verified bootstrap.sh local copy at {dest_bootstrap_path}", file=sys.stderr)
+                _dbg(f"Successfully verified bootstrap.sh local copy at {dest_bootstrap_path}")
             else:
                 print(f"[WARNING] Local bootstrap.sh source not found at: {local_bootstrap_src}", file=sys.stderr)
         except Exception as e:
