@@ -48,7 +48,19 @@ document.addEventListener('DOMContentLoaded', () => {
 window.addEventListener('pywebviewready', () => {
     console.log("PyWebView Python API connection established.");
     refreshDrives();
-    triggerScan();
+    
+    // SECURITY/NETWORK NOTE:
+    // Auto-scanning triggers subnet-wide ping/port probes on startup, which may fire security 
+    // alerts or trigger intrusion detection systems (IDS) on restricted corporate networks.
+    // We gate this behind a 'kace_auto_scan' user preference in localStorage (defaults to true).
+    const autoScanPref = localStorage.getItem('kace_auto_scan') !== 'false';
+    if (autoScanPref) {
+        triggerScan();
+    } else {
+        console.log("Auto-scan on startup disabled via user preference.");
+        const text = document.getElementById('scan-status-text');
+        if (text) text.textContent = "Auto-scan disabled. Click Scan Subnet below to discover nodes.";
+    }
 });
 
 // Tab Switching Routing
@@ -982,26 +994,39 @@ function parseBootstrapProgress(data) {
     
     const connSubtitle = document.getElementById('connection-subtitle');
     if (!connSubtitle) return;
+
+    const updateSubtitleStatus = (iconClass, text, isSuccess) => {
+        connSubtitle.textContent = "";
+        const icon = document.createElement('i');
+        icon.className = iconClass;
+        const textSpan = document.createElement('span');
+        textSpan.style.color = isSuccess ? 'var(--success-color)' : 'var(--primary-color)';
+        textSpan.style.fontWeight = '600';
+        textSpan.textContent = " Status: " + text;
+        connSubtitle.appendChild(icon);
+        connSubtitle.appendChild(document.createTextNode(" "));
+        connSubtitle.appendChild(textSpan);
+    };
     
     if (bootstrapBuffer.includes("Cloning Klipper repository...") || 
         bootstrapBuffer.includes("Installing Klipper dependencies") ||
         bootstrapBuffer.includes("Patching Klipper installer")) {
-        connSubtitle.innerHTML = `<span style="color: var(--primary-color); font-weight: 600;"><i class="fa-solid fa-spinner fa-spin"></i> Status: Installing Klipper...</span>`;
+        updateSubtitleStatus("fa-solid fa-spinner fa-spin", "Installing Klipper...", false);
     }
     else if (bootstrapBuffer.includes("Cloning Moonraker repository...") || 
              bootstrapBuffer.includes("Installing Moonraker dependencies")) {
-        connSubtitle.innerHTML = `<span style="color: var(--primary-color); font-weight: 600;"><i class="fa-solid fa-spinner fa-spin"></i> Status: Klipper installed! Installing Moonraker...</span>`;
+        updateSubtitleStatus("fa-solid fa-spinner fa-spin", "Klipper installed! Installing Moonraker...", false);
     }
     else if (bootstrapBuffer.includes("Installing Mainsail control interface...") || 
              bootstrapBuffer.includes("Installing Fluidd control interface...") ||
              bootstrapBuffer.includes("Setting up Nginx")) {
-        connSubtitle.innerHTML = `<span style="color: var(--primary-color); font-weight: 600;"><i class="fa-solid fa-spinner fa-spin"></i> Status: Moonraker installed! Installing Web Dashboard...</span>`;
+        updateSubtitleStatus("fa-solid fa-spinner fa-spin", "Moonraker installed! Installing Web Dashboard...", false);
     }
     else if (bootstrapBuffer.includes("Installing Crowsnest webcam streaming engine...")) {
-        connSubtitle.innerHTML = `<span style="color: var(--primary-color); font-weight: 600;"><i class="fa-solid fa-spinner fa-spin"></i> Status: Dashboard installed! Installing Crowsnest...</span>`;
+        updateSubtitleStatus("fa-solid fa-spinner fa-spin", "Dashboard installed! Installing Crowsnest...", false);
     }
     else if (bootstrapBuffer.includes("Bootstrap complete! KACE Node is fully ready.")) {
-        connSubtitle.innerHTML = `<span style="color: var(--success-color); font-weight: 600;"><i class="fa-solid fa-circle-check"></i> Status: Bootstrap complete! KACE Node is fully ready.</span>`;
+        updateSubtitleStatus("fa-solid fa-circle-check", "Bootstrap complete! KACE Node is fully ready.", true);
         updateTrackerBar('BOOTSTRAPPED');
     }
 }
@@ -1100,6 +1125,53 @@ function startBootstrap() {
                 term.write(`\r\n${connectedUsername}@${currentDeviceName || 'kace'}:~ $ `);
             }
         }, 1500);
+    }
+}
+
+// Synchronizes the visual state of a custom dropdown based on its hidden input's value
+function syncCustomDropdown(container) {
+    const hiddenInput = container.querySelector('input[type="hidden"]');
+    if (!hiddenInput) return;
+    const val = hiddenInput.value;
+    const options = container.querySelectorAll('.custom-option');
+    const trigger = container.querySelector('.custom-select-trigger');
+    if (!trigger) return;
+    
+    let selectedOption = null;
+    options.forEach(option => {
+        if (option.getAttribute('data-value') === val) {
+            selectedOption = option;
+            option.classList.add('selected');
+        } else {
+            option.classList.remove('selected');
+        }
+    });
+    
+    if (selectedOption) {
+        const optImg = selectedOption.querySelector('img');
+        const optGroup = selectedOption.querySelector('.logo-group');
+        const optTitle = selectedOption.querySelector('.option-title').textContent;
+        const optDesc = selectedOption.querySelector('.option-desc').textContent;
+        
+        const triggerImg = trigger.querySelector('.trigger-icon');
+        const triggerGroup = trigger.querySelector('.logo-group');
+        const triggerTitle = trigger.querySelector('.trigger-title');
+        const triggerDesc = trigger.querySelector('.trigger-desc');
+        
+        if (triggerTitle) triggerTitle.textContent = optTitle;
+        if (triggerDesc) triggerDesc.textContent = optDesc;
+        
+        if (triggerImg && optImg) {
+            triggerImg.src = optImg.getAttribute('src');
+            triggerImg.style.display = 'block';
+        } else if (triggerGroup) {
+            if (optGroup) {
+                triggerGroup.innerHTML = optGroup.innerHTML;
+            } else if (optImg) {
+                triggerGroup.innerHTML = `<img src="${optImg.getAttribute('src')}">`;
+            }
+            triggerGroup.style.display = 'flex';
+        }
     }
 }
 
@@ -1244,6 +1316,11 @@ function restoreFormState() {
         // Sync image source toggle visibility
         const imageSource = document.getElementById('image-source-select');
         if (imageSource) toggleImageSource(imageSource.value);
+        
+        // Sync custom dropdowns visual states
+        document.querySelectorAll('.custom-select-container').forEach(container => {
+            syncCustomDropdown(container);
+        });
         
     } catch (e) {
         console.warn('Failed to restore form state:', e);

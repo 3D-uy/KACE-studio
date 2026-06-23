@@ -178,6 +178,12 @@ if [ ! -f "$HOME/moonraker/scripts/install-moonraker.sh" ]; then
 fi
 "$HOME/moonraker/scripts/install-moonraker.sh"
 
+echo "Verifying Moonraker service is active..."
+sleep 3
+if ! systemctl is-active --quiet moonraker 2>/dev/null; then
+    echo "WARNING: Moonraker service did not start after install. Check journalctl -u moonraker for details." >&2
+fi
+
 # Create printer_data directories if they don't exist
 echo "Creating printer data configuration directories..."
 mkdir -p "$HOME/printer_data/config"

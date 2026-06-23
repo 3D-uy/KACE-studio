@@ -19,6 +19,15 @@ mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
 class KaceWsgiApp:
+    """
+    WSGI Application for serving frontend assets and handling specific local HTTP API routes.
+
+    SECURITY NOTE:
+    This WSGI app is loaded directly by PyWebView (using `webview.create_window(..., url=wsgi_app)`).
+    PyWebView binds its internal WSGI server to localhost/127.0.0.1 on a randomly assigned high port.
+    It does not bind to 0.0.0.0 or any external network interface, ensuring that the local file access
+    and SFTP API routes (/api/sftp/list) are only accessible locally and not exposed to the local network.
+    """
     def __init__(self, web_dir, api_instance):
         self.web_dir = os.path.abspath(web_dir)
         self.api = api_instance
@@ -82,6 +91,8 @@ class KaceWsgiApp:
 class Api:
     def __init__(self):
         self._ssh = SSHSession()
+        self._ssh_lock = threading.Lock()
+        self._ssh_gen = 0
         self._window = None
         self._flash_cancelled = False
 
@@ -483,7 +494,11 @@ class Api:
         """
         Connects paramiko client and routes stream data to the terminal.
         """
-        self._ssh.close()
+        with self._ssh_lock:
+            self._ssh.close()
+            self._ssh_gen += 1
+            current_gen = self._ssh_gen
+
         self.set_device_state("CONNECTING", 50, f"Establishing SSH connection to {ip}...")
         
         success = self._ssh.connect(ip, username, password)
@@ -493,6 +508,11 @@ class Api:
             ports_status = probe_ip_ports(ip, [7125], timeout=0.5)
             is_bootstrapped = ports_status.get(7125, False)
             
+            with self._ssh_lock:
+                # If a newer connection attempt started while probing, abort this connection
+                if current_gen != self._ssh_gen:
+                    return False
+
             if is_bootstrapped:
                 self.set_device_state("BOOTSTRAPPED", 100, f"Connected to bootstrapped node at {ip}.")
             else:
@@ -500,16 +520,25 @@ class Api:
                 
             # Setup bridge callbacks
             def on_data(text):
+                with self._ssh_lock:
+                    if current_gen != self._ssh_gen:
+                        return
                 escaped = json.dumps(text)
                 self._window.evaluate_js(f"window.writeTerminalData({escaped});")
                 
             def on_close():
-                self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
+                with self._ssh_lock:
+                    if current_gen != self._ssh_gen:
+                        return
+                    # Stale callbacks should not clear the status
+                    self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
                 
             self._ssh.run_command_stream("bash", on_data, on_close)
             return True
         else:
-            self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
+            with self._ssh_lock:
+                if current_gen == self._ssh_gen:
+                    self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
             return False
 
     def send_ssh_input(self, data: str):
@@ -522,7 +551,9 @@ class Api:
         """
         Closes current SSH session.
         """
-        self._ssh.close()
+        with self._ssh_lock:
+            self._ssh.close()
+            self._ssh_gen += 1
         return True
 
     def download_file(self, remote_path: str) -> bool:
