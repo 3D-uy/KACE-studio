@@ -192,7 +192,7 @@ mkdir -p "$HOME/printer_data/comms"    # Required: Moonraker klippy.sock socket 
 
 # Create a default moonraker.conf if not present.
 # Note: heredoc is intentionally unquoted (<<EOF) so $HOME expands to the real user home path.
-if [ ! -f "$HOME/printer_data/config/moonraker.conf" ]; then
+if [ ! -f "$HOME/printer_data/config/moonraker.conf" ] || ! grep -q "\[authorization\]" "$HOME/printer_data/config/moonraker.conf"; then
     echo "Creating default moonraker.conf..."
     cat <<EOF > "$HOME/printer_data/config/moonraker.conf"
 [server]
