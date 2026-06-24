@@ -985,48 +985,81 @@ function initTerminal() {
 }
 
 let bootstrapBuffer = "";
-function parseBootstrapProgress(data) {
-    // Append and keep buffer bounded to prevent leaks
-    bootstrapBuffer += data;
-    if (bootstrapBuffer.length > 5000) {
-        bootstrapBuffer = bootstrapBuffer.slice(-2000);
-    }
-    
-    const connSubtitle = document.getElementById('connection-subtitle');
-    if (!connSubtitle) return;
 
-    const updateSubtitleStatus = (iconClass, text, isSuccess) => {
-        connSubtitle.textContent = "";
-        const icon = document.createElement('i');
-        icon.className = iconClass;
-        const textSpan = document.createElement('span');
-        textSpan.style.color = isSuccess ? 'var(--success-color)' : 'var(--primary-color)';
-        textSpan.style.fontWeight = '600';
-        textSpan.textContent = " Status: " + text;
-        connSubtitle.appendChild(icon);
-        connSubtitle.appendChild(document.createTextNode(" "));
-        connSubtitle.appendChild(textSpan);
-    };
-    
-    if (bootstrapBuffer.includes("Cloning Klipper repository...") || 
-        bootstrapBuffer.includes("Installing Klipper dependencies") ||
-        bootstrapBuffer.includes("Patching Klipper installer")) {
-        updateSubtitleStatus("fa-solid fa-spinner fa-spin", "Installing Klipper...", false);
+// Stage definitions — ordered for the progress bar.
+// Each entry maps a STAGE_ID (emitted by bootstrap.sh as "=== STAGE: ID ===")
+// to a human-readable label shown in the UI status area.
+const BOOTSTRAP_STAGES = [
+    { id: 'PACKAGES',   label: 'Updating system packages'      },
+    { id: 'KLIPPER',    label: 'Installing Klipper'            },
+    { id: 'MOONRAKER',  label: 'Installing Moonraker'          },
+    { id: 'CONFIGS',    label: 'Writing printer configuration' },
+    { id: 'MAINSAIL',   label: 'Installing Mainsail'           },
+    { id: 'FLUIDD',     label: 'Installing Fluidd'             },
+    { id: 'CLIENT_CFG', label: 'Downloading UI client config'  },
+    { id: 'NGINX',      label: 'Configuring Nginx'             },
+    { id: 'SERVICES',   label: 'Starting services'             },
+    { id: 'CROWSNEST',  label: 'Installing Crowsnest'          },
+    { id: 'KACE',       label: 'Installing KACE agent'         },
+];
+
+let lastBootstrapStageIdx = -1;
+
+function setBootstrapStage(stageId) {
+    const idx = BOOTSTRAP_STAGES.findIndex(s => s.id === stageId);
+    if (idx === -1 || idx <= lastBootstrapStageIdx) return;
+    lastBootstrapStageIdx = idx;
+
+    const label = document.getElementById('bootstrap-stage-label');
+    if (label) {
+        label.textContent = BOOTSTRAP_STAGES[idx].label + '...';
     }
-    else if (bootstrapBuffer.includes("Cloning Moonraker repository...") || 
-             bootstrapBuffer.includes("Installing Moonraker dependencies")) {
-        updateSubtitleStatus("fa-solid fa-spinner fa-spin", "Klipper installed! Installing Moonraker...", false);
+
+    // Mark all previous stages as completed, current as active
+    BOOTSTRAP_STAGES.forEach((stage, i) => {
+        const el = document.getElementById('bstage-' + stage.id);
+        if (!el) return;
+        el.classList.remove('active', 'completed', 'done');
+        if (i < idx) {
+            el.classList.add('done');
+        } else if (i === idx) {
+            el.classList.add('active');
+        }
+    });
+
+    // Also update the old connection-subtitle for backwards compatibility
+    const connSubtitle = document.getElementById('connection-subtitle');
+    if (connSubtitle) {
+        connSubtitle.innerHTML = `<i class="fa-solid fa-spinner fa-spin" style="color:var(--primary-color)"></i> <span style="color:var(--primary-color);font-weight:600"> ${BOOTSTRAP_STAGES[idx].label}...</span>`;
     }
-    else if (bootstrapBuffer.includes("Installing Mainsail control interface...") || 
-             bootstrapBuffer.includes("Installing Fluidd control interface...") ||
-             bootstrapBuffer.includes("Setting up Nginx")) {
-        updateSubtitleStatus("fa-solid fa-spinner fa-spin", "Moonraker installed! Installing Web Dashboard...", false);
+}
+
+function parseBootstrapProgress(data) {
+    bootstrapBuffer += data;
+    if (bootstrapBuffer.length > 8000) {
+        bootstrapBuffer = bootstrapBuffer.slice(-3000);
     }
-    else if (bootstrapBuffer.includes("Installing Crowsnest webcam streaming engine...")) {
-        updateSubtitleStatus("fa-solid fa-spinner fa-spin", "Dashboard installed! Installing Crowsnest...", false);
+
+    // Scan for === STAGE: ID === markers emitted by bootstrap.sh
+    const markerRe = /=== STAGE: ([A-Z_]+) ===/g;
+    let match;
+    while ((match = markerRe.exec(bootstrapBuffer)) !== null) {
+        setBootstrapStage(match[1]);
     }
-    else if (bootstrapBuffer.includes("Bootstrap complete! KACE Node is fully ready.")) {
-        updateSubtitleStatus("fa-solid fa-circle-check", "Bootstrap complete! KACE Node is fully ready.", true);
+
+    // Detect completion banner
+    if (bootstrapBuffer.includes('Bootstrap complete! KACE Node is fully ready.')) {
+        // Mark all stages done
+        BOOTSTRAP_STAGES.forEach(stage => {
+            const el = document.getElementById('bstage-' + stage.id);
+            if (el) { el.classList.remove('active'); el.classList.add('done'); }
+        });
+        const label = document.getElementById('bootstrap-stage-label');
+        if (label) label.textContent = '✔ Bootstrap complete!';
+        const connSubtitle = document.getElementById('connection-subtitle');
+        if (connSubtitle) {
+            connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap complete! KACE Node is fully ready.</span>';
+        }
         updateTrackerBar('BOOTSTRAPPED');
     }
 }
@@ -1087,6 +1120,17 @@ function startBootstrap() {
         return;
     }
     
+    // Show the stage progress tracker and reset state
+    const tracker = document.getElementById('bootstrap-progress-tracker');
+    if (tracker) tracker.style.display = 'block';
+    lastBootstrapStageIdx = -1;
+    BOOTSTRAP_STAGES.forEach(stage => {
+        const el = document.getElementById('bstage-' + stage.id);
+        if (el) el.classList.remove('active', 'done');
+    });
+    const stageLabel = document.getElementById('bootstrap-stage-label');
+    if (stageLabel) stageLabel.textContent = 'Starting bootstrap...';
+
     term.write(`\r\n\x1b[1;36m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
     const bootstrapCmd = `if [ -f /boot/firmware/bootstrap.sh ]; then bash /boot/firmware/bootstrap.sh --dashboard ${selectedUi}; elif [ -f /boot/bootstrap.sh ]; then bash /boot/bootstrap.sh --dashboard ${selectedUi}; else curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}; fi\n`;
     
@@ -1097,27 +1141,27 @@ function startBootstrap() {
         // Send the shell command to execute the bootstrap
         window.pywebview.api.send_ssh_input(bootstrapCmd);
     } else {
-        // Mock terminal output matching the real shell script logs
-        let steps = [
-            "Updating apt repositories...",
-            "Installing core dependencies...",
-            "Cloning Klipper repository...",
-            "Installing Klipper dependencies and systemd service...",
-            "Cloning Moonraker repository...",
-            "Installing Moonraker dependencies and systemd service...",
-            "Setting up Nginx and downloading selected web interfaces...",
-            `Installing ${selectedUi.charAt(0).toUpperCase() + selectedUi.slice(1)} control interface...`,
-            "Installing Crowsnest webcam streaming engine...",
-            "Bootstrap complete! KACE Node is fully ready."
+        // Mock terminal output — stage markers match bootstrap.sh log_stage() output
+        const mockSteps = [
+            '=== STAGE: PACKAGES ===',
+            '=== STAGE: KLIPPER ===',
+            '=== STAGE: MOONRAKER ===',
+            '=== STAGE: CONFIGS ===',
+            `=== STAGE: ${selectedUi === 'fluidd' ? 'FLUIDD' : 'MAINSAIL'} ===`,
+            '=== STAGE: CLIENT_CFG ===',
+            '=== STAGE: NGINX ===',
+            '=== STAGE: SERVICES ===',
+            ...(selectedUi === 'both' || Math.random() > 0.5 ? ['=== STAGE: CROWSNEST ==='] : []),
+            '=== STAGE: KACE ===',
+            'Bootstrap complete! KACE Node is fully ready.',
         ];
         
         term.write(`$ ${bootstrapCmd}`);
         let idx = 0;
         const interval = setInterval(() => {
-            if (idx < steps.length) {
-                const stepText = steps[idx];
+            if (idx < mockSteps.length) {
+                const stepText = mockSteps[idx];
                 term.write(`\r\n${stepText}\r\n`);
-                // Manually trigger the parser callback to simulate streaming behavior
                 parseBootstrapProgress(stepText);
                 idx++;
             } else {

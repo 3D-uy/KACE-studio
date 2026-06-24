@@ -146,6 +146,7 @@ body {
 
 /* Content Area */
 .content-area {
+    position: relative;
     flex-grow: 1;
     height: 100%;
     overflow-y: auto;
@@ -377,8 +378,8 @@ body {
     left: 0;
     bottom: 0;
     width: 0%;
-    background: linear-gradient(90deg, var(--primary-color) 0%, #ff5500 100%);
-    box-shadow: 0 0 10px var(--accent-glow);
+    background: linear-gradient(90deg, #ffaa00 0%, #ff7700 100%);
+    box-shadow: 0 0 15px rgba(255, 133, 0, 0.6);
     transition: width 0.3s ease;
     z-index: 1;
 }
@@ -399,6 +400,7 @@ body {
     color: var(--text-primary) !important;
     cursor: not-allowed;
     box-shadow: none !important;
+    opacity: 1 !important;
 }
 
 .status-msg {
@@ -555,10 +557,20 @@ body {
 }
 
 /* SSH Terminal Tab styling */
+#terminal-tab.tab-content {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+}
+
 .terminal-workspace-container {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 110px);
+    height: 100%;
+    width: 100%;
 }
 
 .workspace-header {
@@ -566,9 +578,7 @@ body {
     align-items: center;
     justify-content: space-between;
     background-color: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-bottom: none;
-    border-radius: 12px 12px 0 0;
+    border-bottom: 1px solid var(--border-color);
     padding: 16px 24px;
 }
 
@@ -599,10 +609,87 @@ body {
     gap: 10px;
 }
 
+/* KACE Bootstrap Tooltip */
+.kace-tooltip-container {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.kace-tooltip-icon {
+    font-size: 16px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color 0.2s ease, transform 0.2s ease;
+    padding: 4px;
+}
+
+.kace-tooltip-icon:hover {
+    color: var(--primary-color);
+    transform: scale(1.15);
+}
+
+.kace-tooltip-window {
+    visibility: hidden;
+    position: absolute;
+    top: 135%; /* Show tooltip below the icon */
+    right: 0;
+    width: 320px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 14px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 0 15px rgba(255, 133, 0, 0.15);
+    z-index: 1000;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity 0.3s ease, transform 0.3s ease, visibility 0.3s;
+    pointer-events: none;
+}
+
+.kace-tooltip-container:hover .kace-tooltip-window {
+    visibility: visible;
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.kace-tooltip-window h4 {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--primary-color);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.kace-tooltip-window ul {
+    list-style-type: none;
+    padding-left: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.kace-tooltip-window li {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-primary);
+}
+
+.kace-tooltip-window li strong {
+    color: var(--cyan-accent);
+}
+
 .terminal-card {
     background-color: #000000;
-    border: 1px solid var(--border-color);
-    border-radius: 0 0 12px 12px;
     padding: 16px;
     flex-grow: 1;
     overflow: hidden;
@@ -1177,7 +1264,7 @@ body.light-mode .modal-card {
 
 .sidebar-logo {
     width: 100%;
-    max-width: 90px;
+    max-width: 140px;
     height: auto;
     border-radius: 10px;
     border: 1px solid var(--border-color);
@@ -1460,5 +1547,106 @@ body.light-mode .sidebar-logo:hover {
     text-align: center;
 }
 
+/* ── Bootstrap Stage Progress Tracker ──────────────────────────────────── */
 
+#bootstrap-progress-tracker {
+    padding: 10px 16px 8px;
+    background: rgba(15, 18, 26, 0.8);
+    border-bottom: 1px solid var(--border-color);
+}
 
+.bootstrap-stage-bar {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.bootstrap-stage-bar::-webkit-scrollbar {
+    display: none;
+}
+
+.bstage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    position: relative;
+    min-width: 52px;
+}
+
+/* Connector line between dots */
+.bstage:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    top: 7px;
+    left: calc(50% + 8px);
+    right: calc(-50% + 8px);
+    height: 2px;
+    background: var(--border-color);
+    transition: background 0.4s ease;
+    z-index: 0;
+}
+
+.bstage.done:not(:last-child)::after {
+    background: var(--success-color);
+}
+
+.bstage-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--border-color);
+    border: 2px solid #2a3040;
+    margin-bottom: 4px;
+    position: relative;
+    z-index: 1;
+    transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+    flex-shrink: 0;
+}
+
+.bstage.active .bstage-dot {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    box-shadow: 0 0 8px var(--primary-glow);
+    animation: bstage-pulse 1.2s ease-in-out infinite;
+}
+
+.bstage.done .bstage-dot {
+    background: var(--success-color);
+    border-color: var(--success-color);
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+}
+
+@keyframes bstage-pulse {
+    0%, 100% { box-shadow: 0 0 6px var(--primary-glow); }
+    50%       { box-shadow: 0 0 14px var(--primary-glow); }
+}
+
+.bstage span {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-align: center;
+    white-space: nowrap;
+    letter-spacing: 0.3px;
+    transition: color 0.3s ease;
+}
+
+.bstage.active span {
+    color: var(--primary-color);
+}
+
+.bstage.done span {
+    color: var(--success-color);
+}
+
+.bootstrap-stage-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-align: center;
+    margin-top: 6px;
+    font-family: var(--font-mono);
+    letter-spacing: 0.2px;
+}

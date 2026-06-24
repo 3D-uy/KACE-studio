@@ -20,6 +20,7 @@
         })();
     </script>
     <title>KACE Studio</title>
+    <link rel="shortcut icon" href="KACE-studio.ico" type="image/x-icon">
     <!-- Locally bundled fonts (offline-safe — no CDN dependency) -->
     <link rel="stylesheet" href="vendor/fonts/fonts.css">
     <!-- Xterm.js Terminal styles -->
@@ -108,7 +109,7 @@
             <!-- Stage A: Smart SD Card Imager -->
             <section id="imager-tab" class="tab-content active">
                 <div class="header">
-                    <h2>Stage A — Smart SD Card Imager</h2>
+                    <h2>Smart SD Card Imager</h2>
                     <p>Prepare a bootable Raspberry Pi OS image pre-configured with primary settings.</p>
                 </div>
                 
@@ -287,6 +288,11 @@
                                 </select>
                             </div>
                         </div>
+                        <div style="display: flex; justify-content: flex-end; margin-top: 24px;">
+                            <button type="button" class="btn btn-primary" onclick="switchTab('credentials-tab')" style="padding: 10px 24px;">
+                                Next <i class="fa-solid fa-arrow-right" style="margin-left: 6px;"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -294,7 +300,7 @@
             <!-- Stage A2: Credentials & Services -->
             <section id="credentials-tab" class="tab-content">
                 <div class="header">
-                    <h2>Stage A2 — Credentials & Services</h2>
+                    <h2>Credentials & Services</h2>
                     <p>Configure account credentials, WiFi networks, choose services, and run write tasks.</p>
                 </div>
                 
@@ -372,7 +378,7 @@
             <!-- Stage B: Integrated SSH Workspace & Discovery -->
             <section id="discovery-tab" class="tab-content">
                 <div class="header">
-                    <h2>Stage B — Device Discovery</h2>
+                    <h2>Device Discovery</h2>
                     <p>Search the local network for the booted KACE node and establish a connection.</p>
                 </div>
 
@@ -425,8 +431,26 @@
                                 <p id="connection-subtitle">No active session. Select a device in the Discovery tab to connect.</p>
                             </div>
                         </div>
-                        <div class="workspace-actions">
-                            <button class="btn btn-success" id="bootstrap-btn" onclick="startBootstrap()" disabled>
+                        <div class="workspace-actions" style="display: flex; align-items: center; gap: 10px;">
+                            <div class="kace-tooltip-container">
+                                <i class="fa-solid fa-circle-info kace-tooltip-icon"></i>
+                                <div class="kace-tooltip-window">
+                                    <h4>KACE Bootstrap Workflow</h4>
+                                    <ul>
+                                        <li><strong>1. PACKAGES:</strong> Installs core system dependencies.</li>
+                                        <li><strong>2. KLIPPER:</strong> Installs Klipper host software.</li>
+                                        <li><strong>3. MOONRAKER:</strong> Installs Moonraker API server.</li>
+                                        <li><strong>4. CONFIGS:</strong> Prepares system configuration files.</li>
+                                        <li><strong>5. MAINSAIL/FLUIDD:</strong> Installs the selected UI dashboard.</li>
+                                        <li><strong>6. CLIENT CFG:</strong> Links appropriate client config.</li>
+                                        <li><strong>7. NGINX:</strong> Configures web server reverse proxy.</li>
+                                        <li><strong>8. SERVICES:</strong> Registers systemd start daemons.</li>
+                                        <li><strong>9. CROWSNEST:</strong> Sets up webcam streaming (if checked).</li>
+                                        <li><strong>10. KACE AGENT:</strong> Installs KACE agent to close the loop.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <button class="btn btn-primary" id="bootstrap-btn" onclick="startBootstrap()" disabled>
                                 <i class="fa-solid fa-rocket"></i> Bootstrap KACE
                             </button>
                             <button class="btn btn-danger" id="disconnect-btn" onclick="disconnectSSH()" style="display:none;">
@@ -434,7 +458,58 @@
                             </button>
                         </div>
                     </div>
-                    
+
+                    <!-- Bootstrap Stage Progress Tracker (hidden until bootstrap starts) -->
+                    <div id="bootstrap-progress-tracker" style="display: none;">
+                        <div class="bootstrap-stage-bar">
+                            <div class="bstage" id="bstage-PACKAGES">
+                                <div class="bstage-dot"></div>
+                                <span>Packages</span>
+                            </div>
+                            <div class="bstage" id="bstage-KLIPPER">
+                                <div class="bstage-dot"></div>
+                                <span>Klipper</span>
+                            </div>
+                            <div class="bstage" id="bstage-MOONRAKER">
+                                <div class="bstage-dot"></div>
+                                <span>Moonraker</span>
+                            </div>
+                            <div class="bstage" id="bstage-CONFIGS">
+                                <div class="bstage-dot"></div>
+                                <span>Configs</span>
+                            </div>
+                            <div class="bstage" id="bstage-MAINSAIL">
+                                <div class="bstage-dot"></div>
+                                <span>Dashboard</span>
+                            </div>
+                            <div class="bstage" id="bstage-FLUIDD">
+                                <div class="bstage-dot"></div>
+                                <span>Dashboard</span>
+                            </div>
+                            <div class="bstage" id="bstage-CLIENT_CFG">
+                                <div class="bstage-dot"></div>
+                                <span>UI Config</span>
+                            </div>
+                            <div class="bstage" id="bstage-NGINX">
+                                <div class="bstage-dot"></div>
+                                <span>Nginx</span>
+                            </div>
+                            <div class="bstage" id="bstage-SERVICES">
+                                <div class="bstage-dot"></div>
+                                <span>Services</span>
+                            </div>
+                            <div class="bstage" id="bstage-CROWSNEST">
+                                <div class="bstage-dot"></div>
+                                <span>Crowsnest</span>
+                            </div>
+                            <div class="bstage" id="bstage-KACE">
+                                <div class="bstage-dot"></div>
+                                <span>KACE</span>
+                            </div>
+                        </div>
+                        <div class="bootstrap-stage-label" id="bootstrap-stage-label">Waiting to start...</div>
+                    </div>
+
                     <!-- Terminal Search Bar -->
                     <div class="terminal-search-bar" id="terminal-search-bar" style="display: none;">
                         <input type="text" id="terminal-search-input" placeholder="Search terminal output..." style="flex-grow: 1; font-size: 13px;">
