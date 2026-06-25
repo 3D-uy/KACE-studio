@@ -10,7 +10,11 @@ def _get_known_hosts_path() -> str:
     """Returns the path to KACE's persistent SSH known_hosts file."""
     kace_dir = os.path.join(os.path.expanduser("~"), ".kace")
     os.makedirs(kace_dir, exist_ok=True)
-    return os.path.join(kace_dir, "known_hosts")
+    path = os.path.join(kace_dir, "known_hosts")
+    if not os.path.exists(path):
+        with open(path, "w", encoding="utf-8") as f:
+            pass
+    return path
 
 
 def clear_host_key(ip: str):
