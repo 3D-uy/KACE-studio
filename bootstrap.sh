@@ -256,8 +256,10 @@ ExecStart=$HOME/klippy-env/bin/python $HOME/klipper/klippy/klippy.py \\
     -l $HOME/printer_data/logs/klippy.log \\
     -a $HOME/printer_data/comms/klippy.sock
 EOF
-$SUDO mkdir -p "$HOME/printer_data/logs"
-$SUDO chown "$USER:$USER" "$HOME/printer_data/logs"
+# Ensure printer_data/logs exists and the entire printer_data tree is owned by the user.
+# This prevents permission issues if intermediate folders were created as root.
+mkdir -p "$HOME/printer_data/logs" 2>/dev/null || $SUDO mkdir -p "$HOME/printer_data/logs"
+$SUDO chown -R "$USER:$USER" "$HOME/printer_data"
 $SUDO systemctl daemon-reload
 log_ok "Klipper service patched: using printer_data/config/printer.cfg and klippy.sock."
 
