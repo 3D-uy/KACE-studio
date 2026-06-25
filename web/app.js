@@ -1003,8 +1003,9 @@ let bootstrapBuffer = "";
 // to a human-readable label shown in the UI status area.
 const BOOTSTRAP_STAGES = [
     { id: 'PACKAGES',   label: 'Updating system packages'      },
-    { id: 'KLIPPER',    label: 'Installing Klipper'            },
-    { id: 'MOONRAKER',  label: 'Installing Moonraker'          },
+    { id: 'KLIPPER',      label: 'Installing Klipper'              },
+    { id: 'KLIPPER_FIX',  label: 'Patching Klipper service paths'   },
+    { id: 'MOONRAKER',    label: 'Installing Moonraker'              },
     { id: 'CONFIGS',    label: 'Writing printer configuration' },
     { id: 'MAINSAIL',   label: 'Installing Mainsail'           },
     { id: 'FLUIDD',     label: 'Installing Fluidd'             },
