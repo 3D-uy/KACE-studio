@@ -119,6 +119,7 @@ def get_boot_drive_letter(disk_number: int):
     """
     Finds the FAT32/FAT partition drive letter of the flashed SD card.
     """
+    assert isinstance(disk_number, int), "disk_number must be an integer"
     if sys.platform != "win32":
         return None
         
@@ -186,6 +187,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
     Flashes the image block-by-block onto the target drive by spawning
     the elevated helper process kace_writer.py.
     """
+    assert isinstance(disk_number, int), "disk_number must be an integer"
     if sys.platform != "win32":
         err = "Raw flashing is only fully supported on Windows in this MVP client."
         print(err, file=sys.stderr)
@@ -211,7 +213,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
     if os.path.exists(status_file):
         try:
             os.remove(status_file)
-        except:
+        except Exception:
             pass
             
     # Resolve executable and arguments
@@ -341,6 +343,8 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
                     elif status == "error":
                         error_msg = message
                         success = False
+                except json.JSONDecodeError as decode_err:
+                    print(f"Warning: progress status file was partially written: {decode_err}", file=sys.stderr)
                 except Exception:
                     pass
                     
@@ -356,7 +360,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
                     error_msg = data.get("message", "Helper reported failure.")
                 # Clean up status file
                 os.remove(status_file)
-            except:
+            except Exception:
                 pass
                 
         if not success and not error_msg:
@@ -367,18 +371,33 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
     finally:
         ctypes.windll.kernel32.CloseHandle(hProcess)
 
-def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace") -> bool:
+def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True) -> bool:
     """
     Injects SSH enablement, User credentials, WiFi configuration (wpa_supplicant + NetworkManager),
     and hostname parameters directly to the FAT32 boot partition.
     """
+    assert isinstance(disk_number, int), "disk_number must be an integer"
+    # Pre-flight: server-side validation of username (mirrors client-side regex in app.js)
+    _USERNAME_RE = re.compile(r'^[a-z_][a-z0-9_-]*$')
+    if not username or not _USERNAME_RE.match(username):
+        raise ValueError(
+            "Invalid username. Must start with a lowercase letter or underscore "
+            "and contain only lowercase letters, numbers, hyphens, or underscores."
+        )
+
+    # Sanitize free-text fields: strip characters that could inject extra lines
+    # into key=value config files or corrupt YAML structure.
+    clean_timezone = re.sub(r'[\r\n=]', '', timezone) if timezone else ''
+    clean_pi_model = re.sub(r'[\r\n=]', '', pi_model) if pi_model else ''
+    clean_os_arch  = re.sub(r'[\r\n=]', '', os_arch)  if os_arch  else ''
+
     # Wait for OS mount
     boot_path = get_boot_drive_letter(disk_number)
     _dbg(f"get_boot_drive_letter({disk_number}) resolved to: '{boot_path}'")
     if not boot_path or not os.path.exists(boot_path):
         print(f"FAT32 boot partition not mounted or not found on physical disk {disk_number}.", file=sys.stderr)
         return False
-        
+
     try:
         # A. Hostname validation and sanitization
         # Regex: must start/end with alphanumeric, no consecutive dots, only [a-zA-Z0-9.-]
@@ -447,6 +466,8 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
             raise e
             
         # E. WiFi credentials
+        # Ensure wpa_psk_hex is always computed before the NM profile section
+        # (even if re-used later by network-config/cloud-init).
         if wifi_ssid:
             # Legacy: wpa_supplicant.conf (for Buster/Bullseye compatibility)
             country_code = _get_country_from_timezone(timezone) if timezone else "US"
@@ -486,6 +507,10 @@ network={{
 
             # Generate a random UUID for the connection (uuid already imported at top of file)
             conn_uuid = str(uuid.uuid4())
+            # C2 FIX: Use the pre-computed PBKDF2 hex PSK (same value as wpa_supplicant.conf)
+            # instead of the plaintext password. NetworkManager treats a 64-char hex string
+            # in the psk field as a raw WPA-PSK key, which is cryptographically equivalent
+            # but not reversible to the original password.
             nm_content = f"""[connection]
 id=preconfigured-wifi
 uuid={conn_uuid}
@@ -499,7 +524,7 @@ ssid={clean_nm_ssid}
 [wifi-security]
 auth-alg=open
 key-mgmt=wpa-psk
-psk={clean_nm_password}
+psk={wpa_psk_hex}
 
 [ipv4]
 method=auto
@@ -515,8 +540,8 @@ addr-gen-mode=default-or-eui64
                     raise IOError(f"preconfigured-wifi.nmconnection connection profile not found at: {nm_file}")
                 with open(nm_file, "r", encoding="utf-8") as f_check:
                     c = f_check.read()
-                if clean_nm_ssid not in c or clean_nm_password not in c:
-                    raise ValueError("preconfigured-wifi.nmconnection is missing SSID or password credentials.")
+                if clean_nm_ssid not in c or wpa_psk_hex not in c:
+                    raise ValueError("preconfigured-wifi.nmconnection is missing SSID or PSK credentials.")
                 _dbg(f"Successfully verified NetworkManager connection profile at {nm_file}")
             except Exception as e:
                 print(f"[ERROR] Failed writing or verifying NetworkManager connection profile: {e}", file=sys.stderr)
@@ -550,12 +575,12 @@ addr-gen-mode=default-or-eui64
             with open(bootstrap_cfg, "w", newline="\n") as f:
                 f.write(f"DASHBOARD={dashboard_ui}\n")
                 f.write(f"CROWSNEST={'true' if crowsnest else 'false'}\n")
-                if timezone:
-                    f.write(f"TIMEZONE={timezone}\n")
-                if pi_model:
-                    f.write(f"PI_MODEL={pi_model}\n")
-                if os_arch:
-                    f.write(f"OS_ARCH={os_arch}\n")
+                if clean_timezone:
+                    f.write(f"TIMEZONE={clean_timezone}\n")
+                if clean_pi_model:
+                    f.write(f"PI_MODEL={clean_pi_model}\n")
+                if clean_os_arch:
+                    f.write(f"OS_ARCH={clean_os_arch}\n")
             if not os.path.exists(bootstrap_cfg):
                 raise IOError(f"kace-bootstrap.txt not found at: {bootstrap_cfg}")
             with open(bootstrap_cfg, "r", encoding="utf-8") as f_check:
@@ -569,7 +594,7 @@ addr-gen-mode=default-or-eui64
                 
         # H. Bookworm headless configuration (custom.toml)
         custom_toml_path = os.path.join(boot_path, "custom.toml")
-        
+
         toml_content = f"""config_version = 1
 
 [system]
@@ -577,10 +602,10 @@ hostname = "{clean_hostname}"
 
 [ssh]
 enabled = {"true" if ssh_enabled else "false"}
-password_authentication = true
+password_authentication = {"true" if password_auth else "false"}
 """
         if wifi_ssid:
-            country_code = _get_country_from_timezone(timezone) if timezone else "US"
+            country_code = _get_country_from_timezone(clean_timezone) if clean_timezone else "US"
             toml_content += f"""
 [wlan]
 ssid = "{clean_toml_ssid}"
@@ -605,14 +630,16 @@ country = "{country_code}"
         # I. cloud-init: user-data
         instance_uuid = str(uuid.uuid4())  # uuid imported at top of module
         userdata_path = os.path.join(boot_path, "user-data")
-        country_code = _get_country_from_timezone(timezone) if timezone else "US"
-        
+        country_code = _get_country_from_timezone(clean_timezone) if clean_timezone else "US"
+
+        # M6 FIX: use sanitized clean_timezone to prevent YAML injection via the timezone field.
+        # The clean_timezone value has had \r, \n, and = stripped already.
         userdata_content = f"""#cloud-config
 hostname: {clean_hostname}
 manage_etc_hosts: true
 packages:
 - avahi-daemon
-timezone: {timezone or "UTC"}
+timezone: {clean_timezone or "UTC"}
 users:
 - name: {username}
   groups: users,adm,dialout,audio,netdev,video,plugdev,cdrom,games,input,gpio,spi,i2c,render,sudo
@@ -620,7 +647,7 @@ users:
   lock_passwd: false
   passwd: "{hashed_pw}"
 enable_ssh: true
-ssh_pwauth: true
+ssh_pwauth: {"true" if password_auth else "false"}
 """
         try:
             with open(userdata_path, "w", newline="\n") as f:
@@ -764,8 +791,8 @@ ssh_pwauth: true
         try:
             time.sleep(1)
             subprocess.run(["powershell", "-Command", "Update-HostStorageCache"], capture_output=True, **SUBPROCESS_FLAGS)
-        except:
-            pass
+        except Exception as flush_err:
+            print(f"Warning: Update-HostStorageCache failed (non-fatal): {flush_err}", file=sys.stderr)
 
         return True
     except Exception as e:

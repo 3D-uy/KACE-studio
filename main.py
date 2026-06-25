@@ -38,17 +38,25 @@ class KaceWsgiApp:
         # Route: GET /api/sftp/list
         if path == '/api/sftp/list':
             import urllib.parse
+            import posixpath
             query = environ.get('QUERY_STRING', '')
             params = urllib.parse.parse_qs(query)
-            sftp_path = params.get('path', ['/home/kace'])[0]
-            
+            raw_path = params.get('path', ['/home/kace'])[0]
+
+            # H1 FIX: Sanitize path param — strip null bytes, then normalize with
+            # posixpath.normpath to collapse any ../ traversal sequences.
+            sftp_path = posixpath.normpath(raw_path.replace('\x00', ''))
+            if not sftp_path.startswith('/'):
+                sftp_path = '/' + sftp_path
+
             try:
                 files = self.api._ssh.list_directory(sftp_path)
                 data = json.dumps({"path": sftp_path, "items": files}).encode('utf-8')
+                # M2 FIX: Removed wildcard CORS header. This is a localhost-only
+                # internal API — no cross-origin access needed or permitted.
                 start_response('200 OK', [
                     ('Content-Type', 'application/json'),
                     ('Content-Length', str(len(data))),
-                    ('Access-Control-Allow-Origin', '*')
                 ])
                 return [data]
             except Exception as e:
@@ -75,13 +83,18 @@ class KaceWsgiApp:
                 mime_type, _ = mimetypes.guess_type(file_path)
                 if not mime_type:
                     mime_type = 'application/octet-stream'
-                
+
                 with open(file_path, 'rb') as f:
                     file_data = f.read()
-                    
+
+                # M5 FIX: Add security headers to prevent clickjacking, MIME-sniffing
+                # and referrer leakage from static file responses.
                 start_response('200 OK', [
                     ('Content-Type', mime_type),
-                    ('Content-Length', str(len(file_data)))
+                    ('Content-Length', str(len(file_data))),
+                    ('X-Frame-Options', 'SAMEORIGIN'),
+                    ('X-Content-Type-Options', 'nosniff'),
+                    ('Referrer-Policy', 'same-origin'),
                 ])
                 return [file_data]
             else:
@@ -94,7 +107,8 @@ class Api:
         self._ssh_lock = threading.Lock()
         self._ssh_gen = 0
         self._window = None
-        self._flash_cancelled = False
+        # L8 FIX: Use threading.Event for cross-thread cancel signalling.
+        self._flash_cancel_event = threading.Event()
 
     def set_window(self, window):
         self._window = window
@@ -105,10 +119,20 @@ class Api:
         """
         import re
         msg = str(e)
-        # Match Windows absolute paths (e.g. C:\Users\name\...)
-        msg = re.sub(r'[a-zA-Z]:\\[\\\w\s.-]+', '[Protected Path]', msg)
-        # Match Unix absolute paths (e.g. /home/user/...)
-        msg = re.sub(r'/[/\w\s.-]+', '[Protected Path]', msg)
+        # L2 FIX: Improved path regexes.
+        # Windows paths: drive letter + colon + backslash + path components
+        msg = re.sub(
+            r'[a-zA-Z]:\\(?:[^\\\r\n"]+\\)*[^\\\r\n"]*',
+            '[Protected Path]',
+            msg
+        )
+        # Unix paths: leading / followed by path segments
+        # Negative lookbehind avoids matching URL paths (http://host/path)
+        msg = re.sub(
+            r'(?<![:/])/(?:[^\r\n\'" ]+/)*[^\r\n\'" ]*',
+            '[Protected Path]',
+            msg
+        )
         return msg
 
     def set_device_state(self, state: str, progress: int = 0, message: str = ""):
@@ -147,17 +171,17 @@ class Api:
         Sets the cancellation flag to abort the flash worker at the next safe checkpoint.
         Only effective during download/decompress stages — not during raw disk writing.
         """
-        self._flash_cancelled = True
+        self._flash_cancel_event.set()
         return True
 
-    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace"):
+    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
         """
-        self._flash_cancelled = False
+        self._flash_cancel_event.clear()
         thread = threading.Thread(
             target=self._flash_worker,
-            args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username),
+            args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth),
             daemon=True
         )
         thread.start()
@@ -167,7 +191,7 @@ class Api:
 
     def _check_cancelled(self):
         """Raises ValueError if the flash operation was cancelled by the user."""
-        if self._flash_cancelled:
+        if self._flash_cancel_event.is_set():
             raise ValueError("Flashing cancelled by user.")
 
     def _compute_sha256(self, file_path: str, action_message: str) -> str:
@@ -234,6 +258,7 @@ class Api:
         Verifies integrity against the remote SHA-256 hash.
         """
         import urllib.request
+        import ssl
         import time as _time
 
         if not redirected_url:
@@ -249,8 +274,11 @@ class Api:
         )
 
         dl_start_time = _time.monotonic()
+        # L6 FIX: Explicit SSL context ensures TLS certificates are validated against
+        # the system CA store, protecting against MITM on the OS image download.
+        ssl_ctx = ssl.create_default_context()
 
-        with urllib.request.urlopen(req_dl) as response:
+        with urllib.request.urlopen(req_dl, context=ssl_ctx) as response:
             content_length = int(response.info().get('Content-Length', 0))
             bytes_downloaded = 0
             chunk_size = 1024 * 1024  # 1MB chunks
@@ -333,8 +361,11 @@ class Api:
 
         remote_sha256 = ""
         redirected_url = ""
+        # L6 FIX: Explicit SSL context for certificate validation on all remote requests.
+        import ssl
+        ssl_ctx = ssl.create_default_context()
         try:
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, context=ssl_ctx) as response:
                 redirected_url = response.geturl()
 
             sha_url = redirected_url + ".sha256"
@@ -342,7 +373,7 @@ class Api:
                 sha_url,
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
             )
-            with urllib.request.urlopen(sha_req) as sha_response:
+            with urllib.request.urlopen(sha_req, context=ssl_ctx) as sha_response:
                 sha_content = sha_response.read().decode('utf-8').strip()
                 remote_sha256 = sha_content.split()[0]
         except Exception as net_err:
@@ -436,7 +467,7 @@ class Api:
 
     # ── Flash Worker Orchestrator ─────────────────────────────────────────
 
-    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str):
+    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str, password_auth: bool):
         try:
             self.set_device_state("FLASHING", 0, "Initializing physical block-writing...")
 
@@ -461,7 +492,7 @@ class Api:
 
             # Stage 3: Inject boot configuration files
             self.set_device_state("FLASHING", 95, "Injecting system configuration files...")
-            inject_success = inject_config(drive_id, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username)
+            inject_success = inject_config(drive_id, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth)
 
             if inject_success:
                 self.set_device_state("FLASHED", 100, "SD Card successfully flashed and provisioned!")
@@ -470,7 +501,7 @@ class Api:
 
         except Exception as e:
             print(f"Flash worker exception: {e}", file=sys.stderr)
-            if self._flash_cancelled:
+            if self._flash_cancel_event.is_set():
                 self.set_device_state("ERROR", 0, "Flashing cancelled by user.")
             else:
                 self.set_device_state("ERROR", 0, f"Exception occurred: {self._sanitize_error(e)}")

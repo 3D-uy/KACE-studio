@@ -1,8 +1,17 @@
+import os
 import threading
 import time
 import select
 import paramiko
 from typing import Callable
+
+
+def _get_known_hosts_path() -> str:
+    """Returns the path to KACE's persistent SSH known_hosts file."""
+    kace_dir = os.path.join(os.path.expanduser("~"), ".kace")
+    os.makedirs(kace_dir, exist_ok=True)
+    return os.path.join(kace_dir, "known_hosts")
+
 
 class SSHSession:
     def __init__(self):
@@ -14,11 +23,19 @@ class SSHSession:
         """
         Establishes an SSH connection to the target device with exponential backoff retries.
         Supports custom ports specified in the format IP:PORT (e.g. 127.0.0.1:2222).
+
+        HOST KEY SECURITY (TOFU — Trust On First Use):
+        - On the first connection to a host, the key is accepted and persisted to
+          ~/.kace/known_hosts.
+        - On subsequent connections, the server key is validated against the stored key.
+          If it has changed (potential MITM), the connection is rejected with a clear error.
+        - AutoAddPolicy is only applied to *missing* entries; existing entries are always
+          validated by paramiko regardless of policy, so key changes are always detected.
         """
         retries = 5
         delay = 1
         max_delay = 5
-        
+
         target_ip = ip
         port = 22
         if ":" in ip:
@@ -28,13 +45,49 @@ class SSHSession:
                 port = int(parts[1])
             except ValueError:
                 pass
-        
+
+        known_hosts_path = _get_known_hosts_path()
+
         for attempt in range(retries + 1):
             try:
                 self.client = paramiko.SSHClient()
+
+                # Load previously accepted host keys (TOFU persistence)
+                try:
+                    self.client.load_host_keys(known_hosts_path)
+                except FileNotFoundError:
+                    pass  # First run — no known_hosts yet
+
+                # AutoAddPolicy handles *new* hosts only.
+                # For known hosts, paramiko always validates the key against
+                # load_host_keys() entries regardless of policy, so a key change
+                # (MITM indicator) raises BadHostKeyException unconditionally.
                 self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                self.client.connect(target_ip, port=port, username=username, password=password, timeout=5)
+
+                self.client.connect(
+                    target_ip, port=port, username=username,
+                    password=password, timeout=5
+                )
+
+                # Persist the accepted host key for future validation
+                try:
+                    self.client.save_host_keys(known_hosts_path)
+                except Exception as save_err:
+                    print(f"Warning: Failed to save host key to {known_hosts_path}: {save_err}")
+
                 return True
+
+            except paramiko.BadHostKeyException as e:
+                # The remote host key changed — surface a clear error and do NOT retry.
+                print(f"[SECURITY] SSH host key mismatch for {ip}: {e}")
+                print(
+                    f"[SECURITY] Expected key differs from stored key in {known_hosts_path}. "
+                    "If this is a freshly re-flashed Pi, remove the old entry from "
+                    f"{known_hosts_path} and reconnect."
+                )
+                self.client = None
+                return False
+
             except Exception as e:
                 print(f"SSH connection attempt {attempt + 1}/{retries + 1} failed to {ip}: {e}")
                 self.client = None
@@ -120,12 +173,12 @@ class SSHSession:
         if self.channel:
             try:
                 self.channel.close()
-            except:
+            except Exception:
                 pass
         if self.client:
             try:
                 self.client.close()
-            except:
+            except Exception:
                 pass
         self.channel = None
         self.client = None

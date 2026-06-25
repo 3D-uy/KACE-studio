@@ -128,6 +128,7 @@ class Win32DiskWriter:
         return handle is None or handle == 0 or handle == -1 or handle == 0xFFFFFFFF or handle == 0xFFFFFFFFFFFFFFFF
 
     def _get_disk_volumes(self, disk_number):
+        assert isinstance(disk_number, int), "disk_number must be an integer"
         try:
             res = subprocess.run(["powershell", "-Command", f"Get-Partition -DiskNumber {disk_number} | Select-Object -ExpandProperty AccessPaths"], capture_output=True, text=True, encoding="utf-8", **SUBPROCESS_FLAGS)
             if res.returncode == 0:
@@ -145,7 +146,6 @@ class Win32DiskWriter:
         except Exception as e:
             safe_print_err(f"Warning: Failed to query partitions for locking: {e}")
         return []
-
     def write(self, data: bytes):
         if self._is_invalid(self.handle):
             raise OSError("Handle is closed or invalid.")
@@ -236,6 +236,45 @@ def write_status(file_path, status, progress=0, message=""):
     except Exception as e:
         safe_print_err(f"Failed to write progress status file: {e}")
 
+def _validate_disk_is_removable(disk_number: int) -> bool:
+    """
+    H2 FIX: Re-validates inside the elevated writer process that the target disk
+    is a removable bus type (USB/SD/MMC/1394) and is not the system or boot drive.
+    This prevents a privilege escalation where a crafted disk number could target
+    the system drive from the elevated context.
+    """
+    assert isinstance(disk_number, int), "disk_number must be an integer"
+    if sys.platform != "win32":
+        return False
+    try:
+        res = subprocess.run(
+            ["powershell", "-Command",
+             f"Get-Disk -Number {disk_number} | Select-Object BusType, IsSystem, IsBoot | ConvertTo-Json"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            **SUBPROCESS_FLAGS
+        )
+        if res.returncode != 0 or not res.stdout.strip():
+            safe_print_err(f"[SECURITY] Disk validation query failed for disk {disk_number}.")
+            return False
+        import json as _json
+        data = _json.loads(res.stdout.strip())
+        if isinstance(data, list):
+            data = data[0]
+        bus_type = data.get("BusType", "").upper()
+        is_system = data.get("IsSystem", True)
+        is_boot = data.get("IsBoot", True)
+        if bus_type not in ("USB", "SD", "MMC", "1394"):
+            safe_print_err(f"[SECURITY] Disk {disk_number} has bus type '{bus_type}' — not a removable drive. Aborting.")
+            return False
+        if is_system or is_boot:
+            safe_print_err(f"[SECURITY] Disk {disk_number} is a system/boot drive. Aborting.")
+            return False
+        return True
+    except Exception as e:
+        safe_print_err(f"[SECURITY] Exception during disk validation for disk {disk_number}: {e}")
+        return False
+
+
 def main():
     if len(sys.argv) < 3:
         safe_print_err("ERROR: Missing arguments. Usage: kace_writer.py <disk_number> <image_path> [status_file_path]")
@@ -249,13 +288,22 @@ def main():
         
     image_path = sys.argv[2]
     status_file = sys.argv[3] if len(sys.argv) > 3 else None
-    
+
     if not os.path.exists(image_path):
-        err_msg = f"Image file not found: {image_path}"
+        err_msg = f"Image file not found."
         safe_print_err(f"ERROR: {err_msg}")
         write_status(status_file, "error", message=err_msg)
         sys.exit(1)
-        
+
+    # H2 FIX: Re-validate that the disk is a removable drive inside the elevated process.
+    # This is a defense-in-depth check — even if the parent process was tricked into
+    # passing a non-removable disk number, the elevated writer will refuse to write.
+    if not _validate_disk_is_removable(disk_number):
+        err_msg = f"Security check failed: disk {disk_number} is not a recognized removable drive. Aborting write."
+        safe_print_err(f"ERROR: {err_msg}")
+        write_status(status_file, "error", message=err_msg)
+        sys.exit(1)
+
     physical_path = rf"\\.\PhysicalDrive{disk_number}"
     
     try:
@@ -337,8 +385,11 @@ def main():
         sys.exit(0)
         
     except subprocess.CalledProcessError as e:
+        # L3 FIX: Redact the command path from user-facing error messages.
+        # e.cmd contains the full executable path + image path which can leak
+        # sensitive filesystem layout information.
         stderr_msg = e.stderr.decode('utf-8', errors='replace').strip() if e.stderr else ""
-        err_msg = f"System command failed.\nCommand: {e.cmd}\nExit code: {e.returncode}\nDetail: {stderr_msg if stderr_msg else 'No output description.'}"
+        err_msg = f"System command failed (exit {e.returncode}): {stderr_msg if stderr_msg else 'No output.'}"
         safe_print_err(f"ERROR: {err_msg}")
         write_status(status_file, "error", message=err_msg)
         # Attempt to online disk in case of failure

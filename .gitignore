@@ -15,6 +15,7 @@ build/
 
 # KACE Studio
 cache/
+temp/
 
 # IDE
 .vscode/

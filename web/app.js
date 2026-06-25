@@ -415,6 +415,10 @@ function startFlashing() {
     // Services
     const sshEnabled = document.getElementById('ssh-enable').checked;
     const crowsnest = document.getElementById('crowsnest-enable').checked;
+    // L4 FIX: Wire the 'Enable Password Authentication' checkbox to the backend.
+    // Previously this checkbox was a dead UI control — the backend always wrote
+    // password_authentication = true regardless of its state.
+    const passwordAuth = document.getElementById('ssh-password-auth').checked;
     
     // Image configuration
     const imageSource = document.getElementById('image-source-select').value;
@@ -449,7 +453,8 @@ function startFlashing() {
             osArch,
             sshEnabled,
             crowsnest,
-            sshUsername
+            sshUsername,
+            passwordAuth
         ).then(res => {
             if (!res) {
                 window.updateDeviceState("ERROR", 0, "Flashing aborted or failed.");
@@ -806,11 +811,18 @@ function handleLoginInput(data) {
                 term.write('\r\nPassword: ');
             }
         } else if (loginState === 'PROMPTING_PASS') {
-            loginPassword = currentLoginInput;
-            currentLoginInput = '';
+            // H4 FIX: Capture the password in a local variable and immediately
+            // clear the module-scope loginPassword before any async work begins.
+            // This minimises the window in which the plaintext password exists
+            // in a JS heap-reachable module-scope variable.
+            const capturedPassword = currentLoginInput;
+            loginPassword = '';        // clear module-scope var immediately
+            currentLoginInput = '';    // clear input buffer immediately
             loginState = 'CONNECTING';
             term.write('\r\n[KACE Workspace] Establishing SSH connection...\r\n');
-            performSshLogin(loginUsername, loginPassword);
+            performSshLogin(loginUsername, capturedPassword);
+            // capturedPassword goes out of scope after this frame, making it
+            // eligible for GC as soon as the engine collects the closure.
         }
     } else if (data === '\x7f' || data === '\b') {
         if (currentLoginInput.length > 0) {
@@ -831,8 +843,11 @@ function handleLoginInput(data) {
 
 function performSshLogin(username, password) {
     if (window.pywebview && window.pywebview.api) {
+        // H4 FIX: Pass password directly to the API call without re-storing in any
+        // wider-scope variable. Clear it from the parameter before the Promise resolves.
         window.pywebview.api.connect_ssh(currentDeviceIp, username, password, term.cols, term.rows).then(success => {
-            // Securely wipe plaintext passwords from memory
+            // Clear the local password reference on resolution
+            password = '';
             loginPassword = '';
             currentLoginInput = '';
             if (success) {
@@ -851,7 +866,8 @@ function performSshLogin(username, password) {
                 promptTerminalLogin();
             }
         }).catch(err => {
-            // Securely wipe plaintext passwords from memory on error
+            // Clear password on error path too
+            password = '';
             loginPassword = '';
             currentLoginInput = '';
             term.write(`\r\n\x1b[1;31m[Error] Connection error: ${err}\x1b[0m\r\n`);
@@ -1159,7 +1175,11 @@ function startBootstrap() {
     if (stageLabel) stageLabel.textContent = 'Starting bootstrap...';
 
     term.write(`\r\n\x1b[1;36m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
-    const bootstrapCmd = `if [ -f /boot/firmware/bootstrap.sh ]; then bash /boot/firmware/bootstrap.sh --dashboard ${selectedUi}; elif [ -f /boot/bootstrap.sh ]; then bash /boot/bootstrap.sh --dashboard ${selectedUi}; else curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard ${selectedUi}; fi\n`;
+    const bootstrapCmd = `if [ -f /boot/firmware/bootstrap.sh ]; then bash /boot/firmware/bootstrap.sh --dashboard ${selectedUi}; elif [ -f /boot/bootstrap.sh ]; then bash /boot/bootstrap.sh --dashboard ${selectedUi}; else echo "ERROR: bootstrap.sh not found on boot partition. Please re-flash the SD card."; exit 1; fi\n`;
+    // H3 FIX: The previous fallback included 'curl | bash' from a remote GitHub URL.
+    // This has been removed: if the bootstrap script is not found on the SD card,
+    // the command now exits with an error instead of silently fetching and executing
+    // arbitrary code from the internet over the authenticated SSH session.
     
     // Reset buffer at start
     bootstrapBuffer = "";
@@ -1617,17 +1637,30 @@ function renderSftpList(items) {
     items.forEach(item => {
         const itemEl = document.createElement('div');
         itemEl.className = `sftp-item ${item.is_dir ? 'folder' : 'file'}`;
-        
+
         if (!item.is_dir && sftpSelectedFile === item.name) {
             itemEl.classList.add('selected');
         }
-        
-        const iconClass = item.is_dir 
-            ? 'fa-solid fa-folder' 
+
+        const iconClass = item.is_dir
+            ? 'fa-solid fa-folder'
             : (item.name.endsWith('.cfg') || item.name.endsWith('.conf') ? 'fa-solid fa-file-code' : 'fa-solid fa-file');
-            
-        itemEl.innerHTML = `<div class="sftp-item-left"><i class="${iconClass}"></i><span class="sftp-item-name">${item.name}</span></div>`;
-        
+
+        // L7 FIX: Build the item DOM via createElement + textContent instead of innerHTML
+        // string interpolation. The filename (item.name) comes from the remote SFTP server
+        // and must be treated as untrusted. innerHTML interpolation would allow a filename
+        // containing HTML/script tags to execute in the webview context (stored XSS).
+        const leftDiv = document.createElement('div');
+        leftDiv.className = 'sftp-item-left';
+        const icon = document.createElement('i');
+        icon.className = iconClass;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'sftp-item-name';
+        nameSpan.textContent = item.name; // safe — textContent never executes markup
+        leftDiv.appendChild(icon);
+        leftDiv.appendChild(nameSpan);
+        itemEl.appendChild(leftDiv);
+
         if (item.is_dir) {
             itemEl.addEventListener('click', () => {
                 navigateSftpInto(item.name);

@@ -13,10 +13,16 @@ def resolve_hostname(hostname: str = "kace.local") -> str:
         # Fallback in case of temporary failure
         return ""
 
-def probe_ip_ports(ip: str, ports: List[int] = [22, 7125], timeout: float = 0.5) -> Dict[int, bool]:
+def probe_ip_ports(ip: str, ports: List[int] = None, timeout: float = 0.5) -> Dict[int, bool]:
     """
     Probes specific ports on an IP to check if they are open.
+
+    M3 FIX: Default ports list changed from a mutable list literal to None sentinel.
+    Using a mutable list as a default argument is a Python footgun \u2014 the same list object
+    is shared across all call sites, so any in-place mutation would persist across calls.
     """
+    if ports is None:
+        ports = [22, 7125]
     results = {}
     for port in ports:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
