@@ -845,12 +845,16 @@ function performSshLogin(username, password) {
     if (window.pywebview && window.pywebview.api) {
         // H4 FIX: Pass password directly to the API call without re-storing in any
         // wider-scope variable. Clear it from the parameter before the Promise resolves.
-        window.pywebview.api.connect_ssh(currentDeviceIp, username, password, term.cols, term.rows).then(success => {
+        window.pywebview.api.connect_ssh(currentDeviceIp, username, password, term.cols, term.rows).then(res => {
             // Clear the local password reference on resolution
             password = '';
             loginPassword = '';
             currentLoginInput = '';
-            if (success) {
+            
+            const isSuccess = (res === true || (res && res.status === 'success'));
+            const isHostKeyMismatch = (res && res.status === 'host_key_mismatch');
+            
+            if (isSuccess) {
                 connectedUsername = username;
                 term.write("\x1b[1;32m[KACE Workspace] SSH connection established successfully.\x1b[0m\r\n");
                 updateConnectionStatus(true);
@@ -860,8 +864,15 @@ function performSshLogin(username, password) {
                 if (window.pywebview && window.pywebview.api) {
                     window.pywebview.api.resize_ssh_pty(term.cols, term.rows);
                 }
+            } else if (isHostKeyMismatch) {
+                term.write(`\r\n\x1b[1;33m[SECURITY ALERT] SSH Host Key Mismatch for ${currentDeviceIp}!\x1b[0m\r\n`);
+                term.write("This is normal if you have recently re-flashed the SD card.\r\n");
+                term.write("Do you want to clear the old stored key and trust the new one? (y/n): ");
+                loginState = 'PROMPTING_HOST_KEY_MISMATCH';
+                updateConnectionStatus(false);
             } else {
-                term.write("\r\n\x1b[1;31m[Error] SSH connection failed. Verify user credentials or network path.\x1b[0m\r\n");
+                const errMsg = (res && res.message) ? res.message : "SSH connection failed. Verify user credentials or network path.";
+                term.write(`\r\n\x1b[1;31m[Error] ${errMsg}\x1b[0m\r\n`);
                 updateConnectionStatus(false);
                 promptTerminalLogin();
             }
@@ -951,7 +962,6 @@ function initTerminal() {
     
     // Intercept right-click context menu inside the terminal container
     container.addEventListener('contextmenu', (e) => {
-        if (!sshConnected) return; // Completely non-functional if no SSH session is active
         e.preventDefault();
         const contextMenu = document.getElementById('terminal-context-menu');
         if (contextMenu) {
@@ -960,6 +970,31 @@ function initTerminal() {
             contextMenu.style.display = 'flex';
         }
     });
+    
+    // Add keydown listener to support standard keyboard copy & paste (Ctrl+C / Ctrl+V)
+    container.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+            navigator.clipboard.readText()
+                .then(text => {
+                    if (text) {
+                        handleTerminalPaste(text);
+                    }
+                })
+                .catch(err => console.error('Failed to read from clipboard: ', err));
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        else if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+            if (term && term.hasSelection()) {
+                const selection = term.getSelection();
+                navigator.clipboard.writeText(selection)
+                    .then(() => console.log('Copied selection to clipboard'))
+                    .catch(err => console.error('Failed to copy selection: ', err));
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }
+    }, true); // useCapture = true to intercept before xterm.js handlers
     
     // Dismiss custom context menu when clicking anywhere else
     document.addEventListener('click', (e) => {
@@ -1005,6 +1040,22 @@ function initTerminal() {
             window.pywebview.api.send_ssh_input(data);
         } else if (loginState === 'PROMPTING_USER' || loginState === 'PROMPTING_PASS') {
             handleLoginInput(data);
+        } else if (loginState === 'PROMPTING_HOST_KEY_MISMATCH') {
+            const char = data.toLowerCase();
+            if (char === 'y') {
+                term.write("y\r\n[KACE Workspace] Clearing stored host key...\r\n");
+                loginState = 'CONNECTING';
+                if (window.pywebview && window.pywebview.api) {
+                    window.pywebview.api.clear_stored_host_key(currentDeviceIp).then(() => {
+                        promptTerminalLogin();
+                    });
+                } else {
+                    promptTerminalLogin();
+                }
+            } else if (char === 'n') {
+                term.write("n\r\n[KACE Workspace] Connection aborted.\r\n");
+                promptTerminalLogin();
+            }
         } else if (!sshConnected) {
             // Echo locally if not connected in debug/mock
             term.write(data);

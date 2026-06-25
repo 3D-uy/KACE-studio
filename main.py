@@ -521,7 +521,7 @@ class Api:
             self.set_device_state("DISCOVERED", 100, f"Discovered manual target at {ip}.")
         return res
 
-    def connect_ssh(self, ip: str, username: str, password: str, cols: int = 80, rows: int = 24) -> bool:
+    def connect_ssh(self, ip: str, username: str, password: str, cols: int = 80, rows: int = 24) -> dict:
         """
         Connects paramiko client and routes stream data to the terminal.
         cols/rows: actual frontend terminal dimensions for correct PTY sizing.
@@ -533,7 +533,20 @@ class Api:
 
         self.set_device_state("CONNECTING", 50, f"Establishing SSH connection to {ip}...")
         
-        success = self._ssh.connect(ip, username, password)
+        import paramiko
+        try:
+            success = self._ssh.connect(ip, username, password)
+        except paramiko.BadHostKeyException as host_key_err:
+            with self._ssh_lock:
+                if current_gen == self._ssh_gen:
+                    self.set_device_state("ERROR", 0, f"SSH Host Key Mismatch for {ip}.")
+            return {"status": "host_key_mismatch", "message": str(host_key_err)}
+        except Exception as conn_err:
+            with self._ssh_lock:
+                if current_gen == self._ssh_gen:
+                    self.set_device_state("ERROR", 0, f"SSH connection failed: {conn_err}")
+            return {"status": "failed", "message": str(conn_err)}
+
         if success:
             # Check if Moonraker port (7125) is open to distinguish SSH_READY vs BOOTSTRAPPED
             from backend.discovery import probe_ip_ports
@@ -543,7 +556,7 @@ class Api:
             with self._ssh_lock:
                 # If a newer connection attempt started while probing, abort this connection
                 if current_gen != self._ssh_gen:
-                    return False
+                    return {"status": "failed", "message": "Connection superseded by a newer attempt."}
 
             if is_bootstrapped:
                 self.set_device_state("BOOTSTRAPPED", 100, f"Connected to bootstrapped node at {ip}.")
@@ -591,12 +604,12 @@ class Api:
                     self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
                 
             self._ssh.run_command_stream("bash", on_data, on_close, cols=cols, rows=rows)
-            return True
+            return {"status": "success"}
         else:
             with self._ssh_lock:
                 if current_gen == self._ssh_gen:
                     self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
-            return False
+            return {"status": "failed", "message": "Verify user password or network path."}
 
     def send_ssh_input(self, data: str):
         """
@@ -618,6 +631,15 @@ class Api:
             self._ssh.close()
             self._ssh_gen += 1
         return True
+
+    def clear_stored_host_key(self, ip: str) -> bool:
+        """
+        Removes stored host keys for the target IP from the known_hosts file.
+        """
+        from backend.ssh_client import clear_host_key
+        clear_host_key(ip)
+        return True
+
 
     def download_file(self, remote_path: str) -> bool:
         """

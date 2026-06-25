@@ -13,6 +13,53 @@ def _get_known_hosts_path() -> str:
     return os.path.join(kace_dir, "known_hosts")
 
 
+def clear_host_key(ip: str):
+    """
+    Removes any stored keys for the target IP/hostname from the known_hosts file.
+    Supports parsing port-bracketed formats (e.g., [192.168.1.47]:22).
+    """
+    known_hosts_path = _get_known_hosts_path()
+    if not os.path.exists(known_hosts_path):
+        return
+
+    target_ip = ip
+    if ":" in ip:
+        parts = ip.split(":")
+        target_ip = parts[0]
+
+    lines_to_keep = []
+    try:
+        with open(known_hosts_path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    lines_to_keep.append(line)
+                    continue
+                parts = stripped.split()
+                if parts:
+                    host_part = parts[0]
+                    # Split hosts separated by comma (e.g. host1,host2)
+                    hosts = [h.strip("[]") for h in host_part.split(",")]
+                    hosts_clean = []
+                    for h in hosts:
+                        if "]" in h:
+                            h = h.split("]")[0]
+                        if ":" in h:
+                            h = h.split(":")[0]
+                        hosts_clean.append(h)
+                    if target_ip in hosts_clean:
+                        # Skip this line (removes it from the file)
+                        continue
+                lines_to_keep.append(line)
+
+        with open(known_hosts_path, "w", encoding="utf-8") as f:
+            f.writelines(lines_to_keep)
+        print(f"[SECURITY] Removed stored host keys for {ip} from {known_hosts_path}.")
+    except Exception as e:
+        print(f"Error clearing host key for {ip}: {e}")
+
+
+
 class SSHSession:
     def __init__(self):
         self.client = None
@@ -86,7 +133,7 @@ class SSHSession:
                     f"{known_hosts_path} and reconnect."
                 )
                 self.client = None
-                return False
+                raise e
 
             except Exception as e:
                 print(f"SSH connection attempt {attempt + 1}/{retries + 1} failed to {ip}: {e}")
