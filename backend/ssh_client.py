@@ -1,5 +1,6 @@
 import threading
 import time
+import select
 import paramiko
 from typing import Callable
 
@@ -43,7 +44,7 @@ class SSHSession:
                 else:
                     return False
 
-    def run_command_stream(self, command: str, on_data_callback: Callable[[str], None], on_close_callback: Callable[[], None]):
+    def run_command_stream(self, command: str, on_data_callback: Callable[[str], None], on_close_callback: Callable[[], None], cols: int = 80, rows: int = 24):
         """
         Executes a command on the remote Pi, streaming the stdout/stderr
         back asynchronously via the data callback.
@@ -55,23 +56,25 @@ class SSHSession:
             
         def run():
             self.running = True
+            import codecs
+            decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
             try:
                 transport = self.client.get_transport()
                 self.channel = transport.open_session()
-                # Request pty to ensure line-buffered and interactive streams function
-                self.channel.get_pty(term='xterm')
+                # Request pty with actual frontend terminal dimensions and 256color support
+                self.channel.get_pty(term='xterm-256color', width=cols, height=rows)
                 self.channel.exec_command(command)
                 
                 while self.running:
-                    # Check if there is data to read
-                    if self.channel.recv_ready():
-                        data = self.channel.recv(4096)
+                    # Use select() to block until data is available or timeout
+                    # This prevents CPU-burning busy-wait and ensures escape
+                    # sequences arrive as complete contiguous chunks
+                    r, _, _ = select.select([self.channel], [], [], 0.1)
+                    if r:
+                        data = self.channel.recv(16384)
                         if not data:
                             break
-                        try:
-                            text = data.decode("utf-8")
-                        except UnicodeDecodeError:
-                            text = data.decode("latin-1", errors="replace")
+                        text = decoder.decode(data)
                         on_data_callback(text)
                     
                     # Check exit status if no more data is available
@@ -98,6 +101,16 @@ class SSHSession:
                 self.channel.send(data)
             except Exception as e:
                 print(f"Error sending SSH input: {e}")
+
+    def resize_pty(self, cols: int, rows: int):
+        """
+        Resizes the remote pseudo-terminal (PTY) window size.
+        """
+        if self.channel and not self.channel.closed:
+            try:
+                self.channel.resize_pty(width=cols, height=rows)
+            except Exception as e:
+                print(f"Error resizing remote PTY: {e}")
 
     def close(self):
         """

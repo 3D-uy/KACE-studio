@@ -831,7 +831,7 @@ function handleLoginInput(data) {
 
 function performSshLogin(username, password) {
     if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.connect_ssh(currentDeviceIp, username, password).then(success => {
+        window.pywebview.api.connect_ssh(currentDeviceIp, username, password, term.cols, term.rows).then(success => {
             // Securely wipe plaintext passwords from memory
             loginPassword = '';
             currentLoginInput = '';
@@ -840,6 +840,11 @@ function performSshLogin(username, password) {
                 term.write("\x1b[1;32m[KACE Workspace] SSH connection established successfully.\x1b[0m\r\n");
                 updateConnectionStatus(true);
                 loginState = 'DISCONNECTED';
+                
+                // Synchronize terminal dimensions with the remote PTY
+                if (window.pywebview && window.pywebview.api) {
+                    window.pywebview.api.resize_ssh_pty(term.cols, term.rows);
+                }
             } else {
                 term.write("\r\n\x1b[1;31m[Error] SSH connection failed. Verify user credentials or network path.\x1b[0m\r\n");
                 updateConnectionStatus(false);
@@ -920,6 +925,13 @@ function initTerminal() {
     
     term.open(container);
     fitAddon.fit();
+
+    // Listen for terminal resize events and forward them to the backend SSH session
+    term.onResize(size => {
+        if (sshConnected && window.pywebview && window.pywebview.api) {
+            window.pywebview.api.resize_ssh_pty(size.cols, size.rows);
+        }
+    });
     
     // Intercept right-click context menu inside the terminal container
     container.addEventListener('contextmenu', (e) => {
@@ -1089,6 +1101,15 @@ function updateConnectionStatus(connected) {
         disconnectBtn.style.display = 'none';
         connTitle.textContent = `SSH Session: Disconnected`;
         connSubtitle.textContent = `No active session. Select a device in the Discovery tab to connect.`;
+        
+        // Hide the progress tracker and resize terminal
+        const tracker = document.getElementById('bootstrap-progress-tracker');
+        if (tracker && tracker.style.display !== 'none') {
+            tracker.style.display = 'none';
+            setTimeout(() => {
+                if (fitAddon) fitAddon.fit();
+            }, 50);
+        }
     }
     
     // Refresh SFTP Panel status
@@ -1122,7 +1143,12 @@ function startBootstrap() {
     
     // Show the stage progress tracker and reset state
     const tracker = document.getElementById('bootstrap-progress-tracker');
-    if (tracker) tracker.style.display = 'block';
+    if (tracker) {
+        tracker.style.display = 'block';
+        setTimeout(() => {
+            if (fitAddon) fitAddon.fit();
+        }, 50);
+    }
     lastBootstrapStageIdx = -1;
     BOOTSTRAP_STAGES.forEach(stage => {
         const el = document.getElementById('bstage-' + stage.id);

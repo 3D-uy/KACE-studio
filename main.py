@@ -490,9 +490,10 @@ class Api:
             self.set_device_state("DISCOVERED", 100, f"Discovered manual target at {ip}.")
         return res
 
-    def connect_ssh(self, ip: str, username: str, password: str) -> bool:
+    def connect_ssh(self, ip: str, username: str, password: str, cols: int = 80, rows: int = 24) -> bool:
         """
         Connects paramiko client and routes stream data to the terminal.
+        cols/rows: actual frontend terminal dimensions for correct PTY sizing.
         """
         with self._ssh_lock:
             self._ssh.close()
@@ -518,22 +519,47 @@ class Api:
             else:
                 self.set_device_state("SSH_READY", 100, f"Connected to raw node at {ip}. Ready for KACE bootstrap.")
                 
+            # Write-coalescing buffer: collect rapid-fire SSH data chunks and flush
+            # them as a single evaluate_js call every 15ms. This prevents interactive
+            # TUI menus (like KACE installer's inquirer prompts) from rendering
+            # intermediate states that cause visual stacking/flickering.
+            write_buffer = []
+            flush_timer = [None]  # mutable container for timer reference
+            buffer_lock = threading.Lock()
+            
+            def flush_write_buffer():
+                with buffer_lock:
+                    if write_buffer:
+                        combined = ''.join(write_buffer)
+                        write_buffer.clear()
+                    else:
+                        return
+                    flush_timer[0] = None
+                escaped = json.dumps(combined)
+                self._window.evaluate_js(f"window.writeTerminalData({escaped});")
+            
             # Setup bridge callbacks
             def on_data(text):
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen:
                         return
-                escaped = json.dumps(text)
-                self._window.evaluate_js(f"window.writeTerminalData({escaped});")
+                with buffer_lock:
+                    write_buffer.append(text)
+                    if flush_timer[0] is None:
+                        flush_timer[0] = threading.Timer(0.015, flush_write_buffer)
+                        flush_timer[0].daemon = True
+                        flush_timer[0].start()
                 
             def on_close():
+                # Flush any remaining buffered data before closing
+                flush_write_buffer()
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen:
                         return
                     # Stale callbacks should not clear the status
                     self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
                 
-            self._ssh.run_command_stream("bash", on_data, on_close)
+            self._ssh.run_command_stream("bash", on_data, on_close, cols=cols, rows=rows)
             return True
         else:
             with self._ssh_lock:
@@ -546,6 +572,12 @@ class Api:
         Channels keystrokes/data from frontend terminal to paramiko SSH channel.
         """
         self._ssh.send_input(data)
+
+    def resize_ssh_pty(self, cols: int, rows: int):
+        """
+        Channels window resize signals from frontend term to active SSH PTY channel.
+        """
+        self._ssh.resize_pty(cols, rows)
 
     def disconnect_ssh(self):
         """
@@ -601,7 +633,8 @@ def main():
         js_api=api,
         width=1050,
         height=700,
-        resizable=False,
+        resizable=True,
+        min_size=(900, 600),
         background_color="#0b0f19"
     )
     api.set_window(window)
