@@ -14,9 +14,6 @@ let connectedUsername = 'kace';
 let currentLoginInput = '';
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Initialize blank xterm terminal
-    initTerminal();
-    
     // Initialize custom dropdown selectors
     initCustomDropdowns();
     
@@ -40,6 +37,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const themeText = document.getElementById('theme-text');
         if (themeIcon) themeIcon.className = 'fa-solid fa-moon';
         if (themeText) themeText.textContent = 'Dark Mode';
+    }
+
+    // Initialize blank xterm terminal once local fonts are loaded
+    // This prevents xterm.js from caching incorrect character widths from fallback fonts
+    if (document.fonts) {
+        document.fonts.ready.then(() => {
+            initTerminal();
+        });
+    } else {
+        initTerminal();
     }
 });
 
@@ -422,7 +429,12 @@ function startFlashing() {
     
     // Image configuration
     const imageSource = document.getElementById('image-source-select').value;
-    const imagePath = imageSource === 'custom' ? document.getElementById('custom-image-path').value : "default_lite";
+    let imagePath = "default_prebaked";
+    if (imageSource === 'custom') {
+        imagePath = document.getElementById('custom-image-path').value;
+    } else if (imageSource === 'raspios_lite') {
+        imagePath = "default_lite";
+    }
     
     // Show progress elements
     const flashBtn = document.getElementById('flash-action-btn');
@@ -930,7 +942,8 @@ function initTerminal() {
     term = new Terminal({
         cursorBlink: true,
         fontSize: 14,
-        fontFamily: 'JetBrains Mono, monospace',
+        fontFamily: 'JetBrains Mono, Consolas, "Courier New", monospace',
+        customGlyphs: true,
         theme: {
             background: '#000000',
             foreground: '#ffffff',
@@ -1141,6 +1154,20 @@ function parseBootstrapProgress(data) {
             connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap complete! KACE Node is fully ready.</span>';
         }
         updateTrackerBar('BOOTSTRAPPED');
+
+        // Hide the progress tracker and resize terminal to the full height
+        // This ensures the remote interactive TUI (like KACE logo/menus) sees a correct, standard-sized PTY
+        setTimeout(() => {
+            const tracker = document.getElementById('bootstrap-progress-tracker');
+            if (tracker && tracker.style.display !== 'none') {
+                tracker.style.display = 'none';
+                setTimeout(() => {
+                    if (fitAddon) {
+                        fitAddon.fit();
+                    }
+                }, 50);
+            }
+        }, 1500);
     }
 }
 

@@ -123,12 +123,14 @@ trap 'failure_handler $LINENO' ERR
 DASHBOARD=""
 CROWSNEST=""
 TIMEZONE=""
+PREBAKED=""
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --dashboard) DASHBOARD="$2"; shift ;;
         --crowsnest) CROWSNEST="$2"; shift ;;
         --timezone)  TIMEZONE="$2";  shift ;;
+        --prebaked)  PREBAKED="$2";  shift ;;
     esac
     shift
 done
@@ -147,10 +149,17 @@ if [ -n "$BOOT_CFG" ]; then
     FILE_DASHBOARD=$(grep -E "^DASHBOARD=" "$BOOT_CFG" | cut -d'=' -f2 || true)
     FILE_CROWSNEST=$(grep -E "^CROWSNEST=" "$BOOT_CFG" | cut -d'=' -f2 || true)
     FILE_TIMEZONE=$(grep -E "^TIMEZONE="  "$BOOT_CFG" | cut -d'=' -f2 || true)
+    FILE_PREBAKED=$(grep -E "^PREBAKED="  "$BOOT_CFG" | cut -d'=' -f2 || true)
 
     [ -z "$DASHBOARD" ] && DASHBOARD="$FILE_DASHBOARD"
     [ -z "$CROWSNEST" ] && CROWSNEST="$FILE_CROWSNEST"
     [ -z "$TIMEZONE"  ] && TIMEZONE="$FILE_TIMEZONE"
+    [ -z "$PREBAKED"  ] && PREBAKED="$FILE_PREBAKED"
+    
+    # Securely remove sensitive credentials / file after reading
+    # Overwrite first to prevent forensic recovery of clean-text parameters
+    echo "CLEARED" > "$BOOT_CFG" 2>/dev/null || true
+    rm -f "$BOOT_CFG" 2>/dev/null || true
 fi
 
 # ── Input Sanitization & Allowlist Validation ────────────────────────────────
@@ -179,14 +188,37 @@ if [ -n "$TIMEZONE" ]; then
     fi
 fi
 
+if [ -n "$PREBAKED" ]; then
+    if [[ ! "$PREBAKED" =~ ^(true|false)$ ]]; then
+        PREBAKED="false"
+    fi
+else
+    PREBAKED="false"
+fi
+
 echo -e "${C_BOLD}"
 echo "--------------------------------------------------------"
 echo "  Target Configuration"
 echo "  Dashboard UI : $DASHBOARD"
 echo "  Webcam Stream: $CROWSNEST"
 echo "  Timezone     : ${TIMEZONE:-'(Keep system default)'}"
+echo "  Pre-baked OS : $PREBAKED"
 echo "--------------------------------------------------------"
 echo -e "${C_RESET}"
+
+# ── Resolve Active Printer User Home Directory ────────────────────────────────
+PRINTER_HOME="$HOME"
+for udir in "/home/mainsail" "/home/fluidd" "/home/pi"; do
+    if [ -d "${udir}/printer_data" ]; then
+        PRINTER_HOME="${udir}"
+        break
+    fi
+done
+echo "Resolved printer home directory: $PRINTER_HOME"
+
+# Get the owner and group of the printer_data dir for permission updates
+PRINTER_USER=$(stat -c '%U' "$PRINTER_HOME/printer_data" 2>/dev/null || echo "$USER")
+PRINTER_GROUP=$(stat -c '%G' "$PRINTER_HOME/printer_data" 2>/dev/null || echo "$USER")
 
 # ── 1. Timezone Configuration ────────────────────────────────────────────────
 if [ -n "$TIMEZONE" ]; then
@@ -200,52 +232,58 @@ fi
 
 # ── 2. System Packages ───────────────────────────────────────────────────────
 log_stage "PACKAGES" "Updating System Packages"
-wait_for_apt_locks
-$SUDO apt-get -o DPkg::Lock::Timeout=300 update -y
-wait_for_apt_locks
-$SUDO apt-get -o DPkg::Lock::Timeout=300 install -y git curl unzip nginx file
-log_ok "System packages ready."
+if [ "$PREBAKED" = "true" ]; then
+    # We still need to install git and unzip if we are installing Fluidd on top of MainsailOS (both case)
+    if [ "$DASHBOARD" = "both" ]; then
+        wait_for_apt_locks
+        $SUDO apt-get -o DPkg::Lock::Timeout=300 update -y
+        $SUDO apt-get -o DPkg::Lock::Timeout=300 install -y git unzip file
+    fi
+    log_ok "System packages already pre-installed (skipped)."
+else
+    wait_for_apt_locks
+    $SUDO apt-get -o DPkg::Lock::Timeout=300 update -y
+    wait_for_apt_locks
+    $SUDO apt-get -o DPkg::Lock::Timeout=300 install -y git curl unzip nginx file
+    log_ok "System packages ready."
+fi
 
 # ── 3. Klipper ───────────────────────────────────────────────────────────────
 log_stage "KLIPPER" "Installing Klipper"
-if [ ! -d "$HOME/klipper" ]; then
-    echo "Cloning Klipper repository..."
-    git clone https://github.com/Klipper3d/klipper.git "$HOME/klipper"
+if [ "$PREBAKED" = "true" ]; then
+    log_ok "Klipper already pre-installed (skipped)."
+    log_stage "KLIPPER_FIX" "Patching Klipper service paths"
+    log_ok "Klipper service paths already configured (skipped)."
 else
-    echo "Klipper repository already exists. Updating..."
-    pushd "$HOME/klipper" > /dev/null && git pull && popd > /dev/null
-fi
+    if [ ! -d "$HOME/klipper" ]; then
+        echo "Cloning Klipper repository..."
+        git clone https://github.com/Klipper3d/klipper.git "$HOME/klipper"
+    else
+        echo "Klipper repository already exists. Updating..."
+        pushd "$HOME/klipper" > /dev/null && git pull && popd > /dev/null
+    fi
 
-if [ ! -f "$HOME/klipper/scripts/install-debian.sh" ]; then
-    log_err "Klipper Debian install script not found."
-    exit 1
-fi
+    if [ ! -f "$HOME/klipper/scripts/install-debian.sh" ]; then
+        log_err "Klipper Debian install script not found."
+        exit 1
+    fi
 
-# Patch for Python 3 support on modern Debian/Ubuntu
-sed -i 's/python-dev/python3-dev/g'               "$HOME/klipper/scripts/install-debian.sh"
-sed -i 's/virtualenv -p python2/virtualenv -p python3/g' "$HOME/klipper/scripts/install-debian.sh"
+    # Patch for Python 3 support on modern Debian/Ubuntu
+    sed -i 's/python-dev/python3-dev/g'               "$HOME/klipper/scripts/install-debian.sh"
+    sed -i 's/virtualenv -p python2/virtualenv -p python3/g' "$HOME/klipper/scripts/install-debian.sh"
 
-if systemctl is-active --quiet klipper 2>/dev/null; then
-    echo "Klipper service already active. Skipping reinstall."
-else
-    wait_for_apt_locks
-    "$HOME/klipper/scripts/install-debian.sh"
-fi
-log_ok "Klipper installed."
+    if systemctl is-active --quiet klipper 2>/dev/null; then
+        echo "Klipper service already active. Skipping reinstall."
+    else
+        wait_for_apt_locks
+        "$HOME/klipper/scripts/install-debian.sh"
+    fi
+    log_ok "Klipper installed."
 
-# ── Klipper Service Path Fix ──────────────────────────────────────────────────
-# The upstream install-debian.sh writes a klipper.service that still uses the
-# legacy ~/printer.cfg path and does not pass the -a flag needed for klippy.sock.
-# We fix this with a systemd drop-in override so the patch is update-safe and
-# does not modify the upstream service file.
-#
-#   -a  <socket>   Tell Klipper to create the Unix socket Moonraker connects to.
-#                  Must match klippy_uds_address in moonraker.conf.
-#   <config>       The modern printer_data/config/printer.cfg path.
-log_stage "KLIPPER_FIX" "Patching Klipper service for printer_data layout"
-KLIPPER_DROPIN_DIR="/etc/systemd/system/klipper.service.d"
-$SUDO mkdir -p "$KLIPPER_DROPIN_DIR"
-$SUDO tee "$KLIPPER_DROPIN_DIR/kace-override.conf" > /dev/null <<EOF
+    log_stage "KLIPPER_FIX" "Patching Klipper service for printer_data layout"
+    KLIPPER_DROPIN_DIR="/etc/systemd/system/klipper.service.d"
+    $SUDO mkdir -p "$KLIPPER_DROPIN_DIR"
+    $SUDO tee "$KLIPPER_DROPIN_DIR/kace-override.conf" > /dev/null <<EOF
 # Generated by KACE Studio bootstrap — do not edit manually.
 # Overrides the upstream klipper.service ExecStart to use the modern
 # printer_data directory layout expected by Moonraker.
@@ -256,51 +294,54 @@ ExecStart=$HOME/klippy-env/bin/python $HOME/klipper/klippy/klippy.py \\
     -l $HOME/printer_data/logs/klippy.log \\
     -a $HOME/printer_data/comms/klippy.sock
 EOF
-# Ensure printer_data/logs exists and the entire printer_data tree is owned by the user.
-# This prevents permission issues if intermediate folders were created as root.
-mkdir -p "$HOME/printer_data/logs" 2>/dev/null || $SUDO mkdir -p "$HOME/printer_data/logs"
-$SUDO chown -R "$USER:$USER" "$HOME/printer_data"
-$SUDO systemctl daemon-reload
-log_ok "Klipper service patched: using printer_data/config/printer.cfg and klippy.sock."
+    mkdir -p "$HOME/printer_data/logs" 2>/dev/null || $SUDO mkdir -p "$HOME/printer_data/logs"
+    $SUDO chown -R "$USER:$USER" "$HOME/printer_data"
+    $SUDO systemctl daemon-reload
+    log_ok "Klipper service patched: using printer_data/config/printer.cfg and klippy.sock."
+fi
 
 # ── 4. Moonraker ─────────────────────────────────────────────────────────────
 log_stage "MOONRAKER" "Installing Moonraker"
-if [ ! -d "$HOME/moonraker" ]; then
-    echo "Cloning Moonraker repository..."
-    git clone https://github.com/Arksine/moonraker.git "$HOME/moonraker"
+if [ "$PREBAKED" = "true" ]; then
+    log_ok "Moonraker already pre-installed (skipped)."
 else
-    echo "Moonraker repository already exists. Updating..."
-    pushd "$HOME/moonraker" > /dev/null && git pull && popd > /dev/null
-fi
+    if [ ! -d "$HOME/moonraker" ]; then
+        echo "Cloning Moonraker repository..."
+        git clone https://github.com/Arksine/moonraker.git "$HOME/moonraker"
+    else
+        echo "Moonraker repository already exists. Updating..."
+        pushd "$HOME/moonraker" > /dev/null && git pull && popd > /dev/null
+    fi
 
-if [ ! -f "$HOME/moonraker/scripts/install-moonraker.sh" ]; then
-    log_err "Moonraker install script not found."
-    exit 1
-fi
-wait_for_apt_locks
-"$HOME/moonraker/scripts/install-moonraker.sh"
+    if [ ! -f "$HOME/moonraker/scripts/install-moonraker.sh" ]; then
+        log_err "Moonraker install script not found."
+        exit 1
+    fi
+    wait_for_apt_locks
+    "$HOME/moonraker/scripts/install-moonraker.sh"
 
-sleep 3
-if ! systemctl is-active --quiet moonraker 2>/dev/null; then
-    log_warn "Moonraker service did not start. Check: journalctl -u moonraker"
-else
-    log_ok "Moonraker installed and running."
+    sleep 3
+    if ! systemctl is-active --quiet moonraker 2>/dev/null; then
+        log_warn "Moonraker service did not start. Check: journalctl -u moonraker"
+    else
+        log_ok "Moonraker installed and running."
+    fi
 fi
 
 # ── 5. Printer Data Directories & Config Files ───────────────────────────────
 log_stage "CONFIGS" "Creating Printer Configuration"
-mkdir -p "$HOME/printer_data/config"
-mkdir -p "$HOME/printer_data/gcodes"
-mkdir -p "$HOME/printer_data/comms"
+mkdir -p "$PRINTER_HOME/printer_data/config"
+mkdir -p "$PRINTER_HOME/printer_data/gcodes"
+mkdir -p "$PRINTER_HOME/printer_data/comms"
 
 # moonraker.conf
-if [ ! -f "$HOME/printer_data/config/moonraker.conf" ] || ! grep -q "\[authorization\]" "$HOME/printer_data/config/moonraker.conf"; then
+if [ ! -f "$PRINTER_HOME/printer_data/config/moonraker.conf" ] || ! grep -q "\[authorization\]" "$PRINTER_HOME/printer_data/config/moonraker.conf"; then
     echo "Creating default moonraker.conf..."
-    cat <<EOF > "$HOME/printer_data/config/moonraker.conf"
+    cat <<EOF > "$PRINTER_HOME/printer_data/config/moonraker.conf"
 [server]
 host: 0.0.0.0
 port: 7125
-klippy_uds_address: $HOME/printer_data/comms/klippy.sock
+klippy_uds_address: $PRINTER_HOME/printer_data/comms/klippy.sock
 
 [authorization]
 trusted_clients:
@@ -328,19 +369,17 @@ EOF
 fi
 
 # printer.cfg — [include] line written conditionally per selected dashboard
-if [ ! -f "$HOME/printer_data/config/printer.cfg" ]; then
+if [ ! -f "$PRINTER_HOME/printer_data/config/printer.cfg" ]; then
     echo "Creating default printer.cfg..."
 
     INCLUDE_LINES=""
-    if [ "$DASHBOARD" = "mainsail" ]; then
+    if [ "$DASHBOARD" = "mainsail" ] || [ "$DASHBOARD" = "both" ]; then
         INCLUDE_LINES="[include mainsail.cfg]"
     elif [ "$DASHBOARD" = "fluidd" ]; then
         INCLUDE_LINES="[include fluidd.cfg]"
-    elif [ "$DASHBOARD" = "both" ]; then
-        INCLUDE_LINES="[include mainsail.cfg]"
     fi
 
-    cat <<EOF > "$HOME/printer_data/config/printer.cfg"
+    cat <<EOF > "$PRINTER_HOME/printer_data/config/printer.cfg"
 ${INCLUDE_LINES}
 
 [mcu]
@@ -351,7 +390,24 @@ kinematics: none
 max_velocity: 300
 max_accel: 3000
 EOF
+else
+    echo "printer.cfg already exists. Ensuring dashboard include is present..."
+    INCLUDE_LINE=""
+    if [ "$DASHBOARD" = "mainsail" ] || [ "$DASHBOARD" = "both" ]; then
+        INCLUDE_LINE="[include mainsail.cfg]"
+    elif [ "$DASHBOARD" = "fluidd" ]; then
+        INCLUDE_LINE="[include fluidd.cfg]"
+    fi
+    
+    if [ -n "$INCLUDE_LINE" ] && ! grep -q "include.*mainsail.cfg" "$PRINTER_HOME/printer_data/config/printer.cfg" && ! grep -q "include.*fluidd.cfg" "$PRINTER_HOME/printer_data/config/printer.cfg"; then
+        echo "Prepending $INCLUDE_LINE to printer.cfg..."
+        # Safely prepend include line to existing printer.cfg
+        echo -e "${INCLUDE_LINE}\n$(cat $PRINTER_HOME/printer_data/config/printer.cfg)" > "$PRINTER_HOME/printer_data/config/printer.cfg"
+    fi
 fi
+
+# Make sure permissions are correct
+$SUDO chown -R "${PRINTER_USER}:${PRINTER_GROUP}" "$PRINTER_HOME/printer_data"
 log_ok "Printer configuration files ready."
 
 # ── 6. Dashboard UI ──────────────────────────────────────────────────────────
@@ -377,6 +433,8 @@ setup_mainsail() {
         log_err "Mainsail extraction failed — index.html not found."
         exit 1
     fi
+    $SUDO chown -R www-data:www-data /var/www/mainsail
+    $SUDO chmod -R 755 /var/www/mainsail
     log_ok "Mainsail installed."
 }
 
@@ -400,29 +458,51 @@ setup_fluidd() {
         log_err "Fluidd extraction failed — index.html not found."
         exit 1
     fi
+    $SUDO chown -R www-data:www-data /var/www/fluidd
+    $SUDO chmod -R 755 /var/www/fluidd
     log_ok "Fluidd installed."
 }
 
-if [ "$DASHBOARD" = "mainsail" ]; then
-    setup_mainsail
-    DEFAULT_UI="mainsail"
-elif [ "$DASHBOARD" = "fluidd" ]; then
-    setup_fluidd
-    DEFAULT_UI="fluidd"
-elif [ "$DASHBOARD" = "both" ]; then
-    setup_mainsail
-    setup_fluidd
-    DEFAULT_UI="mainsail"
+if [ "$PREBAKED" = "true" ]; then
+    if [ "$DASHBOARD" = "mainsail" ]; then
+        log_stage "MAINSAIL" "Installing Mainsail"
+        log_ok "Mainsail already pre-installed (skipped)."
+        DEFAULT_UI="mainsail"
+    elif [ "$DASHBOARD" = "fluidd" ]; then
+        log_stage "FLUIDD" "Installing Fluidd"
+        log_ok "Fluidd already pre-installed (skipped)."
+        DEFAULT_UI="fluidd"
+    elif [ "$DASHBOARD" = "both" ]; then
+        # MainsailOS is the base, so Mainsail is preinstalled.
+        log_stage "MAINSAIL" "Installing Mainsail"
+        log_ok "Mainsail already pre-installed (skipped)."
+        
+        # Fluidd needs to be installed.
+        setup_fluidd
+        DEFAULT_UI="both"
+    fi
 else
-    setup_mainsail
-    DEFAULT_UI="mainsail"
+    if [ "$DASHBOARD" = "mainsail" ]; then
+        setup_mainsail
+        DEFAULT_UI="mainsail"
+    elif [ "$DASHBOARD" = "fluidd" ]; then
+        setup_fluidd
+        DEFAULT_UI="fluidd"
+    elif [ "$DASHBOARD" = "both" ]; then
+        setup_mainsail
+        setup_fluidd
+        DEFAULT_UI="both"
+    else
+        setup_mainsail
+        DEFAULT_UI="mainsail"
+    fi
 fi
 
 # ── 7. UI Client Config Files ─────────────────────────────────────────────────
 log_stage "CLIENT_CFG" "Downloading UI Client Config"
 setup_client_config() {
     local dashboard="$1"
-    local config_dir="$HOME/printer_data/config"
+    local config_dir="$PRINTER_HOME/printer_data/config"
 
     if [ "$dashboard" = "mainsail" ] || [ "$dashboard" = "both" ]; then
         if [ ! -f "$config_dir/mainsail.cfg" ]; then
@@ -445,6 +525,7 @@ on_error_gcode: CANCEL_PRINT
 [respond]
 MCFG
             fi
+            $SUDO chown "${PRINTER_USER}:${PRINTER_GROUP}" "$config_dir/mainsail.cfg"
         else
             echo "mainsail.cfg already present. Skipping."
         fi
@@ -471,6 +552,7 @@ on_error_gcode: CANCEL_PRINT
 [respond]
 FCFG
             fi
+            $SUDO chown "${PRINTER_USER}:${PRINTER_GROUP}" "$config_dir/fluidd.cfg"
         else
             echo "fluidd.cfg already present. Skipping."
         fi
@@ -480,21 +562,55 @@ FCFG
 setup_client_config "$DASHBOARD"
 log_ok "UI client config ready."
 
-# Double-check DEFAULT_UI is strictly sanitized
-if [[ ! "$DEFAULT_UI" =~ ^(mainsail|fluidd)$ ]]; then
-    DEFAULT_UI="mainsail"
-fi
-
 # ── 8. Nginx ──────────────────────────────────────────────────────────────────
 log_stage "NGINX" "Configuring Nginx"
-NGINX_CONF="/etc/nginx/sites-available/kace-printer"
 
-$SUDO tee "$NGINX_CONF" > /dev/null <<EOF
+if [ "$PREBAKED" = "true" ] && [ "$DASHBOARD" != "both" ]; then
+    log_ok "Nginx already configured on pre-baked image (skipped)."
+else
+    NGINX_CONF="/etc/nginx/sites-available/kace-printer"
+    
+    if [ "$DEFAULT_UI" = "both" ]; then
+        # Configure Nginx for both: Mainsail on port 80, Fluidd on port 81
+        $SUDO tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
 
-    root /var/www/$DEFAULT_UI;
+    root /var/www/mainsail;
+    index index.html;
+    server_name _;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /websocket {
+        proxy_pass http://apiserver;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 86400;
+    }
+
+    location ~ ^/(printer|api|access|machine|server|files|history)(/.*)?$ {
+        proxy_pass http://apiserver;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        client_max_body_size 50M;
+    }
+}
+
+server {
+    listen 81 default_server;
+    listen [::]:81 default_server;
+
+    root /var/www/fluidd;
     index index.html;
     server_name _;
 
@@ -528,42 +644,119 @@ upstream apiserver {
     server 127.0.0.1:7125;
 }
 EOF
+    else
+        # Single UI config
+        TEMP_UI="$DEFAULT_UI"
+        if [[ ! "$TEMP_UI" =~ ^(mainsail|fluidd)$ ]]; then
+            TEMP_UI="mainsail"
+        fi
 
-if ! $SUDO nginx -t 2>&1; then
-    log_err "Nginx configuration test failed. Aborting."
-    exit 1
+        $SUDO tee "$NGINX_CONF" > /dev/null <<EOF
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    root /var/www/$TEMP_UI;
+    index index.html;
+    server_name _;
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /websocket {
+        proxy_pass http://apiserver;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 86400;
+    }
+
+    location ~ ^/(printer|api|access|machine|server|files|history)(/.*)?$ {
+        proxy_pass http://apiserver;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        client_max_body_size 50M;
+    }
+}
+
+upstream apiserver {
+    ip_hash;
+    server 127.0.0.1:7125;
+}
+EOF
+    fi
+
+    if ! $SUDO nginx -t 2>&1; then
+        log_err "Nginx configuration test failed. Aborting."
+        exit 1
+    fi
+
+    $SUDO ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
+    $SUDO rm -f /etc/nginx/sites-enabled/default
+    $SUDO systemctl restart nginx
+    log_ok "Nginx configured and running."
 fi
-
-$SUDO ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
-$SUDO rm -f /etc/nginx/sites-enabled/default
-$SUDO systemctl restart nginx
-log_ok "Nginx configured and running."
 
 # ── 9. Start Services ─────────────────────────────────────────────────────────
 log_stage "SERVICES" "Starting Klipper & Moonraker Services"
 $SUDO systemctl restart klipper   || true
 $SUDO systemctl restart moonraker || true
+if [ "$PREBAKED" = "false" ] || [ "$DASHBOARD" = "both" ]; then
+    $SUDO systemctl restart nginx || true
+fi
 log_ok "Services restarted."
 
 # ── 10. Crowsnest (Optional) ──────────────────────────────────────────────────
 if [ "$CROWSNEST" = "true" ]; then
-    log_stage "CROWSNEST" "Installing Crowsnest Webcam Streamer"
-    if [ ! -d "$HOME/crowsnest" ]; then
-        git clone https://github.com/mainsail-crew/crowsnest.git "$HOME/crowsnest"
+    if [ "$PREBAKED" = "true" ]; then
+        log_stage "CROWSNEST" "Configuring Crowsnest Webcam Streamer"
+        mkdir -p "$PRINTER_HOME/printer_data/config"
+        if [ ! -f "$PRINTER_HOME/printer_data/config/crowsnest.conf" ]; then
+            echo "Creating default crowsnest.conf..."
+            cat <<EOF > "$PRINTER_HOME/printer_data/config/crowsnest.conf"
+[crowsnest]
+log_path: ~/printer_data/logs/crowsnest.log
+log_level: verbose
+delete_log: false
+
+[cam 1]
+mode: ustreamer
+enable_audio: false
+port: 8080
+device: /dev/video0
+resolution: 640x480
+max_fps: 15
+EOF
+            $SUDO chown "${PRINTER_USER}:${PRINTER_GROUP}" "$PRINTER_HOME/printer_data/config/crowsnest.conf"
+        fi
+        $SUDO systemctl restart crowsnest || true
+        log_ok "Crowsnest configured."
     else
-        pushd "$HOME/crowsnest" > /dev/null && git pull && popd > /dev/null
+        log_stage "CROWSNEST" "Installing Crowsnest Webcam Streamer"
+        if [ ! -d "$HOME/crowsnest" ]; then
+            git clone https://github.com/mainsail-crew/crowsnest.git "$HOME/crowsnest"
+        else
+            pushd "$HOME/crowsnest" > /dev/null && git pull && popd > /dev/null
+        fi
+        if [ ! -f "$HOME/crowsnest/tools/install.sh" ]; then
+            log_err "Crowsnest install script not found."
+            exit 1
+        fi
+        pushd "$HOME/crowsnest" > /dev/null
+        wait_for_apt_locks
+        sudo -E env CROWSNEST_UNATTENDED=1 CROWSNEST_SKIP_REBOOT_PROMPT=1 ./tools/install.sh
+        popd > /dev/null
+        log_ok "Crowsnest installed."
     fi
-    if [ ! -f "$HOME/crowsnest/tools/install.sh" ]; then
-        log_err "Crowsnest install script not found."
-        exit 1
-    fi
-    pushd "$HOME/crowsnest" > /dev/null
-    wait_for_apt_locks
-    sudo -E env CROWSNEST_UNATTENDED=1 CROWSNEST_SKIP_REBOOT_PROMPT=1 ./tools/install.sh
-    popd > /dev/null
-    log_ok "Crowsnest installed."
 else
-    echo "Crowsnest was not selected. Skipping."
+    log_stage "CROWSNEST" "Installing Crowsnest Webcam Streamer"
+    log_ok "Crowsnest was not selected (skipped)."
 fi
 
 # ── 11. KACE Agent ────────────────────────────────────────────────────────────

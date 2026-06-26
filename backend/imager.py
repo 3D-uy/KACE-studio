@@ -371,7 +371,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
     finally:
         ctypes.windll.kernel32.CloseHandle(hProcess)
 
-def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True) -> bool:
+def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, is_prebaked: bool = False) -> bool:
     """
     Injects SSH enablement, User credentials, WiFi configuration (wpa_supplicant + NetworkManager),
     and hostname parameters directly to the FAT32 boot partition.
@@ -575,6 +575,7 @@ addr-gen-mode=default-or-eui64
             with open(bootstrap_cfg, "w", newline="\n") as f:
                 f.write(f"DASHBOARD={dashboard_ui}\n")
                 f.write(f"CROWSNEST={'true' if crowsnest else 'false'}\n")
+                f.write(f"PREBAKED={'true' if is_prebaked else 'false'}\n")
                 if clean_timezone:
                     f.write(f"TIMEZONE={clean_timezone}\n")
                 if clean_pi_model:

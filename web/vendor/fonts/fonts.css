@@ -42,13 +42,13 @@
     font-family: 'JetBrains Mono';
     font-style: normal;
     font-weight: 400;
-    font-display: swap;
+    font-display: block;
     src: url('jetbrains-mono-400.ttf') format('truetype');
 }
 @font-face {
     font-family: 'JetBrains Mono';
     font-style: normal;
     font-weight: 500;
-    font-display: swap;
+    font-display: block;
     src: url('jetbrains-mono-500.ttf') format('truetype');
 }

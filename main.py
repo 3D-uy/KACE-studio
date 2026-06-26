@@ -214,34 +214,61 @@ class Api:
                     self.set_device_state("FLASHING", pct, f"{action_message}: {pct}%")
         return sha256.hexdigest()
 
-    def _decompress_xz(self, cached_xz: str, target_img: str, status_prefix: str = "Decompressing OS image"):
+    def _decompress_archive(self, cached_file: str, target_img: str, status_prefix: str = "Decompressing OS image"):
         """
-        Decompresses an .xz archive to a target .img file with progress reporting.
+        Decompresses a compressed archive (.xz or .zip) to a target .img file with progress reporting.
         Returns the SHA-256 hash of the decompressed image.
         """
-        import lzma
+        if cached_file.lower().endswith(".zip"):
+            import zipfile
+            if os.path.exists(target_img):
+                os.remove(target_img)
+            self._check_cancelled()
+            with zipfile.ZipFile(cached_file, "r") as z:
+                img_names = [name for name in z.namelist() if name.lower().endswith(".img")]
+                if not img_names:
+                    raise ValueError(f"No .img file found inside the zip archive: {cached_file}")
+                img_name = img_names[0]
+                
+                info = z.getinfo(img_name)
+                total_size = info.file_size
+                bytes_written = 0
+                chunk_size = 4 * 1024 * 1024
+                
+                with z.open(img_name) as source, open(target_img, "wb") as target:
+                    while True:
+                        self._check_cancelled()
+                        chunk = source.read(chunk_size)
+                        if not chunk:
+                            break
+                        target.write(chunk)
+                        bytes_written += len(chunk)
+                        if total_size > 0:
+                            pct = int((bytes_written / total_size) * 100)
+                            self.set_device_state("FLASHING", pct, f"{status_prefix}: {pct}%")
+        else:
+            # Fallback/default: lzma decompressor
+            import lzma
+            if os.path.exists(target_img):
+                os.remove(target_img)
+            decompressor = lzma.LZMADecompressor()
+            compressed_size = os.path.getsize(cached_file)
+            bytes_read = 0
+            chunk_size = 4 * 1024 * 1024  # 4MB chunks
 
-        if os.path.exists(target_img):
-            os.remove(target_img)
+            with open(cached_file, "rb") as f_in, open(target_img, "wb") as f_out:
+                while True:
+                    self._check_cancelled()
+                    chunk = f_in.read(chunk_size)
+                    if not chunk:
+                        break
+                    bytes_read += len(chunk)
+                    decompressed_data = decompressor.decompress(chunk)
+                    if decompressed_data:
+                        f_out.write(decompressed_data)
 
-        decompressor = lzma.LZMADecompressor()
-        compressed_size = os.path.getsize(cached_xz)
-        bytes_read = 0
-        chunk_size = 4 * 1024 * 1024  # 4MB chunks
-
-        with open(cached_xz, "rb") as f_in, open(target_img, "wb") as f_out:
-            while True:
-                self._check_cancelled()
-                chunk = f_in.read(chunk_size)
-                if not chunk:
-                    break
-                bytes_read += len(chunk)
-                decompressed_data = decompressor.decompress(chunk)
-                if decompressed_data:
-                    f_out.write(decompressed_data)
-
-                pct = int((bytes_read / compressed_size) * 100)
-                self.set_device_state("FLASHING", pct, f"{status_prefix}: {pct}%")
+                    pct = int((bytes_read / compressed_size) * 100)
+                    self.set_device_state("FLASHING", pct, f"{status_prefix}: {pct}%")
 
         # Calculate and save decompressed image checksum
         self.set_device_state("FLASHING", 0, "Saving decompressed image checksum cache...")
@@ -251,6 +278,188 @@ class Api:
             f.write(calculated_img_sha)
 
         return calculated_img_sha
+
+    def _decompress_xz(self, cached_xz: str, target_img: str, status_prefix: str = "Decompressing OS image"):
+        """Wrapper for backward compatibility."""
+        return self._decompress_archive(cached_xz, target_img, status_prefix)
+
+    def _get_latest_github_release_asset(self, repo: str, os_arch: str) -> tuple:
+        """
+        Queries the GitHub API to find the latest release asset matching the architecture.
+        Returns (download_url, filename, sha256_url).
+        """
+        import urllib.request
+        import json
+        import ssl
+        
+        url = f"https://api.github.com/repos/{repo}/releases/latest"
+        req = urllib.request.Request(
+            url,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        ssl_ctx = ssl.create_default_context()
+        
+        with urllib.request.urlopen(req, context=ssl_ctx) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            
+        assets = data.get("assets", [])
+        if not assets:
+            raise ValueError(f"No assets found in the latest release of {repo}")
+            
+        # Filter for image files (.img.xz or .zip)
+        valid_assets = [a for a in assets if a["name"].lower().endswith((".img.xz", ".zip"))]
+        if not valid_assets:
+            raise ValueError(f"No .img.xz or .zip assets found in the latest release of {repo}")
+            
+        # Match architecture
+        arch_terms = ["arm64", "64bit", "64"] if os_arch == "64bit" else ["armhf", "32bit", "32"]
+        
+        selected_asset = None
+        
+        # 1. Look for raspberry_pi/rpi AND arch
+        for asset in valid_assets:
+            name_lower = asset["name"].lower()
+            if ("raspberry_pi" in name_lower or "-rpi" in name_lower) and any(term in name_lower for term in arch_terms):
+                selected_asset = asset
+                break
+                
+        # 2. Look for just arch
+        if not selected_asset:
+            for asset in valid_assets:
+                name_lower = asset["name"].lower()
+                if any(term in name_lower for term in arch_terms):
+                    selected_asset = asset
+                    break
+                    
+        # 3. Look for raspberry_pi/rpi (no arch constraint)
+        if not selected_asset:
+            for asset in valid_assets:
+                name_lower = asset["name"].lower()
+                if "raspberry_pi" in name_lower or "-rpi" in name_lower:
+                    selected_asset = asset
+                    break
+                    
+        # 4. Fallback to first valid asset
+        if not selected_asset:
+            selected_asset = valid_assets[0]
+            
+        download_url = selected_asset["browser_download_url"]
+        filename = selected_asset["name"]
+        
+        # Check if there is a matching .sha256 or .xz.sha256 in assets
+        sha256_url = ""
+        for asset in assets:
+            if asset["name"] == filename + ".sha256":
+                sha256_url = asset["browser_download_url"]
+                break
+                
+        return download_url, filename, sha256_url
+
+    def _resolve_prebaked_image(self, dashboard_ui: str, os_arch: str) -> str:
+        """
+        Resolves the pre-baked OS image (MainsailOS or FluiddPi).
+        Queries GitHub API, downloads, caches, verifies, and decompresses as needed.
+        Returns the path to the ready-to-flash .img file.
+        """
+        import urllib.request
+        import ssl
+        
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        repo = "mainsail-crew/MainsailOS" if dashboard_ui in ("mainsail", "both") else "fluidd-core/FluiddPi"
+        
+        self.set_device_state("FLASHING", 0, f"Querying latest release for {repo}...")
+        
+        try:
+            download_url, filename, sha256_url = self._get_latest_github_release_asset(repo, os_arch)
+        except Exception as e:
+            print(f"Error fetching latest release from GitHub API: {e}", file=sys.stderr)
+            # Fallback values if GitHub API rate limits or fails
+            if repo == "mainsail-crew/MainsailOS":
+                # Static fallback URLs for MainsailOS
+                version = "3.0.0"
+                arch_suffix = "arm64" if os_arch == "64bit" else "armhf"
+                filename = f"2026-05-06-MainsailOS-raspberry_pi-{arch_suffix}-trixie-{version}.img.xz"
+                download_url = f"https://github.com/mainsail-crew/MainsailOS/releases/download/{version}/{filename}"
+                sha256_url = download_url + ".sha256"
+            else:
+                # Static fallback URLs for FluiddPi
+                version = "v1.19.0"
+                filename = f"fluiddpi-rpi-lite-{version}.zip"
+                download_url = f"https://github.com/fluidd-core/FluiddPI/releases/download/{version}/{filename}"
+                sha256_url = ""
+                
+        cached_archive = os.path.join(cache_dir, filename)
+        cached_archive_sha = cached_archive + ".sha256"
+        
+        base_name = filename.replace(".xz", "").replace(".zip", "")
+        if not base_name.endswith(".img"):
+            base_name += ".img"
+        target_img = os.path.join(cache_dir, base_name)
+        target_img_sha = target_img + ".sha256"
+        
+        # Fetch remote SHA256 if available
+        remote_sha256 = ""
+        if sha256_url:
+            self.set_device_state("FLASHING", 0, "Checking checksum of latest online release...")
+            try:
+                ssl_ctx = ssl.create_default_context()
+                sha_req = urllib.request.Request(
+                    sha256_url,
+                    headers={'User-Agent': 'Mozilla/5.0'}
+                )
+                with urllib.request.urlopen(sha_req, context=ssl_ctx) as sha_response:
+                    sha_content = sha_response.read().decode('utf-8').strip()
+                    remote_sha256 = sha_content.split()[0]
+            except Exception as net_err:
+                print(f"Network checksum warning: {net_err}. Using cache if available.", file=sys.stderr)
+                
+        self._check_cancelled()
+        
+        # Determine if download is needed
+        need_download = False
+        need_decompress = False
+        
+        if not os.path.exists(cached_archive):
+            need_download = True
+        elif remote_sha256:
+            if os.path.exists(cached_archive_sha):
+                with open(cached_archive_sha, "r", encoding="utf-8") as f:
+                    local_archive_sha = f.read().strip()
+                if local_archive_sha != remote_sha256:
+                    need_download = True
+            else:
+                need_download = True
+                
+        if not os.path.exists(target_img):
+            need_decompress = True
+            
+        # Download stage
+        if need_download:
+            self._download_os_image(download_url, cached_archive, cached_archive_sha, remote_sha256, download_url, os_arch)
+            need_decompress = True
+            
+        # Decompression stage
+        if need_decompress:
+            self._decompress_archive(cached_archive, target_img, "Decompressing OS image")
+        else:
+            # Verify existing cached .img integrity
+            self.set_device_state("FLASHING", 0, "Verifying cached image integrity...")
+            if os.path.exists(target_img_sha):
+                with open(target_img_sha, "r", encoding="utf-8") as f:
+                    expected_img_sha = f.read().strip()
+            else:
+                expected_img_sha = ""
+                
+            calculated_img_sha = self._compute_sha256(target_img, "Verifying cached image")
+            
+            if expected_img_sha and calculated_img_sha != expected_img_sha:
+                print("Cache verification failed. Re-decompressing image...", file=sys.stderr)
+                self.set_device_state("FLASHING", 0, "Cached image corrupted. Re-decompressing OS image...")
+                self._decompress_archive(cached_archive, target_img, "Decompressing OS image")
+                
+        return target_img
 
     def _download_os_image(self, download_url: str, cached_xz: str, cached_xz_sha: str, remote_sha256: str, redirected_url: str, arch_suffix: str):
         """
@@ -472,7 +681,10 @@ class Api:
             self.set_device_state("FLASHING", 0, "Initializing physical block-writing...")
 
             # Stage 1: Resolve image path (download/cache/verify)
-            if image_path == "default_lite":
+            image_path_original = image_path
+            if image_path in ("default_prebaked", "prebaked"):
+                image_path = self._resolve_prebaked_image(dashboard_ui, os_arch)
+            elif image_path == "default_lite":
                 image_path = self._resolve_default_image(os_arch)
             else:
                 image_path = self._resolve_custom_image(image_path)
@@ -492,7 +704,11 @@ class Api:
 
             # Stage 3: Inject boot configuration files
             self.set_device_state("FLASHING", 95, "Injecting system configuration files...")
-            inject_success = inject_config(drive_id, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth)
+            inject_success = inject_config(
+                drive_id, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui,
+                timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth,
+                is_prebaked=(image_path_original in ("default_prebaked", "prebaked"))
+            )
 
             if inject_success:
                 self.set_device_state("FLASHED", 100, "SD Card successfully flashed and provisioned!")

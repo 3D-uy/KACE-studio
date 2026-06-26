@@ -93,7 +93,8 @@ class TestKaceBackend(unittest.TestCase):
                     nm_content = f.read()
                 self.assertIn("id=preconfigured-wifi", nm_content)
                 self.assertIn("ssid=MySSID", nm_content)
-                self.assertIn("psk=MyPassword", nm_content)
+                self.assertIn(f"psk={expected_hex_psk}", nm_content)
+                self.assertNotIn("psk=MyPassword", nm_content)
                 self.assertIn("type=wifi", nm_content)
                 
         finally:
@@ -342,7 +343,9 @@ class TestKaceBackend(unittest.TestCase):
                 config = configparser.ConfigParser(inline_comment_prefixes=None)
                 config.read(nm_path, encoding="utf-8")
                 self.assertEqual(config.get("wifi", "ssid"), 'My"SSID";$\\')
-                self.assertEqual(config.get("wifi-security", "psk"), 'My\'Password;$\\')
+                from backend.imager import _compute_wpa_psk
+                expected_escaped_psk = _compute_wpa_psk(wifi_ssid, wifi_password)
+                self.assertEqual(config.get("wifi-security", "psk"), expected_escaped_psk)
                 
                 # Check custom.toml
                 custom_toml_path = os.path.join(temp_boot, "custom.toml")
@@ -1039,6 +1042,56 @@ class TestKaceBackend(unittest.TestCase):
         self.assertEqual(len(data["items"]), 1)
         self.assertEqual(data["items"][0]["name"], "file.txt")
 
+    def test_inject_config_prebaked_flag(self):
+        """
+        Tests that inject_config properly writes PREBAKED=true or PREBAKED=false
+        to the kace-bootstrap.txt config file depending on is_prebaked parameter.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch
+        
+        temp_boot = tempfile.mkdtemp()
+        try:
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                # Test with is_prebaked=True
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-test.local",
+                    wifi_ssid="MySSID",
+                    wifi_password="MyPassword",
+                    ssh_password="kacepwd123",
+                    dashboard_ui="mainsail",
+                    is_prebaked=True
+                )
+                self.assertTrue(success)
+                
+                cfg_path = os.path.join(temp_boot, "kace-bootstrap.txt")
+                self.assertTrue(os.path.exists(cfg_path))
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                self.assertIn("PREBAKED=true", content)
+                
+                # Clean up and test with is_prebaked=False
+                os.remove(cfg_path)
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-test.local",
+                    wifi_ssid="MySSID",
+                    wifi_password="MyPassword",
+                    ssh_password="kacepwd123",
+                    dashboard_ui="mainsail",
+                    is_prebaked=False
+                )
+                self.assertTrue(success)
+                self.assertTrue(os.path.exists(cfg_path))
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                self.assertIn("PREBAKED=false", content)
+                
+        finally:
+            shutil.rmtree(temp_boot)
 
 if __name__ == "__main__":
     unittest.main()

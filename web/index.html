@@ -22,6 +22,7 @@
     <title>KACE Studio</title>
     <link rel="shortcut icon" href="KACE-studio.ico" type="image/x-icon">
     <!-- Locally bundled fonts (offline-safe — no CDN dependency) -->
+    <link rel="preload" href="vendor/fonts/jetbrains-mono-400.ttf" as="font" type="font/ttf" crossorigin="anonymous">
     <link rel="stylesheet" href="vendor/fonts/fonts.css">
     <!-- Xterm.js Terminal styles -->
     <link rel="stylesheet" href="vendor/xterm/xterm.min.css">
@@ -228,7 +229,8 @@
                         <div class="form-group">
                             <label for="image-source-select"><span class="brand-orange">STEP 3:</span> OS IMAGE SOURCE</label>
                             <select id="image-source-select" onchange="toggleImageSource(this.value)">
-                                <option value="default" selected>Raspberry Pi OS Lite (Download & Cache)</option>
+                                <option value="default" selected>Pre-baked OS Image (Recommended)</option>
+                                <option value="raspios_lite">Advanced / Custom (Raspberry Pi OS Lite)</option>
                                 <option value="custom">Custom OS Image (Local file)</option>
                             </select>
                             <div class="input-row" id="custom-image-wrapper" style="display: none; margin-top: 8px;">
