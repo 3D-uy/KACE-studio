@@ -805,6 +805,16 @@ class Api:
                         return
                 with buffer_lock:
                     write_buffer.append(text)
+                    # If the data contains the cursor position query (\x1b[6n),
+                    # flush immediately to prevent interactive TUI prompts (like prompt_toolkit/questionary)
+                    # from timing out waiting for the cursor response, which causes scrambled rendering.
+                    if "\x1b[6n" in text:
+                        if flush_timer[0] is not None:
+                            flush_timer[0].cancel()
+                            flush_timer[0] = None
+                        flush_write_buffer()
+                        return
+                    
                     if flush_timer[0] is None:
                         flush_timer[0] = threading.Timer(0.015, flush_write_buffer)
                         flush_timer[0].daemon = True
