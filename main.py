@@ -807,10 +807,10 @@ class Api:
                 flush_now = False
                 with buffer_lock:
                     write_buffer.append(text)
-                    # If the data contains the cursor position query (\x1b[6n),
+                    # If the data contains the cursor position query (\x1b[6n) or a terminal mode query/setting (\x1b[?),
                     # flush immediately to prevent interactive TUI prompts (like prompt_toolkit/questionary)
-                    # from timing out waiting for the cursor response, which causes scrambled rendering.
-                    if "\x1b[6n" in text:
+                    # from timing out waiting for the cursor response, which causes scrambled/cascading rendering.
+                    if "\x1b[6n" in text or "\x1b[?" in text:
                         flush_now = True
                         if flush_timer[0] is not None:
                             flush_timer[0].cancel()
