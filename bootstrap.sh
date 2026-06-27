@@ -392,29 +392,10 @@ if [ "$PREBAKED" = "true" ]; then
         echo "Dashboard include already present or not needed. Skipping."
     fi
 else
-    # Fresh RPi OS Lite install — write our baseline placeholder only if
-    # no printer.cfg exists yet.
+    # Fresh RPi OS Lite install — only manage the dashboard include line.
+    # printer.cfg is expected to be uploaded by the user via Moonraker.
     if [ ! -f "$PRINTER_HOME/printer_data/config/printer.cfg" ]; then
-        echo "Creating default printer.cfg..."
-
-        INCLUDE_LINES=""
-        if [ "$DASHBOARD" = "mainsail" ] || [ "$DASHBOARD" = "both" ]; then
-            INCLUDE_LINES="[include mainsail.cfg]"
-        elif [ "$DASHBOARD" = "fluidd" ]; then
-            INCLUDE_LINES="[include fluidd.cfg]"
-        fi
-
-        cat <<EOF > "$PRINTER_HOME/printer_data/config/printer.cfg"
-${INCLUDE_LINES}
-
-[mcu]
-# serial: /dev/serial/by-id/change-me-to-your-mcu-id
-
-[printer]
-kinematics: none
-max_velocity: 300
-max_accel: 3000
-EOF
+        echo "No printer.cfg found. Skipping creation — upload your printer.cfg via Moonraker."
     else
         echo "printer.cfg already exists. Ensuring dashboard include is present..."
         INCLUDE_LINE=""
