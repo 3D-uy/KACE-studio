@@ -392,10 +392,29 @@ if [ "$PREBAKED" = "true" ]; then
         echo "Dashboard include already present or not needed. Skipping."
     fi
 else
-    # Fresh RPi OS Lite install — only manage the dashboard include line.
-    # printer.cfg is expected to be uploaded by the user via Moonraker.
+    # Fresh RPi OS Lite install — write our baseline placeholder only if
+    # no printer.cfg exists yet.
     if [ ! -f "$PRINTER_HOME/printer_data/config/printer.cfg" ]; then
-        echo "No printer.cfg found. Skipping creation — upload your printer.cfg via Moonraker."
+        echo "Creating default printer.cfg..."
+
+        INCLUDE_LINES=""
+        if [ "$DASHBOARD" = "mainsail" ] || [ "$DASHBOARD" = "both" ]; then
+            INCLUDE_LINES="[include mainsail.cfg]"
+        elif [ "$DASHBOARD" = "fluidd" ]; then
+            INCLUDE_LINES="[include fluidd.cfg]"
+        fi
+
+        cat <<EOF > "$PRINTER_HOME/printer_data/config/printer.cfg"
+${INCLUDE_LINES}
+
+[mcu]
+# serial: /dev/serial/by-id/change-me-to-your-mcu-id
+
+[printer]
+kinematics: none
+max_velocity: 300
+max_accel: 3000
+EOF
     else
         echo "printer.cfg already exists. Ensuring dashboard include is present..."
         INCLUDE_LINE=""
@@ -511,16 +530,29 @@ setup_client_config() {
     local dashboard="$1"
     local config_dir="$PRINTER_HOME/printer_data/config"
 
-    if [ "$dashboard" = "mainsail" ] || [ "$dashboard" = "both" ]; then
-        if [ ! -f "$config_dir/mainsail.cfg" ]; then
-            echo "Downloading mainsail.cfg..."
-            if ! curl -fsSL --retry 3 --retry-delay 5 \
-                "https://raw.githubusercontent.com/mainsail-crew/mainsail-config/master/client.cfg" \
-                -o "$config_dir/mainsail.cfg"; then
-                log_warn "Could not download mainsail.cfg. Writing minimal placeholder."
-                cat <<'MCFG' > "$config_dir/mainsail.cfg"
-# mainsail.cfg placeholder — replace with the official file from:
-# https://raw.githubusercontent.com/mainsail-crew/mainsail-config/master/client.cfg
+    # Helper: copy a client cfg file as a real file (no symlinks).
+    # Tries local git checkout first (dereferencing any symlinks), then falls
+    # back to curl download, then writes a minimal placeholder.
+    _install_client_cfg() {
+        local dest="$1"          # full destination path, e.g. .../config/mainsail.cfg
+        local local_src="$2"     # preferred local source (may be a symlink)
+        local curl_url="$3"      # fallback download URL
+        local placeholder="$4"   # fallback inline content label for log
+
+        # Remove any existing symlink so we always end up with a regular file.
+        if [ -L "$dest" ]; then
+            echo "Removing existing symlink at $dest to replace with regular file..."
+            rm -f "$dest"
+        fi
+
+        if [ -e "$local_src" ]; then
+            echo "Copying $(basename "$dest") from local checkout (dereferencing symlinks)..."
+            cp --dereference "$local_src" "$dest"
+        elif ! curl -fsSL --retry 3 --retry-delay 5 "$curl_url" -o "$dest"; then
+            log_warn "Could not download $(basename "$dest"). Writing minimal placeholder."
+            cat > "$dest" <<PLACEHOLDER
+# $(basename "$dest") placeholder — replace with the official file from:
+# $curl_url
 [virtual_sdcard]
 path: ~/printer_data/gcodes
 on_error_gcode: CANCEL_PRINT
@@ -530,38 +562,33 @@ on_error_gcode: CANCEL_PRINT
 [display_status]
 
 [respond]
-MCFG
-            fi
-            $SUDO chown "${PRINTER_USER}:${PRINTER_GROUP}" "$config_dir/mainsail.cfg"
+PLACEHOLDER
+        fi
+        $SUDO chown "${PRINTER_USER}:${PRINTER_GROUP}" "$dest"
+    }
+
+    if [ "$dashboard" = "mainsail" ] || [ "$dashboard" = "both" ]; then
+        # Always re-evaluate: even if the file exists it may be a broken symlink.
+        if [ ! -f "$config_dir/mainsail.cfg" ] || [ -L "$config_dir/mainsail.cfg" ]; then
+            _install_client_cfg \
+                "$config_dir/mainsail.cfg" \
+                "$HOME/mainsail-config/client.cfg" \
+                "https://raw.githubusercontent.com/mainsail-crew/mainsail-config/master/client.cfg" \
+                "mainsail.cfg"
         else
-            echo "mainsail.cfg already present. Skipping."
+            echo "mainsail.cfg already present as a regular file. Skipping."
         fi
     fi
 
     if [ "$dashboard" = "fluidd" ] || [ "$dashboard" = "both" ]; then
-        if [ ! -f "$config_dir/fluidd.cfg" ]; then
-            echo "Downloading fluidd.cfg..."
-            if ! curl -fsSL --retry 3 --retry-delay 5 \
+        if [ ! -f "$config_dir/fluidd.cfg" ] || [ -L "$config_dir/fluidd.cfg" ]; then
+            _install_client_cfg \
+                "$config_dir/fluidd.cfg" \
+                "$HOME/fluidd-config/client.cfg" \
                 "https://raw.githubusercontent.com/fluidd-core/fluidd-config/master/client.cfg" \
-                -o "$config_dir/fluidd.cfg"; then
-                log_warn "Could not download fluidd.cfg. Writing minimal placeholder."
-                cat <<'FCFG' > "$config_dir/fluidd.cfg"
-# fluidd.cfg placeholder — replace with the official file from:
-# https://raw.githubusercontent.com/fluidd-core/fluidd-config/master/client.cfg
-[virtual_sdcard]
-path: ~/printer_data/gcodes
-on_error_gcode: CANCEL_PRINT
-
-[pause_resume]
-
-[display_status]
-
-[respond]
-FCFG
-            fi
-            $SUDO chown "${PRINTER_USER}:${PRINTER_GROUP}" "$config_dir/fluidd.cfg"
+                "fluidd.cfg"
         else
-            echo "fluidd.cfg already present. Skipping."
+            echo "fluidd.cfg already present as a regular file. Skipping."
         fi
     fi
 }
@@ -710,7 +737,72 @@ EOF
     log_ok "Nginx configured and running."
 fi
 
-# ── 9. Start Services ─────────────────────────────────────────────────────────
+# ── 9. Patch Systemd Service Paths ───────────────────────────────────────────
+log_stage "SYSTEMD_PATCH" "Patching Systemd Service Paths"
+
+patch_systemd_services() {
+    local target_home="$PRINTER_HOME"
+    local target_user="$PRINTER_USER"
+    local target_group="$PRINTER_GROUP"
+    local patched=0
+
+    local search_dirs=(
+        "/etc/systemd/system"
+        "/lib/systemd/system"
+        "/usr/lib/systemd/system"
+    )
+
+    local services=("klipper" "moonraker" "crowsnest")
+
+    for svc in "${services[@]}"; do
+        for dir in "${search_dirs[@]}"; do
+            local svc_file="$dir/${svc}.service"
+            local dropin_dir="$dir/${svc}.service.d"
+
+            for f in "$svc_file" "$dropin_dir"/*.conf; do
+                [ -f "$f" ] || continue
+                local changed=0
+
+                if grep -q "/home/mainsail/" "$f" 2>/dev/null; then
+                    $SUDO sed -i "s|/home/mainsail/|${target_home}/|g" "$f"
+                    echo "  Patched /home/mainsail/ in $f"
+                    changed=1
+                fi
+
+                if grep -q "/home/pi/" "$f" 2>/dev/null; then
+                    $SUDO sed -i "s|/home/pi/|${target_home}/|g" "$f"
+                    echo "  Patched /home/pi/ in $f"
+                    changed=1
+                fi
+
+                if grep -qE "^User=mainsail" "$f" 2>/dev/null; then
+                    $SUDO sed -i "s|^User=mainsail|User=${target_user}|g" "$f"
+                    echo "  Patched User= in $f"
+                    changed=1
+                fi
+
+                if grep -qE "^Group=mainsail" "$f" 2>/dev/null; then
+                    $SUDO sed -i "s|^Group=mainsail|Group=${target_group}|g" "$f"
+                    echo "  Patched Group= in $f"
+                    changed=1
+                fi
+
+                [ "$changed" -eq 1 ] && patched=1
+            done
+        done
+    done
+
+    if [ "$patched" -eq 1 ]; then
+        $SUDO systemctl daemon-reload
+        log_ok "Systemd service files patched and daemon reloaded."
+    else
+        log_ok "No systemd path mismatches found. Nothing to patch."
+    fi
+}
+
+patch_systemd_services
+
+# ── 10. Start Services ────────────────────────────────────────────────────────
 log_stage "SERVICES" "Starting Klipper & Moonraker Services"
 $SUDO systemctl restart klipper   || true
 $SUDO systemctl restart moonraker || true
