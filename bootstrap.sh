@@ -335,6 +335,8 @@ mkdir -p "$PRINTER_HOME/printer_data/gcodes"
 mkdir -p "$PRINTER_HOME/printer_data/comms"
 
 # moonraker.conf
+# NOTE: If moonraker.conf exists but lacks the [authorization] section,
+# it will be completely overwritten with our default template.
 if [ ! -f "$PRINTER_HOME/printer_data/config/moonraker.conf" ] || ! grep -q "\[authorization\]" "$PRINTER_HOME/printer_data/config/moonraker.conf"; then
     echo "Creating default moonraker.conf..."
     cat <<EOF > "$PRINTER_HOME/printer_data/config/moonraker.conf"
@@ -369,40 +371,64 @@ EOF
 fi
 
 # printer.cfg — [include] line written conditionally per selected dashboard
-if [ ! -f "$PRINTER_HOME/printer_data/config/printer.cfg" ]; then
-    echo "Creating default printer.cfg..."
-
-    INCLUDE_LINES=""
-    if [ "$DASHBOARD" = "mainsail" ] || [ "$DASHBOARD" = "both" ]; then
-        INCLUDE_LINES="[include mainsail.cfg]"
-    elif [ "$DASHBOARD" = "fluidd" ]; then
-        INCLUDE_LINES="[include fluidd.cfg]"
-    fi
-
-    cat <<EOF > "$PRINTER_HOME/printer_data/config/printer.cfg"
-${INCLUDE_LINES}
-
-[mcu]
-serial: /dev/serial/by-id/change-me-to-your-mcu-id
-
-[printer]
-kinematics: none
-max_velocity: 300
-max_accel: 3000
-EOF
-else
-    echo "printer.cfg already exists. Ensuring dashboard include is present..."
+if [ "$PREBAKED" = "true" ]; then
+    # MainsailOS and FluiddPi already ship with a safe printer.cfg
+    # using kinematics: none — do not overwrite it, just ensure the
+    # dashboard include line is present if missing.
+    echo "Pre-baked image detected: preserving existing printer.cfg."
     INCLUDE_LINE=""
     if [ "$DASHBOARD" = "mainsail" ] || [ "$DASHBOARD" = "both" ]; then
         INCLUDE_LINE="[include mainsail.cfg]"
     elif [ "$DASHBOARD" = "fluidd" ]; then
         INCLUDE_LINE="[include fluidd.cfg]"
     fi
-    
-    if [ -n "$INCLUDE_LINE" ] && ! grep -q "include.*mainsail.cfg" "$PRINTER_HOME/printer_data/config/printer.cfg" && ! grep -q "include.*fluidd.cfg" "$PRINTER_HOME/printer_data/config/printer.cfg"; then
-        echo "Prepending $INCLUDE_LINE to printer.cfg..."
-        # Safely prepend include line to existing printer.cfg
-        echo -e "${INCLUDE_LINE}\n$(cat $PRINTER_HOME/printer_data/config/printer.cfg)" > "$PRINTER_HOME/printer_data/config/printer.cfg"
+    if [ -n "$INCLUDE_LINE" ] && \
+       ! grep -q "include.*mainsail.cfg" "$PRINTER_HOME/printer_data/config/printer.cfg" 2>/dev/null && \
+       ! grep -q "include.*fluidd.cfg"   "$PRINTER_HOME/printer_data/config/printer.cfg" 2>/dev/null; then
+        echo "Prepending $INCLUDE_LINE to existing printer.cfg..."
+        echo -e "${INCLUDE_LINE}\n$(cat $PRINTER_HOME/printer_data/config/printer.cfg)" \
+            > "$PRINTER_HOME/printer_data/config/printer.cfg"
+    else
+        echo "Dashboard include already present or not needed. Skipping."
+    fi
+else
+    # Fresh RPi OS Lite install — write our baseline placeholder only if
+    # no printer.cfg exists yet.
+    if [ ! -f "$PRINTER_HOME/printer_data/config/printer.cfg" ]; then
+        echo "Creating default printer.cfg..."
+
+        INCLUDE_LINES=""
+        if [ "$DASHBOARD" = "mainsail" ] || [ "$DASHBOARD" = "both" ]; then
+            INCLUDE_LINES="[include mainsail.cfg]"
+        elif [ "$DASHBOARD" = "fluidd" ]; then
+            INCLUDE_LINES="[include fluidd.cfg]"
+        fi
+
+        cat <<EOF > "$PRINTER_HOME/printer_data/config/printer.cfg"
+${INCLUDE_LINES}
+
+[mcu]
+# serial: /dev/serial/by-id/change-me-to-your-mcu-id
+
+[printer]
+kinematics: none
+max_velocity: 300
+max_accel: 3000
+EOF
+    else
+        echo "printer.cfg already exists. Ensuring dashboard include is present..."
+        INCLUDE_LINE=""
+        if [ "$DASHBOARD" = "mainsail" ] || [ "$DASHBOARD" = "both" ]; then
+            INCLUDE_LINE="[include mainsail.cfg]"
+        elif [ "$DASHBOARD" = "fluidd" ]; then
+            INCLUDE_LINE="[include fluidd.cfg]"
+        fi
+
+        if [ -n "$INCLUDE_LINE" ] && ! grep -q "include.*mainsail.cfg" "$PRINTER_HOME/printer_data/config/printer.cfg" && ! grep -q "include.*fluidd.cfg" "$PRINTER_HOME/printer_data/config/printer.cfg"; then
+            echo "Prepending $INCLUDE_LINE to printer.cfg..."
+            # Safely prepend include line to existing printer.cfg
+            echo -e "${INCLUDE_LINE}\n$(cat $PRINTER_HOME/printer_data/config/printer.cfg)" > "$PRINTER_HOME/printer_data/config/printer.cfg"
+        fi
     fi
 fi
 
