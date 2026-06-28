@@ -151,7 +151,9 @@ class TestKaceBackend(unittest.TestCase):
             shutil.rmtree(temp_boot)
 
     def test_config_injection_country_code_from_timezone(self):
-        """Tests that wpa_supplicant.conf uses the correct country code derived from timezone."""
+        """Tests that wpa_supplicant.conf uses the correct country code derived from timezone.
+        Also verifies that custom.toml does NOT contain a [wlan] section (HIGH-01 fix —
+        plaintext WiFi passwords are no longer written to custom.toml)."""
         import tempfile
         import shutil
         from backend.imager import inject_config
@@ -169,18 +171,25 @@ class TestKaceBackend(unittest.TestCase):
                     dashboard_ui="mainsail",
                     timezone="America/Sao_Paulo"
                 )
+                # wpa_supplicant.conf must use the correct country code
                 wpa_path = os.path.join(temp_boot, "wpa_supplicant.conf")
                 with open(wpa_path, "r") as f:
                     wpa_content = f.read()
                 self.assertIn("country=BR", wpa_content)
                 
+                # custom.toml must exist but must NOT contain WiFi credentials
+                # (HIGH-01 FIX: plaintext password removed from custom.toml)
                 custom_toml_path = os.path.join(temp_boot, "custom.toml")
                 self.assertTrue(os.path.exists(custom_toml_path))
                 with open(custom_toml_path, "r") as f:
                     toml_content = f.read()
-                self.assertIn('country = "BR"', toml_content)
-                self.assertIn('ssid = "TestSSID"', toml_content)
-                self.assertIn('password = "TestPass"', toml_content)
+                self.assertNotIn('[wlan]', toml_content,
+                    "custom.toml must not contain a [wlan] section (HIGH-01 security fix)")
+                self.assertNotIn('password =', toml_content,
+                    "custom.toml must not contain a plaintext WiFi password")
+                # Hostname and SSH sections must still be present
+                self.assertIn('hostname = "test"', toml_content)
+                self.assertIn('[ssh]', toml_content)
 
                 # wpa_supplicant.conf must use hex PSK, not plain text
                 from backend.imager import _compute_wpa_psk
@@ -347,20 +356,26 @@ class TestKaceBackend(unittest.TestCase):
                 expected_escaped_psk = _compute_wpa_psk(wifi_ssid, wifi_password)
                 self.assertEqual(config.get("wifi-security", "psk"), expected_escaped_psk)
                 
-                # Check custom.toml
+                # Check custom.toml — must NOT contain WiFi credentials (HIGH-01 fix)
                 custom_toml_path = os.path.join(temp_boot, "custom.toml")
                 self.assertTrue(os.path.exists(custom_toml_path))
                 with open(custom_toml_path, "r", encoding="utf-8") as f:
                     toml_content = f.read()
-                self.assertIn('ssid = "My\\"SSID\\";$\\\\"', toml_content)
-                self.assertIn('password = "My\'Password;$\\\\"', toml_content)
+                self.assertNotIn('[wlan]', toml_content,
+                    "custom.toml must not contain a [wlan] section (HIGH-01 security fix)")
+                self.assertNotIn('password =', toml_content,
+                    "custom.toml must not contain a plaintext WiFi password")
+                # Hostname and SSH must still be present
+                self.assertIn('hostname = "kace-test"', toml_content)
+                self.assertIn('[ssh]', toml_content)
                 
                 try:
                     import tomllib
                     with open(custom_toml_path, "rb") as f:
                         data = tomllib.load(f)
-                    self.assertEqual(data["wlan"]["ssid"], 'My"SSID";$\\')
-                    self.assertEqual(data["wlan"]["password"], 'My\'Password;$\\')
+                    # [wlan] section must be absent from the TOML structure
+                    self.assertNotIn('wlan', data,
+                        "custom.toml must not have a wlan key (HIGH-01 security fix)")
                 except ImportError:
                     self.assertIn('hostname = "kace-test"', toml_content)
                     self.assertIn('password_authentication = true', toml_content)

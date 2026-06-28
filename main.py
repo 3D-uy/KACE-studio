@@ -89,12 +89,21 @@ class KaceWsgiApp:
 
                 # M5 FIX: Add security headers to prevent clickjacking, MIME-sniffing
                 # and referrer leakage from static file responses.
+                # LOW-01 FIX: Content-Security-Policy restricts script/style origins
+                # to 'self' with unsafe-inline (required for inline handlers used throughout).
                 start_response('200 OK', [
                     ('Content-Type', mime_type),
                     ('Content-Length', str(len(file_data))),
                     ('X-Frame-Options', 'SAMEORIGIN'),
                     ('X-Content-Type-Options', 'nosniff'),
                     ('Referrer-Policy', 'same-origin'),
+                    ('Content-Security-Policy',
+                     "default-src 'self'; "
+                     "script-src 'self' 'unsafe-inline'; "
+                     "style-src 'self' 'unsafe-inline'; "
+                     "img-src 'self' data: blob:; "
+                     "font-src 'self'; "
+                     "connect-src 'self';"),
                 ])
                 return [file_data]
             else:
@@ -109,6 +118,8 @@ class Api:
         self._window = None
         # L8 FIX: Use threading.Event for cross-thread cancel signalling.
         self._flash_cancel_event = threading.Event()
+        # INFO-02 FIX: Timestamp for scan rate-limiting (one scan per 10 seconds max).
+        self._last_scan_time = 0.0
 
     def set_window(self, window):
         self._window = window
@@ -142,7 +153,10 @@ class Api:
         if self._window:
             try:
                 escaped_msg = json.dumps(message)
-                js_code = f"window.updateDeviceState('{state}', {progress}, {escaped_msg});"
+                # INFO-01 FIX: JSON-encode state to prevent JS injection if state
+                # ever contains a single-quote character (e.g. from an unexpected code path).
+                escaped_state = json.dumps(state)
+                js_code = f"window.updateDeviceState({escaped_state}, {int(progress)}, {escaped_msg});"
                 self._window.evaluate_js(js_code)
             except Exception as e:
                 print(f"evaluate_js error (non-fatal): {e}", file=sys.stderr)
@@ -725,7 +739,15 @@ class Api:
     def scan_network(self):
         """
         Runs subnet IP scanners to find active nodes.
+        Rate-limited to one full scan every 10 seconds to prevent rapid successive
+        calls from triggering IDS alerts on sensitive corporate networks.
         """
+        import time as _time
+        _MIN_SCAN_INTERVAL = 10.0  # seconds
+        now = _time.monotonic()
+        if now - self._last_scan_time < _MIN_SCAN_INTERVAL:
+            return []
+        self._last_scan_time = now
         return scan_network()
 
     def probe_device_ip(self, ip: str):
@@ -742,6 +764,14 @@ class Api:
         Connects paramiko client and routes stream data to the terminal.
         cols/rows: actual frontend terminal dimensions for correct PTY sizing.
         """
+        # LOW-02 FIX: Validate IP/hostname format before any network call.
+        # Accepts dotted-decimal IPs, hostnames, and optional :PORT suffix.
+        # Rejects empty strings and inputs containing dangerous characters.
+        import re as _re
+        _IP_HOST_RE = _re.compile(r'^[\w.\-]{1,253}(:\d{1,5})?$')
+        if not ip or not _IP_HOST_RE.match(ip.strip()):
+            return {"status": "failed", "message": "Invalid IP address or hostname format."}
+
         with self._ssh_lock:
             self._ssh.close()
             self._ssh_gen += 1

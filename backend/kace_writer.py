@@ -128,7 +128,9 @@ class Win32DiskWriter:
         return handle is None or handle == 0 or handle == -1 or handle == 0xFFFFFFFF or handle == 0xFFFFFFFFFFFFFFFF
 
     def _get_disk_volumes(self, disk_number):
-        assert isinstance(disk_number, int), "disk_number must be an integer"
+        # SEC FIX: Runtime guard replacing assert (assert is disabled with -O).
+        if not isinstance(disk_number, int):
+            raise TypeError(f"disk_number must be an integer, got {type(disk_number).__name__}")
         try:
             res = subprocess.run(["powershell", "-Command", f"Get-Partition -DiskNumber {disk_number} | Select-Object -ExpandProperty AccessPaths"], capture_output=True, text=True, encoding="utf-8", **SUBPROCESS_FLAGS)
             if res.returncode == 0:
@@ -243,7 +245,9 @@ def _validate_disk_is_removable(disk_number: int) -> bool:
     This prevents a privilege escalation where a crafted disk number could target
     the system drive from the elevated context.
     """
-    assert isinstance(disk_number, int), "disk_number must be an integer"
+    # SEC FIX: Runtime guard replacing assert (assert is disabled with -O).
+    if not isinstance(disk_number, int):
+        raise TypeError(f"disk_number must be an integer, got {type(disk_number).__name__}")
     if sys.platform != "win32":
         return False
     try:

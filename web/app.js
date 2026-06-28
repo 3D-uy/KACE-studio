@@ -380,7 +380,15 @@ function openFormatModal() {
     
     // Get drive name for display in modal
     const selectedOption = driveSelect.options[driveSelect.selectedIndex];
-    document.getElementById('modal-drive-name').innerHTML = `Target Drive: <strong>${selectedOption.textContent}</strong>`;
+    // MED-02 FIX: Use createElement + textContent instead of innerHTML to neutralise
+    // maliciously-named USB drives (e.g. a drive named "<script>...").
+    const modalDriveName = document.getElementById('modal-drive-name');
+    modalDriveName.textContent = '';
+    const prefix = document.createTextNode('Target Drive: ');
+    const strong = document.createElement('strong');
+    strong.textContent = selectedOption.textContent;
+    modalDriveName.appendChild(prefix);
+    modalDriveName.appendChild(strong);
     
     // Show step 10 modal
     document.getElementById('format-modal').style.display = 'flex';
@@ -648,8 +656,11 @@ function updateProgress(percent, message) {
         fill.style.width = `${percent}%`;
     }
     if (textContent) {
-        if (percent > 0 && percent < 100) {
-            textContent.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Writing... ${percent}%`;
+        // MED-03 FIX: Coerce percent to integer before innerHTML interpolation to
+        // ensure it cannot carry embedded HTML from an unexpected string value.
+        const safePct = parseInt(percent, 10);
+        if (safePct > 0 && safePct < 100) {
+            textContent.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Writing... ${safePct}%`;
         } else {
             textContent.innerHTML = `<i class="fa-solid fa-fire"></i> Write`;
         }
@@ -770,11 +781,18 @@ function connectManually() {
     }
     
     const list = document.getElementById('discovered-device-list');
-    list.innerHTML = `
-        <div class="list-empty">
-            <i class="fa-solid fa-spinner fa-spin"></i> Probing manual IP address ${ip}...
-        </div>
-    `;
+    // MED-01 FIX: Replace innerHTML template interpolation of the user-typed IP string
+    // with safe DOM node construction. A crafted value like "<img onerror=alert(1)>"
+    // would previously execute inside the PyWebView context and could invoke privileged
+    // backend APIs via window.pywebview.api.
+    list.innerHTML = '';
+    const probeDiv = document.createElement('div');
+    probeDiv.className = 'list-empty';
+    const probeIcon = document.createElement('i');
+    probeIcon.className = 'fa-solid fa-spinner fa-spin';
+    probeDiv.appendChild(probeIcon);
+    probeDiv.appendChild(document.createTextNode(` Probing manual IP address ${ip}...`));
+    list.appendChild(probeDiv);
     
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.probe_device_ip(ip).then(device => {

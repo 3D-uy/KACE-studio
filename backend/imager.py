@@ -119,7 +119,10 @@ def get_boot_drive_letter(disk_number: int):
     """
     Finds the FAT32/FAT partition drive letter of the flashed SD card.
     """
-    assert isinstance(disk_number, int), "disk_number must be an integer"
+    # SEC FIX: Use a proper runtime check instead of assert, which is silently
+    # disabled when Python is invoked with the -O (optimize) flag used by PyInstaller.
+    if not isinstance(disk_number, int):
+        raise TypeError(f"disk_number must be an integer, got {type(disk_number).__name__}")
     if sys.platform != "win32":
         return None
         
@@ -187,7 +190,9 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
     Flashes the image block-by-block onto the target drive by spawning
     the elevated helper process kace_writer.py.
     """
-    assert isinstance(disk_number, int), "disk_number must be an integer"
+    # SEC FIX: Runtime guard replacing assert (assert is disabled with -O).
+    if not isinstance(disk_number, int):
+        raise TypeError(f"disk_number must be an integer, got {type(disk_number).__name__}")
     if sys.platform != "win32":
         err = "Raw flashing is only fully supported on Windows in this MVP client."
         print(err, file=sys.stderr)
@@ -376,7 +381,9 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
     Injects SSH enablement, User credentials, WiFi configuration (wpa_supplicant + NetworkManager),
     and hostname parameters directly to the FAT32 boot partition.
     """
-    assert isinstance(disk_number, int), "disk_number must be an integer"
+    # SEC FIX: Runtime guard replacing assert (assert is disabled with -O).
+    if not isinstance(disk_number, int):
+        raise TypeError(f"disk_number must be an integer, got {type(disk_number).__name__}")
     # Pre-flight: server-side validation of username (mirrors client-side regex in app.js)
     _USERNAME_RE = re.compile(r'^[a-z_][a-z0-9_-]*$')
     if not username or not _USERNAME_RE.match(username):
@@ -596,6 +603,13 @@ addr-gen-mode=default-or-eui64
         # H. Bookworm headless configuration (custom.toml)
         custom_toml_path = os.path.join(boot_path, "custom.toml")
 
+        # SEC FIX (HIGH-01): The [wlan] section of custom.toml was previously storing
+        # the WiFi password in plaintext. It is now omitted entirely.
+        # WiFi connectivity is fully handled by:
+        #   - wpa_supplicant.conf  (section E) — uses PBKDF2 hex PSK, non-reversible
+        #   - nmconnection profile (section E) — uses PBKDF2 hex PSK, non-reversible
+        # Both files are already written to the FAT32 boot partition above.
+        # custom.toml retains hostname and SSH configuration only.
         toml_content = f"""config_version = 1
 
 [system]
@@ -604,15 +618,6 @@ hostname = "{clean_hostname}"
 [ssh]
 enabled = {"true" if ssh_enabled else "false"}
 password_authentication = {"true" if password_auth else "false"}
-"""
-        if wifi_ssid:
-            country_code = _get_country_from_timezone(clean_timezone) if clean_timezone else "US"
-            toml_content += f"""
-[wlan]
-ssid = "{clean_toml_ssid}"
-password = "{clean_toml_password}"
-password_encrypted = false
-country = "{country_code}"
 """
         try:
             with open(custom_toml_path, "w", newline="\n") as f:

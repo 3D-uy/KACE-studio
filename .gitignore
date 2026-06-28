@@ -36,3 +36,8 @@ desktop.ini
 venv/
 .venv/
 env/
+
+# KACE runtime artifacts (LOW-05 FIX)
+# Prevent known_hosts data and checksum sidecars from being committed
+.kace/
+*.sha256

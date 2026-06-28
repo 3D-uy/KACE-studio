@@ -267,8 +267,9 @@ class SSHSession:
             if sftp:
                 try:
                     sftp.close()
-                except Exception:
-                    pass
+                except Exception as close_err:
+                    # LOW-06 FIX: Log instead of silently swallowing to surface channel leaks.
+                    print(f"Warning: SFTP list_directory channel close error: {close_err}")
 
     def download_file(self, remote_path: str, local_path: str) -> bool:
         """Downloads a file from the Pi to local_path. Returns True on success."""
@@ -290,5 +291,6 @@ class SSHSession:
             if sftp:
                 try:
                     sftp.close()
-                except Exception:
-                    pass
+                except Exception as close_err:
+                    # LOW-06 FIX: Log instead of silently swallowing to surface channel leaks.
+                    print(f"Warning: SFTP download_file channel close error: {close_err}")
