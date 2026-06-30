@@ -207,18 +207,29 @@ echo "--------------------------------------------------------"
 echo -e "${C_RESET}"
 
 # ── Resolve Active Printer User Home Directory ────────────────────────────────
-PRINTER_HOME="$HOME"
-for udir in "/home/mainsail" "/home/fluidd" "/home/pi"; do
-    if [ -d "${udir}/printer_data" ]; then
-        PRINTER_HOME="${udir}"
-        break
+if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ] && [ -d "/home/$SUDO_USER" ]; then
+    PRINTER_HOME="/home/$SUDO_USER"
+else
+    # Scan /home for the first valid user directory
+    DETECTED_USER=""
+    for udir in "/home/mainsail" "/home/fluidd" "/home/pi" "/home/kace" /home/*; do
+        [ -d "$udir" ] || continue
+        uname=$(basename "$udir")
+        if [ "$uname" != "*" ] && [ "$uname" != "root" ] && id "$uname" &>/dev/null; then
+            DETECTED_USER="$uname"
+            PRINTER_HOME="$udir"
+            break
+        fi
+    done
+    if [ -z "$DETECTED_USER" ]; then
+        PRINTER_HOME="$HOME"
     fi
-done
+fi
 echo "Resolved printer home directory: $PRINTER_HOME"
 
-# Get the owner and group of the printer_data dir for permission updates
-PRINTER_USER=$(stat -c '%U' "$PRINTER_HOME/printer_data" 2>/dev/null || echo "$USER")
-PRINTER_GROUP=$(stat -c '%G' "$PRINTER_HOME/printer_data" 2>/dev/null || echo "$USER")
+# Get the owner and group of the printer user home directory
+PRINTER_USER=$(stat -c '%U' "$PRINTER_HOME" 2>/dev/null || echo "$USER")
+PRINTER_GROUP=$(stat -c '%G' "$PRINTER_HOME" 2>/dev/null || echo "$USER")
 
 # ── 1. Timezone Configuration ────────────────────────────────────────────────
 if [ -n "$TIMEZONE" ]; then
@@ -255,28 +266,28 @@ if [ "$PREBAKED" = "true" ]; then
     log_stage "KLIPPER_FIX" "Patching Klipper service paths"
     log_ok "Klipper service paths already configured (skipped)."
 else
-    if [ ! -d "$HOME/klipper" ]; then
+    if [ ! -d "$PRINTER_HOME/klipper" ]; then
         echo "Cloning Klipper repository..."
-        git clone https://github.com/Klipper3d/klipper.git "$HOME/klipper"
+        sudo -u "$PRINTER_USER" git clone https://github.com/Klipper3d/klipper.git "$PRINTER_HOME/klipper"
     else
         echo "Klipper repository already exists. Updating..."
-        pushd "$HOME/klipper" > /dev/null && git pull && popd > /dev/null
+        pushd "$PRINTER_HOME/klipper" > /dev/null && sudo -u "$PRINTER_USER" git pull && popd > /dev/null
     fi
 
-    if [ ! -f "$HOME/klipper/scripts/install-debian.sh" ]; then
+    if [ ! -f "$PRINTER_HOME/klipper/scripts/install-debian.sh" ]; then
         log_err "Klipper Debian install script not found."
         exit 1
     fi
 
     # Patch for Python 3 support on modern Debian/Ubuntu
-    sed -i 's/python-dev/python3-dev/g'               "$HOME/klipper/scripts/install-debian.sh"
-    sed -i 's/virtualenv -p python2/virtualenv -p python3/g' "$HOME/klipper/scripts/install-debian.sh"
+    sed -i 's/python-dev/python3-dev/g'               "$PRINTER_HOME/klipper/scripts/install-debian.sh"
+    sed -i 's/virtualenv -p python2/virtualenv -p python3/g' "$PRINTER_HOME/klipper/scripts/install-debian.sh"
 
     if systemctl is-active --quiet klipper 2>/dev/null; then
         echo "Klipper service already active. Skipping reinstall."
     else
         wait_for_apt_locks
-        "$HOME/klipper/scripts/install-debian.sh"
+        sudo -u "$PRINTER_USER" "$PRINTER_HOME/klipper/scripts/install-debian.sh"
     fi
     log_ok "Klipper installed."
 
@@ -289,13 +300,13 @@ else
 # printer_data directory layout expected by Moonraker.
 [Service]
 ExecStart=
-ExecStart=$HOME/klippy-env/bin/python $HOME/klipper/klippy/klippy.py \\
-    $HOME/printer_data/config/printer.cfg \\
-    -l $HOME/printer_data/logs/klippy.log \\
-    -a $HOME/printer_data/comms/klippy.sock
+ExecStart=$PRINTER_HOME/klippy-env/bin/python $PRINTER_HOME/klipper/klippy/klippy.py \\
+    $PRINTER_HOME/printer_data/config/printer.cfg \\
+    -l $PRINTER_HOME/printer_data/logs/klippy.log \\
+    -a $PRINTER_HOME/printer_data/comms/klippy.sock
 EOF
-    mkdir -p "$HOME/printer_data/logs" 2>/dev/null || $SUDO mkdir -p "$HOME/printer_data/logs"
-    $SUDO chown -R "$USER:$USER" "$HOME/printer_data"
+    mkdir -p "$PRINTER_HOME/printer_data/logs" 2>/dev/null || $SUDO mkdir -p "$PRINTER_HOME/printer_data/logs"
+    $SUDO chown -R "$PRINTER_USER:$PRINTER_GROUP" "$PRINTER_HOME/printer_data"
     $SUDO systemctl daemon-reload
     log_ok "Klipper service patched: using printer_data/config/printer.cfg and klippy.sock."
 fi
@@ -305,20 +316,20 @@ log_stage "MOONRAKER" "Installing Moonraker"
 if [ "$PREBAKED" = "true" ]; then
     log_ok "Moonraker already pre-installed (skipped)."
 else
-    if [ ! -d "$HOME/moonraker" ]; then
+    if [ ! -d "$PRINTER_HOME/moonraker" ]; then
         echo "Cloning Moonraker repository..."
-        git clone https://github.com/Arksine/moonraker.git "$HOME/moonraker"
+        sudo -u "$PRINTER_USER" git clone https://github.com/Arksine/moonraker.git "$PRINTER_HOME/moonraker"
     else
         echo "Moonraker repository already exists. Updating..."
-        pushd "$HOME/moonraker" > /dev/null && git pull && popd > /dev/null
+        pushd "$PRINTER_HOME/moonraker" > /dev/null && sudo -u "$PRINTER_USER" git pull && popd > /dev/null
     fi
 
-    if [ ! -f "$HOME/moonraker/scripts/install-moonraker.sh" ]; then
+    if [ ! -f "$PRINTER_HOME/moonraker/scripts/install-moonraker.sh" ]; then
         log_err "Moonraker install script not found."
         exit 1
     fi
     wait_for_apt_locks
-    "$HOME/moonraker/scripts/install-moonraker.sh"
+    sudo -u "$PRINTER_USER" "$PRINTER_HOME/moonraker/scripts/install-moonraker.sh"
 
     sleep 3
     if ! systemctl is-active --quiet moonraker 2>/dev/null; then
@@ -572,7 +583,7 @@ PLACEHOLDER
         if [ ! -f "$config_dir/mainsail.cfg" ] || [ -L "$config_dir/mainsail.cfg" ]; then
             _install_client_cfg \
                 "$config_dir/mainsail.cfg" \
-                "$HOME/mainsail-config/client.cfg" \
+                "$PRINTER_HOME/mainsail-config/client.cfg" \
                 "https://raw.githubusercontent.com/mainsail-crew/mainsail-config/master/client.cfg" \
                 "mainsail.cfg"
         else
@@ -584,7 +595,7 @@ PLACEHOLDER
         if [ ! -f "$config_dir/fluidd.cfg" ] || [ -L "$config_dir/fluidd.cfg" ]; then
             _install_client_cfg \
                 "$config_dir/fluidd.cfg" \
-                "$HOME/fluidd-config/client.cfg" \
+                "$PRINTER_HOME/fluidd-config/client.cfg" \
                 "https://raw.githubusercontent.com/fluidd-core/fluidd-config/master/client.cfg" \
                 "fluidd.cfg"
         else
@@ -838,16 +849,16 @@ EOF
         log_ok "Crowsnest configured."
     else
         log_stage "CROWSNEST" "Installing Crowsnest Webcam Streamer"
-        if [ ! -d "$HOME/crowsnest" ]; then
-            git clone https://github.com/mainsail-crew/crowsnest.git "$HOME/crowsnest"
+        if [ ! -d "$PRINTER_HOME/crowsnest" ]; then
+            sudo -u "$PRINTER_USER" git clone https://github.com/mainsail-crew/crowsnest.git "$PRINTER_HOME/crowsnest"
         else
-            pushd "$HOME/crowsnest" > /dev/null && git pull && popd > /dev/null
+            pushd "$PRINTER_HOME/crowsnest" > /dev/null && sudo -u "$PRINTER_USER" git pull && popd > /dev/null
         fi
-        if [ ! -f "$HOME/crowsnest/tools/install.sh" ]; then
+        if [ ! -f "$PRINTER_HOME/crowsnest/tools/install.sh" ]; then
             log_err "Crowsnest install script not found."
             exit 1
         fi
-        pushd "$HOME/crowsnest" > /dev/null
+        pushd "$PRINTER_HOME/crowsnest" > /dev/null
         wait_for_apt_locks
         sudo -E env CROWSNEST_UNATTENDED=1 CROWSNEST_SKIP_REBOOT_PROMPT=1 ./tools/install.sh
         popd > /dev/null
@@ -860,7 +871,7 @@ fi
 
 # ── 11. KACE Agent ────────────────────────────────────────────────────────────
 log_stage "KACE" "Installing KACE Agent"
-if bash <(curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh); then
+if sudo -u "$PRINTER_USER" -i bash <(curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh); then
     log_ok "KACE agent installed."
 else
     log_warn "KACE agent installation failed. Retry manually with:"
