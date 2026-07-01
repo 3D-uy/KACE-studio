@@ -102,7 +102,7 @@ echo "Logging execution output to: $LOG_FILE"
 
 # ── Traps & Cleanup ──────────────────────────────────────────────────────────
 cleanup() {
-    rm -f /tmp/mainsail.zip /tmp/fluidd.zip
+    rm -f /tmp/mainsail.zip /tmp/fluidd.zip /tmp/kace-install.sh
 }
 trap cleanup EXIT
 
@@ -871,11 +871,24 @@ fi
 
 # ── 11. KACE Agent ────────────────────────────────────────────────────────────
 log_stage "KACE" "Installing KACE Agent"
-if sudo -u "$PRINTER_USER" -i bash <(curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh); then
-    log_ok "KACE agent installed."
+INSTALL_OK=0
+if [ "$(id -un)" != "$PRINTER_USER" ]; then
+    # Running as a different user (e.g. root), switch to printer user context
+    if sudo -u "$PRINTER_USER" -i sh -c 'curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh -o /tmp/kace-install.sh && bash /tmp/kace-install.sh'; then
+        log_ok "KACE agent installed."
+        INSTALL_OK=1
+    fi
 else
+    # Already running as printer user, run directly without sudo
+    if curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh -o /tmp/kace-install.sh && bash /tmp/kace-install.sh; then
+        log_ok "KACE agent installed."
+        INSTALL_OK=1
+    fi
+fi
+
+if [ "$INSTALL_OK" -ne 1 ]; then
     log_warn "KACE agent installation failed. Retry manually with:"
-    log_warn "  bash <(curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh)"
+    log_warn "  curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh -o /tmp/kace-install.sh && bash /tmp/kace-install.sh"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
