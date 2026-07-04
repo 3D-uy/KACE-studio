@@ -891,6 +891,21 @@ if [ "$INSTALL_OK" -ne 1 ]; then
     log_warn "  curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh -o /tmp/kace-install.sh && bash /tmp/kace-install.sh"
 fi
 
+# ── 12. Disable cloud-init ────────────────────────────────────────────────────
+# Cloud-init has finished its one-time provisioning job.  Disable it to prevent
+# re-provisioning on future reboots, which can generate conflicting network
+# profiles and break WiFi connectivity (especially on prebaked MainsailOS images
+# that use NetworkManager instead of Netplan).
+log_stage "CLOUDINIT" "Disabling cloud-init for future boots"
+$SUDO touch /etc/cloud/cloud-init.disabled 2>/dev/null || true
+# Also clean up cloud-init trigger files from the boot partition so they cannot
+# accidentally re-enable provisioning if the disable marker is removed.
+for _ci_file in /boot/firmware/user-data /boot/firmware/meta-data /boot/firmware/network-config \
+                /boot/user-data /boot/meta-data /boot/network-config; do
+    [ -f "$_ci_file" ] && $SUDO rm -f "$_ci_file" 2>/dev/null || true
+done
+log_ok "cloud-init disabled — will not re-provision on reboot."
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo -e "\n${C_GREEN}${C_BOLD}"
 echo "========================================================"

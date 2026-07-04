@@ -633,14 +633,62 @@ password_authentication = {"true" if password_auth else "false"}
             print(f"[ERROR] Failed writing or verifying custom.toml: {e}", file=sys.stderr)
             raise e
 
-        # I. cloud-init: user-data
-        instance_uuid = str(uuid.uuid4())  # uuid imported at top of module
-        userdata_path = os.path.join(boot_path, "user-data")
+        # ── Cloud-init provisioning (Sections I–L) ─────────────────────────────
+        # Prebaked images (MainsailOS) use NetworkManager — NOT cloud-init/Netplan.
+        # Injecting cloud-init artifacts (user-data, meta-data, network-config,
+        # ds=nocloud) on a prebaked image causes cloud-init to re-provision on
+        # reboot, generating a conflicting network profile that kills WiFi.
+        #
+        # For prebaked: skip cloud-init entirely and clean up any residual files
+        #               from the base image.
+        # For vanilla:  write cloud-init artifacts as before (the OS needs them).
+
         country_code = _get_country_from_timezone(clean_timezone) if clean_timezone else "US"
 
-        # M6 FIX: use sanitized clean_timezone to prevent YAML injection via the timezone field.
-        # The clean_timezone value has had \r, \n, and = stripped already.
-        userdata_content = f"""#cloud-config
+        if is_prebaked:
+            # ── Prebaked: remove cloud-init artifacts ────────────────────────
+            # MainsailOS already has the user, hostname, and network configured
+            # via userconf.txt, custom.toml, systemd.hostname, and
+            # system-connections/*.nmconnection.  Cloud-init files would only
+            # cause a destructive re-provisioning cycle.
+            _cloud_init_files = ["user-data", "meta-data", "network-config"]
+            for ci_file in _cloud_init_files:
+                ci_path = os.path.join(boot_path, ci_file)
+                if os.path.exists(ci_path):
+                    try:
+                        os.remove(ci_path)
+                        _dbg(f"Removed pre-existing cloud-init file: {ci_path}")
+                    except Exception as rm_err:
+                        print(f"[WARNING] Could not remove {ci_file}: {rm_err}", file=sys.stderr)
+
+            # Strip any existing ds=nocloud from cmdline.txt (base image may have it)
+            cmdline_path = os.path.join(boot_path, "cmdline.txt")
+            if os.path.exists(cmdline_path):
+                try:
+                    with open(cmdline_path, "r") as f:
+                        cmdline_content = f.read().strip()
+                    # Remove ds=nocloud;i=... or ds=nocloud tokens
+                    import re as _re
+                    cmdline_content = _re.sub(r'\s*ds=nocloud[^\s]*', '', cmdline_content).strip()
+                    # Ensure WiFi regulatory domain is set
+                    if "cfg80211.ieee80211_regdom" not in cmdline_content:
+                        cmdline_content = f"{cmdline_content} cfg80211.ieee80211_regdom={country_code}"
+                    with open(cmdline_path, "w", newline="\n") as f:
+                        f.write(cmdline_content + "\n")
+                    _dbg(f"Cleaned cmdline.txt for prebaked image (removed ds=nocloud, ensured regdom)")
+                except Exception as e:
+                    print(f"[ERROR] Failed cleaning cmdline.txt for prebaked image: {e}", file=sys.stderr)
+                    raise e
+        else:
+            # ── Vanilla RPi OS: write cloud-init artifacts ───────────────────
+
+            # I. cloud-init: user-data
+            instance_uuid = str(uuid.uuid4())  # uuid imported at top of module
+            userdata_path = os.path.join(boot_path, "user-data")
+
+            # M6 FIX: use sanitized clean_timezone to prevent YAML injection via the timezone field.
+            # The clean_timezone value has had \r, \n, and = stripped already.
+            userdata_content = f"""#cloud-config
 hostname: {clean_hostname}
 manage_etc_hosts: true
 packages:
@@ -655,25 +703,27 @@ users:
 enable_ssh: true
 ssh_pwauth: {"true" if password_auth else "false"}
 """
-        try:
-            with open(userdata_path, "w", newline="\n") as f:
-                f.write(userdata_content)
-            if not os.path.exists(userdata_path):
-                raise IOError(f"user-data not found at: {userdata_path}")
-            with open(userdata_path, "r", encoding="utf-8") as f_check:
-                c = f_check.read()
-            if f"hostname: {clean_hostname}" not in c or f'passwd: "{hashed_pw}"' not in c:
-                raise ValueError("user-data verification failed.")
-            _dbg(f"Successfully verified user-data write at {userdata_path}")
-        except Exception as e:
-            print(f"[ERROR] Failed writing or verifying user-data: {e}", file=sys.stderr)
-            raise e
+            try:
+                with open(userdata_path, "w", newline="\n") as f:
+                    f.write(userdata_content)
+                if not os.path.exists(userdata_path):
+                    raise IOError(f"user-data not found at: {userdata_path}")
+                with open(userdata_path, "r", encoding="utf-8") as f_check:
+                    c = f_check.read()
+                if f"hostname: {clean_hostname}" not in c or f'passwd: "{hashed_pw}"' not in c:
+                    raise ValueError("user-data verification failed.")
+                _dbg(f"Successfully verified user-data write at {userdata_path}")
+            except Exception as e:
+                print(f"[ERROR] Failed writing or verifying user-data: {e}", file=sys.stderr)
+                raise e
 
-        # J. cloud-init: network-config
-        network_config_path = os.path.join(boot_path, "network-config")
-        if wifi_ssid:
-            wpa_psk_hex = _compute_wpa_psk(wifi_ssid, wifi_password)
-            network_content = f"""network:
+            # J. cloud-init: network-config (Netplan v2)
+            # NOTE: Netplan's password field expects the plaintext passphrase,
+            # NOT a pre-hashed hex PSK.  The hex PSK is only valid for
+            # wpa_supplicant.conf and NetworkManager psk= fields.
+            network_config_path = os.path.join(boot_path, "network-config")
+            if wifi_ssid:
+                network_content = f"""network:
   version: 2
   ethernets:
     eth0:
@@ -685,70 +735,70 @@ ssh_pwauth: {"true" if password_auth else "false"}
       regulatory-domain: "{country_code}"
       access-points:
         "{wifi_ssid}":
-          password: "{wpa_psk_hex}"
+          password: "{clean_wpa_password}"
       optional: true
 """
-        else:
-            network_content = """network:
+            else:
+                network_content = """network:
   version: 2
   ethernets:
     eth0:
       dhcp4: true
       optional: true
 """
-        try:
-            with open(network_config_path, "w", newline="\n") as f:
-                f.write(network_content)
-            if not os.path.exists(network_config_path):
-                raise IOError(f"network-config not found at: {network_config_path}")
-            with open(network_config_path, "r", encoding="utf-8") as f_check:
-                c = f_check.read()
-            if "version: 2" not in c:
-                raise ValueError("network-config verification failed.")
-            if wifi_ssid and wifi_ssid not in c:
-                raise ValueError("network-config verification failed (missing SSID).")
-            _dbg(f"Successfully verified network-config write at {network_config_path}")
-        except Exception as e:
-            print(f"[ERROR] Failed writing or verifying network-config: {e}", file=sys.stderr)
-            raise e
-
-        # K. cloud-init: meta-data
-        metadata_path = os.path.join(boot_path, "meta-data")
-        metadata_content = f"instance-id: kace-{instance_uuid}\n"
-        try:
-            with open(metadata_path, "w", newline="\n") as f:
-                f.write(metadata_content)
-            if not os.path.exists(metadata_path):
-                raise IOError(f"meta-data not found at: {metadata_path}")
-            with open(metadata_path, "r", encoding="utf-8") as f_check:
-                c = f_check.read()
-            if f"kace-{instance_uuid}" not in c:
-                raise ValueError("meta-data verification failed.")
-            _dbg(f"Successfully verified meta-data write at {metadata_path}")
-        except Exception as e:
-            print(f"[ERROR] Failed writing or verifying meta-data: {e}", file=sys.stderr)
-            raise e
-
-        # L. Patch cmdline.txt
-        cmdline_path = os.path.join(boot_path, "cmdline.txt")
-        if os.path.exists(cmdline_path):
             try:
-                with open(cmdline_path, "r") as f:
-                    cmdline_content = f.read().strip()
-                if "ds=nocloud" not in cmdline_content:
-                    cmdline_content = f"{cmdline_content} cfg80211.ieee80211_regdom={country_code} ds=nocloud;i=kace-{instance_uuid}"
-                    with open(cmdline_path, "w", newline="\n") as f:
-                        f.write(cmdline_content + "\n")
-                    with open(cmdline_path, "r", encoding="utf-8") as f_check:
-                        c = f_check.read()
-                    if f"ds=nocloud;i=kace-{instance_uuid}" not in c:
-                        raise ValueError("cmdline.txt verification failed.")
-                    _dbg(f"Successfully verified cmdline.txt patch at {cmdline_path}")
+                with open(network_config_path, "w", newline="\n") as f:
+                    f.write(network_content)
+                if not os.path.exists(network_config_path):
+                    raise IOError(f"network-config not found at: {network_config_path}")
+                with open(network_config_path, "r", encoding="utf-8") as f_check:
+                    c = f_check.read()
+                if "version: 2" not in c:
+                    raise ValueError("network-config verification failed.")
+                if wifi_ssid and wifi_ssid not in c:
+                    raise ValueError("network-config verification failed (missing SSID).")
+                _dbg(f"Successfully verified network-config write at {network_config_path}")
             except Exception as e:
-                print(f"[ERROR] Failed patching or verifying cmdline.txt: {e}", file=sys.stderr)
+                print(f"[ERROR] Failed writing or verifying network-config: {e}", file=sys.stderr)
                 raise e
-        else:
-            print(f"[WARNING] cmdline.txt not found at: {cmdline_path}. Skipping cmdline.txt patching.", file=sys.stderr)
+
+            # K. cloud-init: meta-data
+            metadata_path = os.path.join(boot_path, "meta-data")
+            metadata_content = f"instance-id: kace-{instance_uuid}\n"
+            try:
+                with open(metadata_path, "w", newline="\n") as f:
+                    f.write(metadata_content)
+                if not os.path.exists(metadata_path):
+                    raise IOError(f"meta-data not found at: {metadata_path}")
+                with open(metadata_path, "r", encoding="utf-8") as f_check:
+                    c = f_check.read()
+                if f"kace-{instance_uuid}" not in c:
+                    raise ValueError("meta-data verification failed.")
+                _dbg(f"Successfully verified meta-data write at {metadata_path}")
+            except Exception as e:
+                print(f"[ERROR] Failed writing or verifying meta-data: {e}", file=sys.stderr)
+                raise e
+
+            # L. Patch cmdline.txt — add ds=nocloud and WiFi regulatory domain
+            cmdline_path = os.path.join(boot_path, "cmdline.txt")
+            if os.path.exists(cmdline_path):
+                try:
+                    with open(cmdline_path, "r") as f:
+                        cmdline_content = f.read().strip()
+                    if "ds=nocloud" not in cmdline_content:
+                        cmdline_content = f"{cmdline_content} cfg80211.ieee80211_regdom={country_code} ds=nocloud;i=kace-{instance_uuid}"
+                        with open(cmdline_path, "w", newline="\n") as f:
+                            f.write(cmdline_content + "\n")
+                        with open(cmdline_path, "r", encoding="utf-8") as f_check:
+                            c = f_check.read()
+                        if f"ds=nocloud;i=kace-{instance_uuid}" not in c:
+                            raise ValueError("cmdline.txt verification failed.")
+                        _dbg(f"Successfully verified cmdline.txt patch at {cmdline_path}")
+                except Exception as e:
+                    print(f"[ERROR] Failed patching or verifying cmdline.txt: {e}", file=sys.stderr)
+                    raise e
+            else:
+                print(f"[WARNING] cmdline.txt not found at: {cmdline_path}. Skipping cmdline.txt patching.", file=sys.stderr)
 
         # M. Copy bootstrap.sh with version comment and Unix line endings
         try:

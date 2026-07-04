@@ -5,6 +5,7 @@ __pycache__/
 *$py.class
 *.egg-info/
 *.egg
+.pytest_cache/
 dist/
 build/
 *.manifest

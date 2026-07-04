@@ -831,9 +831,8 @@ class TestKaceBackend(unittest.TestCase):
                 self.assertIn('wifis:', network_data)
                 self.assertIn('regulatory-domain: "BR"', network_data)
                 self.assertIn('"MySSID":', network_data)
-                from backend.imager import _compute_wpa_psk
-                expected_psk = _compute_wpa_psk("MySSID", "MyPassword")
-                self.assertIn(f'password: "{expected_psk}"', network_data)
+                # Netplan's password field expects plaintext, NOT hex PSK
+                self.assertIn('password: "MyPassword"', network_data)
                 
                 # 3. Verify meta-data
                 metadata_path = os.path.join(temp_boot, "meta-data")
@@ -1061,6 +1060,8 @@ class TestKaceBackend(unittest.TestCase):
         """
         Tests that inject_config properly writes PREBAKED=true or PREBAKED=false
         to the kace-bootstrap.txt config file depending on is_prebaked parameter.
+        Also verifies that cloud-init files are NOT created for prebaked images
+        and ARE created for non-prebaked images.
         """
         import tempfile
         import shutil
@@ -1069,6 +1070,11 @@ class TestKaceBackend(unittest.TestCase):
         
         temp_boot = tempfile.mkdtemp()
         try:
+            # Create a cmdline.txt fixture (required by the prebaked path)
+            cmdline_path = os.path.join(temp_boot, "cmdline.txt")
+            with open(cmdline_path, "w") as f:
+                f.write("console=tty1 root=PARTUUID=abc-02 rootfstype=ext4 rootwait\n")
+
             with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
                 # Test with is_prebaked=True
                 success = inject_config(
@@ -1087,9 +1093,36 @@ class TestKaceBackend(unittest.TestCase):
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 self.assertIn("PREBAKED=true", content)
+
+                # Cloud-init files must NOT exist for prebaked images
+                self.assertFalse(os.path.exists(os.path.join(temp_boot, "user-data")),
+                                 "user-data must NOT be created for prebaked images")
+                self.assertFalse(os.path.exists(os.path.join(temp_boot, "meta-data")),
+                                 "meta-data must NOT be created for prebaked images")
+                self.assertFalse(os.path.exists(os.path.join(temp_boot, "network-config")),
+                                 "network-config must NOT be created for prebaked images")
+
+                # cmdline.txt must NOT contain ds=nocloud
+                with open(cmdline_path, "r", encoding="utf-8") as f:
+                    cmdline = f.read()
+                self.assertNotIn("ds=nocloud", cmdline,
+                                 "cmdline.txt must NOT contain ds=nocloud for prebaked images")
+                # But should have the regulatory domain
+                self.assertIn("cfg80211.ieee80211_regdom=", cmdline)
                 
-                # Clean up and test with is_prebaked=False
-                os.remove(cfg_path)
+                # Clean up for next test
+                for fname in os.listdir(temp_boot):
+                    fpath = os.path.join(temp_boot, fname)
+                    if os.path.isfile(fpath):
+                        os.remove(fpath)
+                    elif os.path.isdir(fpath):
+                        shutil.rmtree(fpath)
+
+                # Re-create cmdline.txt fixture for non-prebaked test
+                with open(cmdline_path, "w") as f:
+                    f.write("console=tty1 root=PARTUUID=abc-02 rootfstype=ext4 rootwait\n")
+
+                # Test with is_prebaked=False
                 success = inject_config(
                     disk_number=99,
                     hostname="kace-test.local",
@@ -1104,7 +1137,166 @@ class TestKaceBackend(unittest.TestCase):
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 self.assertIn("PREBAKED=false", content)
+
+                # Cloud-init files MUST exist for non-prebaked (vanilla RPi OS)
+                self.assertTrue(os.path.exists(os.path.join(temp_boot, "user-data")),
+                                "user-data must be created for non-prebaked images")
+                self.assertTrue(os.path.exists(os.path.join(temp_boot, "meta-data")),
+                                "meta-data must be created for non-prebaked images")
+                self.assertTrue(os.path.exists(os.path.join(temp_boot, "network-config")),
+                                "network-config must be created for non-prebaked images")
+
+                # cmdline.txt must contain ds=nocloud for non-prebaked
+                with open(cmdline_path, "r", encoding="utf-8") as f:
+                    cmdline = f.read()
+                self.assertIn("ds=nocloud", cmdline,
+                              "cmdline.txt must contain ds=nocloud for non-prebaked images")
                 
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_prebaked_cleans_existing_cloud_init_files(self):
+        """
+        Verify that when is_prebaked=True, any pre-existing cloud-init files
+        on the boot partition (from the base MainsailOS image) are removed.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch
+
+        temp_boot = tempfile.mkdtemp()
+        try:
+            # Simulate pre-existing cloud-init files from the base image
+            for ci_file in ["user-data", "meta-data", "network-config"]:
+                with open(os.path.join(temp_boot, ci_file), "w") as f:
+                    f.write(f"dummy {ci_file} content\n")
+
+            # Simulate a cmdline.txt with ds=nocloud already present
+            cmdline_path = os.path.join(temp_boot, "cmdline.txt")
+            with open(cmdline_path, "w") as f:
+                f.write("console=tty1 root=PARTUUID=abc-02 rootwait ds=nocloud;i=old-uuid\n")
+
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-test",
+                    wifi_ssid="TestNet",
+                    wifi_password="TestPass",
+                    ssh_password="pwd123",
+                    dashboard_ui="mainsail",
+                    is_prebaked=True
+                )
+                self.assertTrue(success)
+
+                # All cloud-init files must be removed
+                self.assertFalse(os.path.exists(os.path.join(temp_boot, "user-data")))
+                self.assertFalse(os.path.exists(os.path.join(temp_boot, "meta-data")))
+                self.assertFalse(os.path.exists(os.path.join(temp_boot, "network-config")))
+
+                # ds=nocloud must be stripped from cmdline.txt
+                with open(cmdline_path, "r", encoding="utf-8") as f:
+                    cmdline = f.read()
+                self.assertNotIn("ds=nocloud", cmdline)
+                self.assertNotIn("old-uuid", cmdline)
+                # But the rest of cmdline should be preserved
+                self.assertIn("console=tty1", cmdline)
+                self.assertIn("rootwait", cmdline)
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_non_prebaked_network_config_uses_plaintext_password(self):
+        """
+        Verify that for non-prebaked images, the network-config file uses the
+        plaintext WiFi password (Netplan expects plaintext), NOT the hex PSK.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config, _compute_wpa_psk
+        from unittest.mock import patch
+
+        temp_boot = tempfile.mkdtemp()
+        try:
+            # Create cmdline.txt fixture
+            with open(os.path.join(temp_boot, "cmdline.txt"), "w") as f:
+                f.write("console=tty1 root=PARTUUID=abc-02 rootwait\n")
+
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-test",
+                    wifi_ssid="TestNet",
+                    wifi_password="MySecretPass",
+                    ssh_password="pwd123",
+                    dashboard_ui="mainsail",
+                    is_prebaked=False
+                )
+                self.assertTrue(success)
+
+                # network-config should have the plaintext password
+                nc_path = os.path.join(temp_boot, "network-config")
+                self.assertTrue(os.path.exists(nc_path))
+                with open(nc_path, "r", encoding="utf-8") as f:
+                    nc_content = f.read()
+                self.assertIn("MySecretPass", nc_content,
+                              "network-config must use plaintext password for Netplan")
+
+                # wpa_supplicant.conf should still use hex PSK (not plaintext)
+                hex_psk = _compute_wpa_psk("TestNet", "MySecretPass")
+                wpa_path = os.path.join(temp_boot, "wpa_supplicant.conf")
+                with open(wpa_path, "r", encoding="utf-8") as f:
+                    wpa_content = f.read()
+                self.assertIn(f"psk={hex_psk}", wpa_content)
+                self.assertNotIn('psk="MySecretPass"', wpa_content,
+                                 "wpa_supplicant.conf must NOT contain plaintext password")
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_prebaked_preserves_nm_and_wpa_configs(self):
+        """
+        Verify that prebaked mode still writes wpa_supplicant.conf and
+        system-connections/preconfigured-wifi.nmconnection (these are the
+        correct WiFi config mechanisms for MainsailOS).
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config, _compute_wpa_psk
+        from unittest.mock import patch
+
+        temp_boot = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(temp_boot, "cmdline.txt"), "w") as f:
+                f.write("console=tty1 root=PARTUUID=abc-02 rootwait\n")
+
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-test",
+                    wifi_ssid="TestNet",
+                    wifi_password="TestPass",
+                    ssh_password="pwd123",
+                    dashboard_ui="mainsail",
+                    is_prebaked=True
+                )
+                self.assertTrue(success)
+
+                # wpa_supplicant.conf must still be created
+                wpa_path = os.path.join(temp_boot, "wpa_supplicant.conf")
+                self.assertTrue(os.path.exists(wpa_path),
+                                "wpa_supplicant.conf must be created even for prebaked images")
+                with open(wpa_path, "r", encoding="utf-8") as f:
+                    wpa_content = f.read()
+                hex_psk = _compute_wpa_psk("TestNet", "TestPass")
+                self.assertIn(f"psk={hex_psk}", wpa_content)
+
+                # NM connection profile must still be created
+                nm_path = os.path.join(temp_boot, "system-connections", "preconfigured-wifi.nmconnection")
+                self.assertTrue(os.path.exists(nm_path),
+                                "NM connection profile must be created even for prebaked images")
+                with open(nm_path, "r", encoding="utf-8") as f:
+                    nm_content = f.read()
+                self.assertIn("ssid=TestNet", nm_content)
+                self.assertIn(f"psk={hex_psk}", nm_content)
         finally:
             shutil.rmtree(temp_boot)
 
