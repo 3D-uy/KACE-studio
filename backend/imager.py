@@ -369,7 +369,14 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
                 pass
                 
         if not success and not error_msg:
-            error_msg = "Elevated helper exited without writing completion status."
+            # Read actual process exit code for diagnostics
+            final_exit_code = wintypes.DWORD(0)
+            kernel32.GetExitCodeProcess(hProcess, ctypes.byref(final_exit_code))
+            error_msg = (
+                f"Elevated helper exited without writing completion status "
+                f"(exit code: {final_exit_code.value}). "
+                f"This may indicate a crash or missing dependency in the writer process."
+            )
             
         return success, error_msg
         

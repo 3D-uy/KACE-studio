@@ -2,6 +2,22 @@ import socket
 import concurrent.futures
 from typing import List, Dict
 
+
+def _reverse_dns(ip: str, timeout: float = 0.5, default: str = "unknown") -> str:
+    """Reverse DNS lookup with a short timeout to prevent thread pool starvation.
+
+    Standard socket.gethostbyaddr blocks for the system resolver timeout
+    (typically 2-5 seconds) on hosts without PTR records.  Wrapping it in a
+    single-thread executor lets us bail out quickly.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(socket.gethostbyaddr, ip)
+        try:
+            result = future.result(timeout=timeout)
+            return result[0] if result else default
+        except (concurrent.futures.TimeoutError, Exception):
+            return default
+
 def resolve_hostname(hostname: str = "kace.local") -> str:
     """
     Attempts to resolve the hostname to an IP address.
@@ -111,15 +127,7 @@ def scan_network(custom_subnet_ips: List[str] = None) -> List[Dict]:
         moonraker_open = ports_status.get(7125, False)
         
         if ssh_open or moonraker_open:
-            # Retrieve hostname if possible
-            hostname = "kace-discovered.local"
-            try:
-                hostname_query = socket.gethostbyaddr(ip)
-                if hostname_query:
-                    hostname = hostname_query[0]
-            except Exception:
-                pass
-                
+            hostname = _reverse_dns(ip, timeout=0.5, default="kace-discovered.local")
             return {
                 "ip": ip,
                 "hostname": hostname,
@@ -156,13 +164,7 @@ def probe_manual_ip(ip: str) -> dict:
     moonraker_open = ports_status.get(7125, False)
     
     if ssh_open or moonraker_open:
-        hostname = "kace-manual.local"
-        try:
-            hostname_query = socket.gethostbyaddr(target_ip)
-            if hostname_query:
-                hostname = hostname_query[0]
-        except Exception:
-            pass
+        hostname = _reverse_dns(target_ip, timeout=1.0, default="kace-manual.local")
         return {
             "ip": ip,
             "hostname": hostname,

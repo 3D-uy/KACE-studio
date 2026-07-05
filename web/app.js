@@ -779,6 +779,14 @@ function connectManually() {
         alert("Please enter a valid IP address or hostname.");
         return;
     }
+    // Client-side format validation (mirrors backend LOW-02 FIX regex).
+    // Accepts dotted-decimal IPs, hostnames, and optional :PORT suffix.
+    // Rejects empty strings and inputs containing dangerous characters.
+    const IP_HOST_RE = /^[\w.\-]{1,253}(:\d{1,5})?$/;
+    if (!IP_HOST_RE.test(ip)) {
+        alert("Invalid IP address or hostname format. Only letters, digits, dots, hyphens, and an optional :PORT are allowed.");
+        return;
+    }
     
     const list = document.getElementById('discovered-device-list');
     // MED-01 FIX: Replace innerHTML template interpolation of the user-typed IP string

@@ -17,6 +17,7 @@ class Win32DiskWriter:
         self.physical_path = physical_path
         self.handle = None
         self.volume_handles = []
+        self.lock_failed = False
         
         GENERIC_READ = 0x80000000
         GENERIC_WRITE = 0x40000000
@@ -102,6 +103,9 @@ class Win32DiskWriter:
                         res_lock = self._DeviceIoControl(h_vol, 0x00090018, None, 0, None, 0, ctypes.byref(bytes_returned), None)
                         res_dismount = self._DeviceIoControl(h_vol, 0x00090020, None, 0, None, 0, ctypes.byref(bytes_returned), None)
                         self.volume_handles.append(h_vol)
+                        if not res_lock:
+                            self.lock_failed = True
+                            safe_print_err(f"[WARNING] Failed to lock volume {vol_path}. Another process may be using the drive.")
                         safe_print_out(f"STATUS: Locked and dismounted volume {vol_path} (Lock: {res_lock}, Dismount: {res_dismount})")
                     else:
                         err_code = kernel32.GetLastError()
@@ -335,6 +339,13 @@ def main():
         
         last_pct = -1
         with open(image_path, "rb") as src, Win32DiskWriter(physical_path, disk_number) as dest:
+            # Verify exclusive lock was obtained on all volumes
+            if dest.lock_failed:
+                raise OSError(
+                    "Failed to obtain exclusive lock on one or more volumes. "
+                    "Close any File Explorer windows or applications accessing "
+                    "the SD card and try again."
+                )
             while True:
                 chunk = src.read(chunk_size)
                 if not chunk:
