@@ -5,6 +5,9 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml">
+    <img src="https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml/badge.svg" alt="CI Pipeline Status" />
+  </a>
   <a href="https://github.com/3D-uy/KACE-studio/releases/tag/v0.1.0">
     <img src="https://img.shields.io/badge/Release-v0.1.0-orange.svg" alt="Release Version" />
   </a>
@@ -48,11 +51,17 @@ Built using a hybrid desktop architecture (**Python + PyWebView + Vanilla HTML5/
 *   **📂 OS Image Caching**: Automatically downloads, validates, and decompresses (`lzma` extraction) official Raspberry Pi OS Lite images, caching them for future use.
 *   **🔧 Custom Selectors**: Guided dropdowns for board selection, dashboard layout, and target architectures.
 *   **🛡️ Administrative Separation**: Employs a secure partition layout. The main app runs in user-space, launching a UAC-elevated helper script (`backend/kace_writer.py`) only for block-writing physical disks.
-*   **⚙️ Config Injection**: Automatically mounts boot partitions to inject Wi-Fi profiles (WPA-supplicant & modern NetworkManager connection profiles), user credentials (with cryptographically salted SHA-512 passwords), hostnames, and bootstrap settings (`kace-bootstrap.txt`).
+*   **⚙️ Multi-Format Network Configuration**: Automatically mounts boot partitions to inject modern network profiles:
+    *   **MainsailOS (Pre-baked)**: Injects `headless_nm.txt` for native network setup.
+    *   **Vanilla OS Fallback (Bookworm/Trixie)**: Writes `firstrun.sh` to copy Connection Profiles on first boot via `systemd.run` in `cmdline.txt` (cleaning up automatically afterwards).
+    *   **Cloud-Init**: Injects standard cloud-init files (`user-data`, `network-config`, `meta-data`).
+*   **🔒 Physical Volume Exclusive Locking**: Aborts flashing with a diagnostic error if target disk volumes cannot be exclusively locked (e.g., if locked by File Explorer or another application), preventing half-written corruptions.
+*   **📊 Crash & Exit Code Diagnostics**: Captures and translates the exit code if the administrative subprocess terminates abruptly before writing status reports.
 
 ### 🔍 Stage B: Subnet Auto-Discovery
 *   **📡 Subnet Scans**: Parallelized port scanners look up Port 22 (SSH) and Port 7125 (Moonraker) to automatically find the Pi on the local network.
-*   **✏️ Manual Entry Fallback**: Allows manual IP entry and probes connection ports dynamically.
+*   **⏱️ Fast Reverse DNS Lookups**: Restricts DNS resolution to a `0.5s` timeout threshold using a thread pool worker wrapper, preventing scanner hang-ups on hosts lacking PTR records.
+*   **🛡️ Proactive Client Validation**: Sanitizes IP and hostname manual connection fields using front-end RegExp checks before invoking network lookup commands.
 *   **🏷️ Visual Badges**: Discovered endpoints show visual state indicators (`SSH Enabled`, `Moonraker`).
 
 ### 💻 Stage C: Interactive SSH Workspace
@@ -89,12 +98,20 @@ KACE Studio features a curated aesthetic system supporting both Dark and Light t
 
 ---
 
+## ⚙️ CI/CD Pipeline
+
+The repository includes a GitHub Actions Continuous Integration (CI) configuration (`.github/workflows/ci.yml`):
+*   **Test Jobs**: Runs the Python `pytest` backend test suite across Windows (`windows-latest`) and Linux (`ubuntu-latest`) environments for Python versions `3.11` and `3.12`. It automatically installs required GUI rendering dependencies on Linux (e.g. WebKit2GTK).
+*   **Windows Build Job**: Builds the single-executable file (`KACE-studio.exe`) dynamically using PyInstaller and uploads it as a workflow run artifact upon successful test suites completion.
+
+---
+
 ## 💻 Development & Local Setup
 
 ### 📋 Prerequisites
 
-*   Python 3.8+
-*   Windows OS (for disk flashing capabilities)
+*   Python 3.11+
+*   Windows OS (required for direct disk block flashing API capabilities)
 
 ### 📥 Installing Dependencies
 
@@ -102,6 +119,7 @@ Install the Python requirements listed in `requirements.txt`:
 
 ```bash
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 ### ⚙️ Running the Application Locally
@@ -112,12 +130,20 @@ Start the main application launcher:
 python main.py
 ```
 
+### 🧪 Running Unit Tests
+
+Run the test suite locally:
+
+```bash
+py -m pytest tests/test_backend.py -v
+```
+
 ### 📦 Compiling to a Single Executable
 
 To bundle the application, web assets, and background helper binaries into a single executable, compile via PyInstaller:
 
 ```bash
-pyinstaller main.spec
+pyinstaller --clean -y main.spec
 ```
 
 The output executable will be created in `dist/KACE-studio.exe`.
