@@ -679,6 +679,37 @@ password_authentication = {"true" if password_auth else "false"}
                 except Exception as e:
                     print(f"[ERROR] Failed cleaning cmdline.txt for prebaked image: {e}", file=sys.stderr)
                     raise e
+
+            # ── Prebaked: write headless_nm.txt for MainsailOS WiFi setup ────
+            # MainsailOS uses a systemd service (headless_nm.service) that reads
+            # headless_nm.txt from the boot partition on first boot, creates the
+            # corresponding NetworkManager WiFi profile, and then auto-deletes
+            # the file.  Without this file, MainsailOS never configures WiFi.
+            if wifi_ssid:
+                headless_nm_path = os.path.join(boot_path, "headless_nm.txt")
+                # Escape double-quote characters in SSID/password for the
+                # key="value" format used by headless_nm.
+                esc_hl_ssid = wifi_ssid.replace('"', '\\"')
+                esc_hl_password = wifi_password.replace('"', '\\"')
+                headless_content = (
+                    f'SSID="{esc_hl_ssid}"\n'
+                    f'PASSWORD="{esc_hl_password}"\n'
+                    f'HIDDEN="false"\n'
+                    f'REGDOMAIN="{country_code}"\n'
+                )
+                try:
+                    with open(headless_nm_path, "w", newline="\n") as f:
+                        f.write(headless_content)
+                    if not os.path.exists(headless_nm_path):
+                        raise IOError(f"headless_nm.txt not found at: {headless_nm_path}")
+                    with open(headless_nm_path, "r", encoding="utf-8") as f_check:
+                        c = f_check.read()
+                    if esc_hl_ssid not in c:
+                        raise ValueError("headless_nm.txt verification failed (missing SSID).")
+                    _dbg(f"Successfully wrote headless_nm.txt at {headless_nm_path}")
+                except Exception as e:
+                    print(f"[ERROR] Failed writing or verifying headless_nm.txt: {e}", file=sys.stderr)
+                    raise e
         else:
             # ── Vanilla RPi OS: write cloud-init artifacts ───────────────────
 
@@ -799,6 +830,86 @@ ssh_pwauth: {"true" if password_auth else "false"}
                     raise e
             else:
                 print(f"[WARNING] cmdline.txt not found at: {cmdline_path}. Skipping cmdline.txt patching.", file=sys.stderr)
+
+            # L2. Write firstrun.sh — fallback for images without cloud-init
+            # (e.g. Bookworm).  The script copies the pre-staged .nmconnection
+            # from the boot partition into /etc/NetworkManager/system-connections/
+            # with root-only permissions, reloads NM, then self-destructs.
+            # On Trixie+ (which ships cloud-init), this is harmless: cloud-init
+            # handles networking on the second boot after firstrun triggers a
+            # reboot.
+            if wifi_ssid:
+                firstrun_path = os.path.join(boot_path, "firstrun.sh")
+                firstrun_content = """#!/bin/bash
+# KACE Studio first-run network configuration
+# Copies the pre-configured NetworkManager WiFi profile from the boot
+# partition into the system directory so NetworkManager can use it.
+# This script runs once via systemd.run= in cmdline.txt and then
+# removes itself and its cmdline.txt trigger.
+
+set -e
+
+# Detect boot partition mount point (Bookworm+: /boot/firmware, legacy: /boot)
+BOOT_MNT=""
+if [ -d "/boot/firmware" ] && mountpoint -q /boot/firmware 2>/dev/null; then
+    BOOT_MNT="/boot/firmware"
+elif [ -d "/boot" ] && mountpoint -q /boot 2>/dev/null; then
+    BOOT_MNT="/boot"
+fi
+
+if [ -n "$BOOT_MNT" ]; then
+    NM_SRC="$BOOT_MNT/system-connections/preconfigured-wifi.nmconnection"
+    NM_DST="/etc/NetworkManager/system-connections/preconfigured-wifi.nmconnection"
+
+    if [ -f "$NM_SRC" ] && [ -d "/etc/NetworkManager/system-connections" ]; then
+        cp "$NM_SRC" "$NM_DST"
+        chmod 600 "$NM_DST"
+        chown root:root "$NM_DST"
+    fi
+
+    # Clean up: strip systemd.run parameters from cmdline.txt
+    CMDLINE="$BOOT_MNT/cmdline.txt"
+    if [ -f "$CMDLINE" ]; then
+        sed -i 's| systemd\\.run=[^ ]*||g; s| systemd\\.run_success_action=[^ ]*||g; s| systemd\\.unit=kernel-command-line\\.target||g' "$CMDLINE"
+    fi
+
+    # Remove this script
+    rm -f "$BOOT_MNT/firstrun.sh"
+fi
+
+exit 0
+"""
+                try:
+                    with open(firstrun_path, "w", newline="\n") as f:
+                        f.write(firstrun_content)
+                    if not os.path.exists(firstrun_path):
+                        raise IOError(f"firstrun.sh not found at: {firstrun_path}")
+                    _dbg(f"Successfully wrote firstrun.sh at {firstrun_path}")
+                except Exception as e:
+                    print(f"[ERROR] Failed writing firstrun.sh: {e}", file=sys.stderr)
+                    raise e
+
+                # Append systemd.run trigger to cmdline.txt so firstrun.sh
+                # executes on the very first boot.
+                # The boot partition is mounted at /boot/firmware/ on
+                # Bookworm/Trixie.
+                if os.path.exists(cmdline_path):
+                    try:
+                        with open(cmdline_path, "r") as f:
+                            cmdline_content = f.read().strip()
+                        if "systemd.run=" not in cmdline_content:
+                            cmdline_content = (
+                                f"{cmdline_content}"
+                                f" systemd.run=/boot/firmware/firstrun.sh"
+                                f" systemd.run_success_action=reboot"
+                                f" systemd.unit=kernel-command-line.target"
+                            )
+                            with open(cmdline_path, "w", newline="\n") as f:
+                                f.write(cmdline_content + "\n")
+                            _dbg(f"Appended systemd.run trigger for firstrun.sh to cmdline.txt")
+                    except Exception as e:
+                        print(f"[ERROR] Failed appending systemd.run to cmdline.txt: {e}", file=sys.stderr)
+                        raise e
 
         # M. Copy bootstrap.sh with version comment and Unix line endings
         try:

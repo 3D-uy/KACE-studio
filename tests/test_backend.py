@@ -1300,6 +1300,99 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    def test_prebaked_writes_headless_nm_txt(self):
+        """
+        Verify that prebaked mode writes headless_nm.txt to the boot partition
+        so that MainsailOS's headless_nm.service can configure WiFi on first boot.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch
+
+        temp_boot = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(temp_boot, "cmdline.txt"), "w") as f:
+                f.write("console=tty1 root=PARTUUID=abc-02 rootwait\n")
+
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-test",
+                    wifi_ssid="MyNetwork",
+                    wifi_password="MySecretPass",
+                    ssh_password="pwd123",
+                    dashboard_ui="mainsail",
+                    timezone="America/New_York",
+                    is_prebaked=True
+                )
+                self.assertTrue(success)
+
+                # headless_nm.txt must exist
+                hl_path = os.path.join(temp_boot, "headless_nm.txt")
+                self.assertTrue(os.path.exists(hl_path),
+                                "headless_nm.txt must be created for prebaked images")
+                with open(hl_path, "r", encoding="utf-8") as f:
+                    hl_content = f.read()
+                self.assertIn('SSID="MyNetwork"', hl_content)
+                self.assertIn('PASSWORD="MySecretPass"', hl_content)
+                self.assertIn('HIDDEN="false"', hl_content)
+                self.assertIn('REGDOMAIN="US"', hl_content)
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_vanilla_writes_firstrun_sh(self):
+        """
+        Verify that vanilla (non-prebaked) mode writes firstrun.sh to the boot
+        partition and appends systemd.run trigger to cmdline.txt, providing a
+        fallback WiFi configuration mechanism for images without cloud-init.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch
+
+        temp_boot = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(temp_boot, "cmdline.txt"), "w") as f:
+                f.write("console=tty1 root=PARTUUID=abc-02 rootwait\n")
+
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-test",
+                    wifi_ssid="TestNet",
+                    wifi_password="TestPass",
+                    ssh_password="pwd123",
+                    dashboard_ui="mainsail",
+                    is_prebaked=False
+                )
+                self.assertTrue(success)
+
+                # firstrun.sh must exist
+                fr_path = os.path.join(temp_boot, "firstrun.sh")
+                self.assertTrue(os.path.exists(fr_path),
+                                "firstrun.sh must be created for vanilla images with WiFi")
+                with open(fr_path, "r", encoding="utf-8") as f:
+                    fr_content = f.read()
+                self.assertIn("#!/bin/bash", fr_content)
+                self.assertIn("preconfigured-wifi.nmconnection", fr_content)
+                self.assertIn("chmod 600", fr_content)
+
+                # cmdline.txt must contain systemd.run trigger
+                with open(os.path.join(temp_boot, "cmdline.txt"), "r", encoding="utf-8") as f:
+                    cmdline = f.read()
+                self.assertIn("systemd.run=/boot/firmware/firstrun.sh", cmdline)
+                self.assertIn("systemd.run_success_action=reboot", cmdline)
+                self.assertIn("systemd.unit=kernel-command-line.target", cmdline)
+
+                # headless_nm.txt must NOT exist for vanilla images
+                hl_path = os.path.join(temp_boot, "headless_nm.txt")
+                self.assertFalse(os.path.exists(hl_path),
+                                 "headless_nm.txt must NOT be created for vanilla images")
+        finally:
+            shutil.rmtree(temp_boot)
+
 if __name__ == "__main__":
     unittest.main()
 
