@@ -57,12 +57,10 @@ jobs:
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         git config --local --unset http.https://github.com/.extraheader || true
-        git pull origin main
-        git checkout main
-        cp pytest_run.log pytest_run.log
+        git checkout -b ci-debug-logs || git checkout ci-debug-logs
         git add pytest_run.log
         git commit -m "ci: save failed test logs [skip ci]"
-        git push https://x-access-token:$GH_TOKEN@github.com/${{ github.repository }}.git main
+        git push https://x-access-token:$GH_TOKEN@github.com/${{ github.repository }}.git ci-debug-logs --force
 
   build-windows:
     name: Build Windows Executable
