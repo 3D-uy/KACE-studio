@@ -649,22 +649,15 @@ class TestKaceBackend(unittest.TestCase):
     def test_inject_config_integration_real_write(self):
         """
         Verify inject_config end-to-end using a real temp directory.
-        We do not mock get_boot_drive_letter; instead, we mock subprocess.run inside it
-        to return the temp directory path.
         """
         import tempfile
         import shutil
         from backend.imager import inject_config
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         
         temp_boot = tempfile.mkdtemp()
         try:
-            mock_res = MagicMock()
-            mock_res.returncode = 0
-            import json
-            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
-            
-            with patch("subprocess.run", return_value=mock_res):
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
                 success = inject_config(
                     disk_number=99,
                     hostname="kace-integration",
@@ -784,7 +777,7 @@ class TestKaceBackend(unittest.TestCase):
         import shutil
         import re
         from backend.imager import inject_config
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         
         temp_boot = tempfile.mkdtemp()
         try:
@@ -793,12 +786,7 @@ class TestKaceBackend(unittest.TestCase):
             with open(cmdline_path, "w") as f:
                 f.write("console=serial0,115200 root=/dev/mmcblk0p2 rootwait\n")
                 
-            mock_res = MagicMock()
-            mock_res.returncode = 0
-            import json
-            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
-            
-            with patch("subprocess.run", return_value=mock_res):
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
                 success = inject_config(
                     disk_number=99,
                     hostname="kace-cloud",
@@ -860,16 +848,11 @@ class TestKaceBackend(unittest.TestCase):
         import tempfile
         import shutil
         from backend.imager import inject_config
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         
         temp_boot = tempfile.mkdtemp()
         try:
-            mock_res = MagicMock()
-            mock_res.returncode = 0
-            import json
-            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
-            
-            with patch("subprocess.run", return_value=mock_res):
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
                 success = inject_config(
                     disk_number=99,
                     hostname="kace-cloud",
@@ -899,17 +882,12 @@ class TestKaceBackend(unittest.TestCase):
         import tempfile
         import shutil
         from backend.imager import inject_config
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         
         temp_boot = tempfile.mkdtemp()
         try:
             # cmdline.txt is deliberately NOT created in temp_boot
-            mock_res = MagicMock()
-            mock_res.returncode = 0
-            import json
-            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
-            
-            with patch("subprocess.run", return_value=mock_res):
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
                 success = inject_config(
                     disk_number=99,
                     hostname="kace-cloud",
@@ -938,16 +916,11 @@ class TestKaceBackend(unittest.TestCase):
         import tempfile
         import shutil
         from backend.imager import inject_config
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         
         temp_boot = tempfile.mkdtemp()
         try:
-            mock_res = MagicMock()
-            mock_res.returncode = 0
-            import json
-            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
-            
-            with patch("subprocess.run", return_value=mock_res):
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
                 success = inject_config(
                     disk_number=99,
                     hostname="kace-local-test",
