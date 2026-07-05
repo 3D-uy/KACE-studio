@@ -56,6 +56,7 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local --unset http.https://github.com/.extraheader || true
         git checkout -b ci-debug-logs || git checkout ci-debug-logs
         git add pytest_run.log
         git commit -m "ci: save failed test logs for ${{ matrix.os }} - Python ${{ matrix.python-version }} [skip ci]"
