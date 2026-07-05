@@ -217,6 +217,8 @@ echo -e "${C_RESET}"
 # ── Resolve Active Printer User Home Directory ────────────────────────────────
 if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ] && [ -d "/home/$SUDO_USER" ]; then
     PRINTER_HOME="/home/$SUDO_USER"
+elif [ -n "$USER" ] && [ "$USER" != "root" ] && [ -d "/home/$USER" ]; then
+    PRINTER_HOME="/home/$USER"
 else
     # Scan /home for the first valid user directory
     DETECTED_USER=""
