@@ -718,16 +718,11 @@ class TestKaceBackend(unittest.TestCase):
         import shutil
         import pcrypt
         from backend.imager import inject_config
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         
         temp_boot = tempfile.mkdtemp()
         try:
-            mock_res = MagicMock()
-            mock_res.returncode = 0
-            import json
-            mock_res.stdout = json.dumps({"DriveLetter": temp_boot, "FileSystem": "FAT32"})
-            
-            with patch("subprocess.run", return_value=mock_res):
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
                 success = inject_config(
                     disk_number=99,
                     hostname="kace-hash-test",
