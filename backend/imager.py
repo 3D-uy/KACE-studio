@@ -717,6 +717,129 @@ password_authentication = {"true" if password_auth else "false"}
                 except Exception as e:
                     print(f"[ERROR] Failed writing or verifying headless_nm.txt: {e}", file=sys.stderr)
                     raise e
+
+            # ── Prebaked: write firstrun.sh to set credentials ──────────────
+            firstrun_path = os.path.join(boot_path, "firstrun.sh")
+            pw_auth_str = "true" if password_auth else "false"
+            
+            firstrun_content = f"""#!/bin/bash
+# KACE Studio prebaked firstboot credentials setup
+# Creates user, sets password, locks/deletes default 'pi' user,
+# and cleans up the boot triggers.
+
+set -e
+
+# Detect boot partition mount point (Bookworm+: /boot/firmware, legacy: /boot)
+BOOT_MNT=""
+if [ -d "/boot/firmware" ] && mountpoint -q /boot/firmware 2>/dev/null; then
+    BOOT_MNT="/boot/firmware"
+elif [ -d "/boot" ] && mountpoint -q /boot 2>/dev/null; then
+    BOOT_MNT="/boot"
+fi
+
+cleanup() {{
+    if [ -n "$BOOT_MNT" ]; then
+        # Clean up: strip systemd.run parameters from cmdline.txt
+        CMDLINE="$BOOT_MNT/cmdline.txt"
+        if [ -f "$CMDLINE" ]; then
+            sed -i 's| systemd\\.run=[^ ]*||g; s| systemd\\.run_success_action=[^ ]*||g; s| systemd\\.unit=kernel-command-line\\.target||g' "$CMDLINE"
+        fi
+        # Remove this script and the sentinel file
+        rm -f "$BOOT_MNT/firstrun.sh"
+        rm -f "$BOOT_MNT/.kace-firstrun-done"
+    fi
+}}
+
+trap cleanup EXIT
+
+# Idempotency Guard: check sentinel file and if user exists with shell/groups already setup
+if [ -n "$BOOT_MNT" ] && [ -f "$BOOT_MNT/.kace-firstrun-done" ]; then
+    exit 0
+fi
+
+# 1. Setup user & credentials
+HASHED_PW='{hashed_pw}'
+USER='{username}'
+
+if [ "$USER" = "pi" ]; then
+    # Reset existing 'pi' user password
+    echo "pi:$HASHED_PW" | chpasswd -e
+else
+    # Create custom user if not exists
+    if ! id "$USER" &>/dev/null; then
+        useradd -m -s /bin/bash -G users,adm,dialout,audio,netdev,video,plugdev,cdrom,games,input,gpio,spi,i2c,render,sudo "$USER"
+    fi
+    # Set custom user password
+    echo "$USER:$HASHED_PW" | chpasswd -e
+    
+    # Lock the default 'pi' user so it's not a security risk
+    if id "pi" &>/dev/null; then
+        passwd -l pi
+    fi
+fi
+
+# 2. Configure SSH Password Authentication
+mkdir -p /etc/ssh/sshd_config.d
+if [ "{pw_auth_str}" = "true" ]; then
+    echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/00-kace.conf
+    sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+elif [ "{pw_auth_str}" = "false" ]; then
+    echo "PasswordAuthentication no" > /etc/ssh/sshd_config.d/00-kace.conf
+    sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+fi
+
+# Reload SSH service if active
+if systemctl is-active ssh &>/dev/null; then
+    systemctl reload ssh || true
+fi
+
+# Set sentinel file to mark successful execution
+if [ -n "$BOOT_MNT" ]; then
+    touch "$BOOT_MNT/.kace-firstrun-done"
+fi
+
+exit 0
+"""
+            try:
+                with open(firstrun_path, "w", newline="\n") as f:
+                    f.write(firstrun_content)
+                if not os.path.exists(firstrun_path):
+                    raise IOError(f"firstrun.sh not found at: {firstrun_path}")
+                
+                # Verification check: read back and ensure it contains the expected config
+                with open(firstrun_path, "r", encoding="utf-8") as f_check:
+                    c = f_check.read()
+                if f"USER='{username}'" not in c or f"HASHED_PW='{hashed_pw}'" not in c:
+                    raise ValueError("firstrun.sh verification failed (content mismatch).")
+                _dbg(f"Successfully verified firstrun.sh write at {firstrun_path}")
+            except Exception as e:
+                print(f"[ERROR] Failed writing or verifying firstrun.sh: {e}", file=sys.stderr)
+                raise e
+
+            # Append systemd.run trigger to cmdline.txt
+            if os.path.exists(cmdline_path):
+                try:
+                    with open(cmdline_path, "r") as f:
+                        cmdline_content = f.read().strip()
+                    if "systemd.run=" not in cmdline_content:
+                        cmdline_content = (
+                            f"{cmdline_content}"
+                            f' systemd.run="/bin/sh -c \'if [ -f /boot/firmware/firstrun.sh ]; then /bin/sh /boot/firmware/firstrun.sh; else /bin/sh /boot/firstrun.sh; fi\'"'
+                            f" systemd.run_success_action=reboot"
+                            f" systemd.unit=kernel-command-line.target"
+                        )
+                        with open(cmdline_path, "w", newline="\n") as f:
+                            f.write(cmdline_content + "\n")
+                        
+                        # Verification check for cmdline.txt patch
+                        with open(cmdline_path, "r", encoding="utf-8") as f_check:
+                            c = f_check.read()
+                        if "systemd.run=" not in c:
+                            raise ValueError("cmdline.txt systemd.run verification failed.")
+                        _dbg(f"Successfully patched and verified cmdline.txt for prebaked firstrun.sh")
+                except Exception as e:
+                    print(f"[ERROR] Failed appending or verifying systemd.run in cmdline.txt: {e}", file=sys.stderr)
+                    raise e
         else:
             # ── Vanilla RPi OS: write cloud-init artifacts ───────────────────
 
@@ -907,7 +1030,7 @@ exit 0
                         if "systemd.run=" not in cmdline_content:
                             cmdline_content = (
                                 f"{cmdline_content}"
-                                f" systemd.run=/boot/firmware/firstrun.sh"
+                                f' systemd.run="/bin/sh -c \'if [ -f /boot/firmware/firstrun.sh ]; then /bin/sh /boot/firmware/firstrun.sh; else /bin/sh /boot/firstrun.sh; fi\'"'
                                 f" systemd.run_success_action=reboot"
                                 f" systemd.unit=kernel-command-line.target"
                             )

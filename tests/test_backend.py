@@ -1346,11 +1346,17 @@ class TestKaceBackend(unittest.TestCase):
                 self.assertIn("#!/bin/bash", fr_content)
                 self.assertIn("preconfigured-wifi.nmconnection", fr_content)
                 self.assertIn("chmod 600", fr_content)
+                
+                # Negative test / Regression Guard: vanilla firstrun.sh must NOT contain credentials logic
+                self.assertNotIn("chpasswd", fr_content)
+                self.assertNotIn("useradd", fr_content)
+                self.assertNotIn("passwd -l", fr_content)
 
                 # cmdline.txt must contain systemd.run trigger
                 with open(os.path.join(temp_boot, "cmdline.txt"), "r", encoding="utf-8") as f:
                     cmdline = f.read()
-                self.assertIn("systemd.run=/boot/firmware/firstrun.sh", cmdline)
+                self.assertIn("systemd.run=", cmdline)
+                self.assertIn("/boot/firmware/firstrun.sh", cmdline)
                 self.assertIn("systemd.run_success_action=reboot", cmdline)
                 self.assertIn("systemd.unit=kernel-command-line.target", cmdline)
 
@@ -1358,6 +1364,63 @@ class TestKaceBackend(unittest.TestCase):
                 hl_path = os.path.join(temp_boot, "headless_nm.txt")
                 self.assertFalse(os.path.exists(hl_path),
                                  "headless_nm.txt must NOT be created for vanilla images")
+        finally:
+            shutil.rmtree(temp_boot)
+
+    def test_prebaked_writes_firstrun_sh(self):
+        """
+        Verify that prebaked mode writes firstrun.sh to the boot partition
+        to setup custom credentials (username, password hash, locking 'pi',
+        and SSH settings) and patches cmdline.txt with systemd.run triggers.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch
+
+        temp_boot = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(temp_boot, "cmdline.txt"), "w") as f:
+                f.write("console=tty1 root=PARTUUID=abc-02 rootwait\n")
+
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-test",
+                    wifi_ssid="TestNet",
+                    wifi_password="TestPass",
+                    ssh_password="pwd123",
+                    dashboard_ui="mainsail",
+                    username="customuser",
+                    password_auth=True,
+                    is_prebaked=True
+                )
+                self.assertTrue(success)
+
+                # firstrun.sh must exist for prebaked image
+                fr_path = os.path.join(temp_boot, "firstrun.sh")
+                self.assertTrue(os.path.exists(fr_path),
+                                "firstrun.sh must be created for prebaked credentials provisioning")
+                with open(fr_path, "r", encoding="utf-8") as f:
+                    fr_content = f.read()
+
+                self.assertIn("#!/bin/bash", fr_content)
+                self.assertIn("USER='customuser'", fr_content)
+                self.assertIn("chpasswd -e", fr_content)
+                self.assertIn("useradd -m", fr_content)
+                self.assertIn("passwd -l pi", fr_content)
+                self.assertIn("PasswordAuthentication yes", fr_content)
+                self.assertIn(".kace-firstrun-done", fr_content)
+                # Password must be hashed — plain password "pwd123" must not be inside
+                self.assertNotIn("pwd123", fr_content)
+
+                # cmdline.txt must contain systemd.run trigger pointing to firstrun.sh
+                with open(os.path.join(temp_boot, "cmdline.txt"), "r", encoding="utf-8") as f:
+                    cmdline = f.read()
+                self.assertIn("systemd.run=", cmdline)
+                self.assertIn("/boot/firmware/firstrun.sh", cmdline)
+                self.assertIn("systemd.run_success_action=reboot", cmdline)
+                self.assertIn("systemd.unit=kernel-command-line.target", cmdline)
         finally:
             shutil.rmtree(temp_boot)
 
