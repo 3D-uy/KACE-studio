@@ -51,13 +51,15 @@ jobs:
 
     - name: Push logs on failure
       if: failure()
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         git checkout -b ci-debug-logs || git checkout ci-debug-logs
         git add pytest_run.log
         git commit -m "ci: save failed test logs for ${{ matrix.os }} - Python ${{ matrix.python-version }} [skip ci]"
-        git push origin ci-debug-logs --force
+        git push https://x-access-token:$GH_TOKEN@github.com/${{ github.repository }}.git ci-debug-logs --force
 
   build-windows:
     name: Build Windows Executable
