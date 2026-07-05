@@ -151,10 +151,18 @@ if [ -n "$BOOT_CFG" ]; then
     FILE_TIMEZONE=$(grep -E "^TIMEZONE="  "$BOOT_CFG" | cut -d'=' -f2 || true)
     FILE_PREBAKED=$(grep -E "^PREBAKED="  "$BOOT_CFG" | cut -d'=' -f2 || true)
 
-    [ -z "$DASHBOARD" ] && DASHBOARD="$FILE_DASHBOARD"
-    [ -z "$CROWSNEST" ] && CROWSNEST="$FILE_CROWSNEST"
-    [ -z "$TIMEZONE"  ] && TIMEZONE="$FILE_TIMEZONE"
-    [ -z "$PREBAKED"  ] && PREBAKED="$FILE_PREBAKED"
+    if [ -z "$DASHBOARD" ]; then
+        DASHBOARD="$FILE_DASHBOARD"
+    fi
+    if [ -z "$CROWSNEST" ]; then
+        CROWSNEST="$FILE_CROWSNEST"
+    fi
+    if [ -z "$TIMEZONE" ]; then
+        TIMEZONE="$FILE_TIMEZONE"
+    fi
+    if [ -z "$PREBAKED" ]; then
+        PREBAKED="$FILE_PREBAKED"
+    fi
     
     # Securely remove sensitive credentials / file after reading
     # Overwrite first to prevent forensic recovery of clean-text parameters
