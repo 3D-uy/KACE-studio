@@ -719,13 +719,20 @@ password_authentication = {"true" if password_auth else "false"}
                     raise e
 
             # ── Prebaked: write firstrun.sh to set credentials ──────────────
+            # Strategy: rename the pre-existing printer user (pi/mainsail/fluidd)
+            # to the target username, move their home directory, and create a
+            # backward-compatibility symlink so Python venv shebangs continue to
+            # resolve. Then patch User=/Group= in the known service unit files.
+            # This mirrors what Raspberry Pi Imager does and avoids the 'create new
+            # user alongside pi' approach that orphaned all pre-installed software.
             firstrun_path = os.path.join(boot_path, "firstrun.sh")
             pw_auth_str = "true" if password_auth else "false"
-            
+
             firstrun_content = f"""#!/bin/bash
-# KACE Studio prebaked firstboot credentials setup
-# Creates user, sets password, locks/deletes default 'pi' user,
-# and cleans up the boot triggers.
+# KACE Studio prebaked firstboot credentials setup.
+# Renames the pre-existing printer user to the target username, moves their
+# home directory, creates a compatibility symlink so Python venv shebangs
+# keep working, then patches User=/Group= in the known service unit files.
 
 set -e
 
@@ -739,46 +746,101 @@ fi
 
 cleanup() {{
     if [ -n "$BOOT_MNT" ]; then
-        # Clean up: strip systemd.run parameters from cmdline.txt
         CMDLINE="$BOOT_MNT/cmdline.txt"
         if [ -f "$CMDLINE" ]; then
-            sed -i 's| systemd\\.run=[^ ]*||g; s| systemd\\.run_success_action=[^ ]*||g; s| systemd\\.unit=kernel-command-line\\.target||g' "$CMDLINE"
+            # [^ ]* is safe here because cmdline.txt now uses a plain unquoted path
+            # (no embedded spaces) so the pattern matches the full token correctly.
+            sed -i 's| systemd[.]run=[^ ]*||g; s| systemd[.]run_success_action=[^ ]*||g; s| systemd[.]unit=kernel-command-line[.]target||g' "$CMDLINE"
         fi
-        # Remove this script and the sentinel file
         rm -f "$BOOT_MNT/firstrun.sh"
         rm -f "$BOOT_MNT/.kace-firstrun-done"
     fi
 }}
-
 trap cleanup EXIT
 
-# Idempotency Guard: check sentinel file and if user exists with shell/groups already setup
+# Idempotency guard
 if [ -n "$BOOT_MNT" ] && [ -f "$BOOT_MNT/.kace-firstrun-done" ]; then
     exit 0
 fi
 
-# 1. Setup user & credentials
 HASHED_PW='{hashed_pw}'
-USER='{username}'
+TARGET_USER='{username}'
 
-if [ "$USER" = "pi" ]; then
-    # Reset existing 'pi' user password
-    echo "pi:$HASHED_PW" | chpasswd -e
-else
-    # Create custom user if not exists
-    if ! id "$USER" &>/dev/null; then
-        useradd -m -s /bin/bash -G users,adm,dialout,audio,netdev,video,plugdev,cdrom,games,input,gpio,spi,i2c,render,sudo "$USER"
+# ── 1. Detect the pre-existing printer user ──────────────────────────────────
+# On pre-baked images (MainsailOS / FluiddPi) Klipper lives under the default
+# user (pi, mainsail, or fluidd). Find that user before deciding what to do.
+SOURCE_USER=""
+for candidate in pi mainsail fluidd; do
+    if id "$candidate" &>/dev/null && [ -d "/home/$candidate/klipper" ]; then
+        SOURCE_USER="$candidate"
+        break
     fi
-    # Set custom user password
-    echo "$USER:$HASHED_PW" | chpasswd -e
-    
-    # Lock the default 'pi' user so it's not a security risk
-    if id "pi" &>/dev/null; then
-        passwd -l pi
-    fi
+done
+# Fallback: glob any home dir that contains klipper/
+if [ -z "$SOURCE_USER" ]; then
+    for udir in /home/*/klipper; do
+        [ -d "$udir" ] || continue
+        candidate=$(echo "$udir" | cut -d/ -f3)
+        if id "$candidate" &>/dev/null; then
+            SOURCE_USER="$candidate"
+            break
+        fi
+    done
 fi
 
-# 2. Configure SSH Password Authentication
+# ── 2. User setup ─────────────────────────────────────────────────────────────
+if [ -z "$SOURCE_USER" ] || [ "$TARGET_USER" = "$SOURCE_USER" ]; then
+    # No rename needed — just update the password for the existing/target user.
+    EFFECTIVE_USER="${{SOURCE_USER:-$TARGET_USER}}"
+    echo "$EFFECTIVE_USER:$HASHED_PW" | chpasswd -e
+else
+    # Rename SOURCE_USER → TARGET_USER (mirroring Raspberry Pi Imager behavior).
+
+    # a. Rename the login name and primary group.
+    groupmod -n "$TARGET_USER" "$SOURCE_USER" 2>/dev/null || true
+    usermod -l "$TARGET_USER" -d "/home/$TARGET_USER" -m "$SOURCE_USER"
+
+    # b. Backward-compatibility symlink: Python venv shebangs like
+    #    #!/home/pi/klippy-env/bin/python are baked into pre-compiled binaries.
+    #    The symlink lets them keep resolving without rewriting every file.
+    if [ ! -e "/home/$SOURCE_USER" ]; then
+        ln -s "/home/$TARGET_USER" "/home/$SOURCE_USER"
+    fi
+
+    # c. Set the target user's password.
+    echo "$TARGET_USER:$HASHED_PW" | chpasswd -e
+
+    # d. Rewrite User=/Group= in the known printer service unit files.
+    #    The symlink solves *path* references; systemd resolves User= via NSS at
+    #    runtime and will fail with "No such process" if the string is still the
+    #    old name. We only touch the three known units — no broad system sweep.
+    for svc in klipper moonraker crowsnest; do
+        for dir in /etc/systemd/system /lib/systemd/system /usr/lib/systemd/system; do
+            svc_file="$dir/$svc.service"
+            dropin_dir="$dir/$svc.service.d"
+            if [ -f "$svc_file" ]; then
+                sed -i \
+                    "s|^User=$SOURCE_USER$|User=$TARGET_USER|g;" \
+                    "s|^Group=$SOURCE_USER$|Group=$TARGET_USER|g" \
+                    "$svc_file"
+            fi
+            if [ -d "$dropin_dir" ]; then
+                for conf in "$dropin_dir"/*.conf; do
+                    [ -f "$conf" ] || continue
+                    sed -i \
+                        "s|^User=$SOURCE_USER$|User=$TARGET_USER|g;" \
+                        "s|^Group=$SOURCE_USER$|Group=$TARGET_USER|g" \
+                        "$conf"
+                done
+            fi
+        done
+    done
+
+    systemctl daemon-reload 2>/dev/null || true
+    echo "Renamed printer user '$SOURCE_USER' -> '$TARGET_USER', home /home/$TARGET_USER"
+fi
+
+# ── 3. Configure SSH Password Authentication ──────────────────────────────────
 mkdir -p /etc/ssh/sshd_config.d
 if [ "{pw_auth_str}" = "true" ]; then
     echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/00-kace.conf
@@ -788,12 +850,10 @@ elif [ "{pw_auth_str}" = "false" ]; then
     sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 fi
 
-# Reload SSH service if active
 if systemctl is-active ssh &>/dev/null; then
     systemctl reload ssh || true
 fi
 
-# Set sentinel file to mark successful execution
 if [ -n "$BOOT_MNT" ]; then
     touch "$BOOT_MNT/.kace-firstrun-done"
 fi
@@ -801,15 +861,14 @@ fi
 exit 0
 """
             try:
-                with open(firstrun_path, "w", newline="\n") as f:
+                with open(firstrun_path, "w", newline="\n", encoding="utf-8") as f:
                     f.write(firstrun_content)
                 if not os.path.exists(firstrun_path):
                     raise IOError(f"firstrun.sh not found at: {firstrun_path}")
-                
-                # Verification check: read back and ensure it contains the expected config
+
                 with open(firstrun_path, "r", encoding="utf-8") as f_check:
                     c = f_check.read()
-                if f"USER='{username}'" not in c or f"HASHED_PW='{hashed_pw}'" not in c:
+                if f"TARGET_USER='{username}'" not in c or f"HASHED_PW='{hashed_pw}'" not in c:
                     raise ValueError("firstrun.sh verification failed (content mismatch).")
                 _dbg(f"Successfully verified firstrun.sh write at {firstrun_path}")
             except Exception as e:
@@ -822,9 +881,13 @@ exit 0
                     with open(cmdline_path, "r") as f:
                         cmdline_content = f.read().strip()
                     if "systemd.run=" not in cmdline_content:
+                        # Plain unquoted path — no /bin/sh -c dispatcher.
+                        # The dispatcher caused [^ ]* cleanup regex truncation
+                        # because the quoted string contained embedded spaces.
+                        # Pre-baked images are Bookworm-based; boot is always /boot/firmware.
                         cmdline_content = (
                             f"{cmdline_content}"
-                            f' systemd.run="/bin/sh -c \'if [ -f /boot/firmware/firstrun.sh ]; then /bin/sh /boot/firmware/firstrun.sh; else /bin/sh /boot/firstrun.sh; fi\'"'
+                            f" systemd.run=/boot/firmware/firstrun.sh"
                             f" systemd.run_success_action=reboot"
                             f" systemd.unit=kernel-command-line.target"
                         )
@@ -1000,7 +1063,7 @@ if [ -n "$BOOT_MNT" ]; then
     # Clean up: strip systemd.run parameters from cmdline.txt
     CMDLINE="$BOOT_MNT/cmdline.txt"
     if [ -f "$CMDLINE" ]; then
-        sed -i 's| systemd\\.run=[^ ]*||g; s| systemd\\.run_success_action=[^ ]*||g; s| systemd\\.unit=kernel-command-line\\.target||g' "$CMDLINE"
+        sed -i 's| systemd[.]run=[^ ]*||g; s| systemd[.]run_success_action=[^ ]*||g; s| systemd[.]unit=kernel-command-line[.]target||g' "$CMDLINE"
     fi
 
     # Remove this script
@@ -1010,7 +1073,7 @@ fi
 exit 0
 """
                 try:
-                    with open(firstrun_path, "w", newline="\n") as f:
+                    with open(firstrun_path, "w", newline="\n", encoding="utf-8") as f:
                         f.write(firstrun_content)
                     if not os.path.exists(firstrun_path):
                         raise IOError(f"firstrun.sh not found at: {firstrun_path}")
@@ -1028,9 +1091,11 @@ exit 0
                         with open(cmdline_path, "r") as f:
                             cmdline_content = f.read().strip()
                         if "systemd.run=" not in cmdline_content:
+                            # Plain unquoted path — no /bin/sh -c dispatcher.
+                            # Vanilla Bookworm/Trixie always mounts boot at /boot/firmware.
                             cmdline_content = (
                                 f"{cmdline_content}"
-                                f' systemd.run="/bin/sh -c \'if [ -f /boot/firmware/firstrun.sh ]; then /bin/sh /boot/firmware/firstrun.sh; else /bin/sh /boot/firstrun.sh; fi\'"'
+                                f" systemd.run=/boot/firmware/firstrun.sh"
                                 f" systemd.run_success_action=reboot"
                                 f" systemd.unit=kernel-command-line.target"
                             )

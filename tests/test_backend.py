@@ -1405,12 +1405,18 @@ class TestKaceBackend(unittest.TestCase):
                     fr_content = f.read()
 
                 self.assertIn("#!/bin/bash", fr_content)
-                self.assertIn("USER='customuser'", fr_content)
+                # New strategy: rename existing user, not create a new one
+                self.assertIn("TARGET_USER='customuser'", fr_content)
+                self.assertIn("usermod -l", fr_content)          # login rename
+                self.assertIn("groupmod -n", fr_content)         # group rename
+                self.assertIn("ln -s", fr_content)               # compat symlink for venv shebangs
+                self.assertIn("klipper moonraker crowsnest", fr_content)  # targeted unit file patch
                 self.assertIn("chpasswd -e", fr_content)
-                self.assertIn("useradd -m", fr_content)
-                self.assertIn("passwd -l pi", fr_content)
                 self.assertIn("PasswordAuthentication yes", fr_content)
                 self.assertIn(".kace-firstrun-done", fr_content)
+                # Old strategy must NOT be present
+                self.assertNotIn("useradd -m", fr_content)
+                self.assertNotIn("passwd -l pi", fr_content)
                 # Password must be hashed — plain password "pwd123" must not be inside
                 self.assertNotIn("pwd123", fr_content)
 

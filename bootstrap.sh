@@ -214,7 +214,10 @@ echo "  Pre-baked OS : $PREBAKED"
 echo "--------------------------------------------------------"
 echo -e "${C_RESET}"
 
-# ── Resolve Active Printer User Home Directory ────────────────────────────────
+# ── Resolve Printer User Home Directory ─────────────────────────────────────
+# By first boot, firstrun.sh has already renamed the pre-existing printer user
+# (pi/mainsail/fluidd) to the target username and moved their home directory.
+# The SUDO_USER/USER resolution below therefore finds the correct home directly.
 if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ] && [ -d "/home/$SUDO_USER" ]; then
     PRINTER_HOME="/home/$SUDO_USER"
 elif [ -n "$USER" ] && [ "$USER" != "root" ] && [ -d "/home/$USER" ]; then
@@ -222,7 +225,7 @@ elif [ -n "$USER" ] && [ "$USER" != "root" ] && [ -d "/home/$USER" ]; then
 else
     # Scan /home for the first valid user directory
     DETECTED_USER=""
-    for udir in "/home/mainsail" "/home/fluidd" "/home/pi" "/home/kace" /home/*; do
+    for udir in /home/mainsail /home/fluidd /home/pi /home/kace /home/*; do
         [ -d "$udir" ] || continue
         uname=$(basename "$udir")
         if [ "$uname" != "*" ] && [ "$uname" != "root" ] && id "$uname" &>/dev/null; then
