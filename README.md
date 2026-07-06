@@ -8,8 +8,8 @@
   <a href="https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml">
     <img src="https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml/badge.svg" alt="CI Pipeline Status" />
   </a>
-  <a href="https://github.com/3D-uy/KACE-studio/releases/tag/v0.1.0">
-    <img src="https://img.shields.io/badge/Release-v0.1.0-orange.svg" alt="Release Version" />
+  <a href="https://github.com/3D-uy/KACE-studio/releases/tag/v0.2.0">
+    <img src="https://img.shields.io/badge/Release-v0.2.0-orange.svg" alt="Release Version" />
   </a>
   <a href="https://www.python.org/">
     <img src="https://img.shields.io/badge/Python-3.8%2B-blue.svg" alt="Python Version" />
