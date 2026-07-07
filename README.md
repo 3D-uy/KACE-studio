@@ -47,7 +47,7 @@ Built using a hybrid desktop architecture (**Python + PyWebView + Vanilla HTML5/
 
 ## ✨ Key Features
 
-### 💾 Stage A: Smart SD Card Imager
+## 💾 Stage A: Smart SD Card Imager
 
 *   **📂 OS Image Caching**: Automatically downloads, validates, and decompresses (`lzma` extraction) official Raspberry Pi OS Lite images, caching them for future use.
 
@@ -70,7 +70,7 @@ Built using a hybrid desktop architecture (**Python + PyWebView + Vanilla HTML5/
 
 *   **📊 Crash & Exit Code Diagnostics**: Captures and translates the exit code if the administrative subprocess terminates abruptly before writing status reports.
 
-### 🔍 Stage B: Subnet Auto-Discovery
+## 🔍 Stage B: Subnet Auto-Discovery
 
 *   **📡 Subnet Scans**: Parallelized port scanners look up Port 22 (SSH) and Port 7125 (Moonraker) to automatically find the Pi on the local network.
 
@@ -81,7 +81,7 @@ Built using a hybrid desktop architecture (**Python + PyWebView + Vanilla HTML5/
 
 *   **🏷️ Visual Badges**: Discovered endpoints show visual state indicators (`SSH Enabled`, `Moonraker`).
 
-### 💻 Stage C: Interactive SSH Workspace
+## 💻 Stage C: Interactive SSH Workspace
 
 *   **🖥️ Embedded Terminal**: Integrates `xterm.js` for real-time terminal output streaming directly in the app.
 
