@@ -1358,6 +1358,7 @@ class TestKaceBackend(unittest.TestCase):
                 self.assertIn("systemd.run=", cmdline)
                 self.assertIn("/boot/firmware/firstrun.sh", cmdline)
                 self.assertIn("systemd.run_success_action=reboot", cmdline)
+                self.assertIn("systemd.run_failure_action=reboot", cmdline)
                 self.assertIn("systemd.unit=kernel-command-line.target", cmdline)
 
                 # headless_nm.txt must NOT exist for vanilla images
@@ -1426,9 +1427,63 @@ class TestKaceBackend(unittest.TestCase):
                 self.assertIn("systemd.run=", cmdline)
                 self.assertIn("/boot/firmware/firstrun.sh", cmdline)
                 self.assertIn("systemd.run_success_action=reboot", cmdline)
+                self.assertIn("systemd.run_failure_action=reboot", cmdline)
                 self.assertIn("systemd.unit=kernel-command-line.target", cmdline)
         finally:
             shutil.rmtree(temp_boot)
+
+    def test_firstrun_trap_fallback_logic(self):
+        """
+        Verify that both vanilla and prebaked generated firstrun.sh scripts contain
+        early trap registration, target_mnt fallback detection, and explicit sync.
+        """
+        import tempfile
+        import shutil
+        from backend.imager import inject_config
+        from unittest.mock import patch
+
+        for mode in [True, False]:
+            temp_boot = tempfile.mkdtemp()
+            try:
+                with open(os.path.join(temp_boot, "cmdline.txt"), "w") as f:
+                    f.write("console=tty1 root=PARTUUID=abc-02 rootwait\n")
+
+                with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                    success = inject_config(
+                        disk_number=99,
+                        hostname="kace-test",
+                        wifi_ssid="TestNet",
+                        wifi_password="TestPass",
+                        ssh_password="pwd123",
+                        dashboard_ui="mainsail",
+                        username="customuser",
+                        password_auth=True,
+                        is_prebaked=mode
+                    )
+                    self.assertTrue(success)
+
+                    fr_path = os.path.join(temp_boot, "firstrun.sh")
+                    self.assertTrue(os.path.exists(fr_path))
+                    with open(fr_path, "r", encoding="utf-8") as f:
+                        fr_content = f.read()
+
+                    # 1. Early trap registration: trap cleanup EXIT must be declared before set -e
+                    trap_index = fr_content.find("trap cleanup EXIT")
+                    set_e_index = fr_content.find("set -e")
+                    self.assertNotEqual(trap_index, -1, "firstrun.sh must register EXIT trap")
+                    self.assertNotEqual(set_e_index, -1, "firstrun.sh must have set -e")
+                    self.assertTrue(trap_index < set_e_index, "trap registration must occur before set -e")
+
+                    # 2. Fallback target_mnt scanning logic in the trap body
+                    self.assertIn("target_mnt=\"$BOOT_MNT\"", fr_content)
+                    self.assertIn("-z \"$target_mnt\"", fr_content)
+                    self.assertIn("/boot/firmware/cmdline.txt", fr_content)
+                    self.assertIn("/boot/cmdline.txt", fr_content)
+
+                    # 3. Explicit sync at the end of cleanup
+                    self.assertIn("sync", fr_content)
+            finally:
+                shutil.rmtree(temp_boot)
 
 if __name__ == "__main__":
     unittest.main()

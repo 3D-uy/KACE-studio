@@ -734,6 +734,34 @@ password_authentication = {"true" if password_auth else "false"}
 # home directory, creates a compatibility symlink so Python venv shebangs
 # keep working, then patches User=/Group= in the known service unit files.
 
+cleanup() {{
+    local exit_code=$?
+    local target_mnt="$BOOT_MNT"
+    if [ -z "$target_mnt" ]; then
+        if [ -f "/boot/firmware/cmdline.txt" ]; then
+            target_mnt="/boot/firmware"
+        elif [ -f "/boot/cmdline.txt" ]; then
+            target_mnt="/boot"
+        fi
+    fi
+
+    if [ -n "$target_mnt" ]; then
+        if [ $exit_code -ne 0 ]; then
+            echo "KACE prebaked firstrun failed at $(date) with exit code $exit_code" > "$target_mnt/kace-firstrun-error.log"
+        fi
+        CMDLINE="$target_mnt/cmdline.txt"
+        if [ -f "$CMDLINE" ]; then
+            # [^ ]* is safe here because cmdline.txt now uses a plain unquoted path
+            # (no embedded spaces) so the pattern matches the full token correctly.
+            sed -i 's| systemd[.]run=[^ ]*||g; s| systemd[.]run_success_action=[^ ]*||g; s| systemd[.]run_failure_action=[^ ]*||g; s| systemd[.]unit=kernel-command-line[.]target||g' "$CMDLINE"
+        fi
+        rm -f "$target_mnt/firstrun.sh"
+        rm -f "$target_mnt/.kace-firstrun-done"
+        sync
+    fi
+}}
+trap cleanup EXIT
+
 set -e
 
 # Detect boot partition mount point (Bookworm+: /boot/firmware, legacy: /boot)
@@ -743,20 +771,6 @@ if [ -d "/boot/firmware" ] && mountpoint -q /boot/firmware 2>/dev/null; then
 elif [ -d "/boot" ] && mountpoint -q /boot 2>/dev/null; then
     BOOT_MNT="/boot"
 fi
-
-cleanup() {{
-    if [ -n "$BOOT_MNT" ]; then
-        CMDLINE="$BOOT_MNT/cmdline.txt"
-        if [ -f "$CMDLINE" ]; then
-            # [^ ]* is safe here because cmdline.txt now uses a plain unquoted path
-            # (no embedded spaces) so the pattern matches the full token correctly.
-            sed -i 's| systemd[.]run=[^ ]*||g; s| systemd[.]run_success_action=[^ ]*||g; s| systemd[.]unit=kernel-command-line[.]target||g' "$CMDLINE"
-        fi
-        rm -f "$BOOT_MNT/firstrun.sh"
-        rm -f "$BOOT_MNT/.kace-firstrun-done"
-    fi
-}}
-trap cleanup EXIT
 
 # Idempotency guard
 if [ -n "$BOOT_MNT" ] && [ -f "$BOOT_MNT/.kace-firstrun-done" ]; then
@@ -889,6 +903,7 @@ exit 0
                             f"{cmdline_content}"
                             f" systemd.run=/boot/firmware/firstrun.sh"
                             f" systemd.run_success_action=reboot"
+                            f" systemd.run_failure_action=reboot"
                             f" systemd.unit=kernel-command-line.target"
                         )
                         with open(cmdline_path, "w", newline="\n") as f:
@@ -1040,6 +1055,33 @@ ssh_pwauth: {"true" if password_auth else "false"}
 # This script runs once via systemd.run= in cmdline.txt and then
 # removes itself and its cmdline.txt trigger.
 
+cleanup() {
+    local exit_code=$?
+    local target_mnt="$BOOT_MNT"
+    if [ -z "$target_mnt" ]; then
+        if [ -f "/boot/firmware/cmdline.txt" ]; then
+            target_mnt="/boot/firmware"
+        elif [ -f "/boot/cmdline.txt" ]; then
+            target_mnt="/boot"
+        fi
+    fi
+
+    if [ -n "$target_mnt" ]; then
+        if [ $exit_code -ne 0 ]; then
+            echo "KACE vanilla firstrun failed at $(date) with exit code $exit_code" > "$target_mnt/kace-firstrun-error.log"
+        fi
+        CMDLINE="$target_mnt/cmdline.txt"
+        if [ -f "$CMDLINE" ]; then
+            # [^ ]* is safe here because cmdline.txt now uses a plain unquoted path
+            # (no embedded spaces) so the pattern matches the full token correctly.
+            sed -i 's| systemd[.]run=[^ ]*||g; s| systemd[.]run_success_action=[^ ]*||g; s| systemd[.]run_failure_action=[^ ]*||g; s| systemd[.]unit=kernel-command-line[.]target||g' "$CMDLINE"
+        fi
+        rm -f "$target_mnt/firstrun.sh"
+        sync
+    fi
+}
+trap cleanup EXIT
+
 set -e
 
 # Detect boot partition mount point (Bookworm+: /boot/firmware, legacy: /boot)
@@ -1059,18 +1101,7 @@ if [ -n "$BOOT_MNT" ]; then
         chmod 600 "$NM_DST"
         chown root:root "$NM_DST"
     fi
-
-    # Clean up: strip systemd.run parameters from cmdline.txt
-    CMDLINE="$BOOT_MNT/cmdline.txt"
-    if [ -f "$CMDLINE" ]; then
-        sed -i 's| systemd[.]run=[^ ]*||g; s| systemd[.]run_success_action=[^ ]*||g; s| systemd[.]unit=kernel-command-line[.]target||g' "$CMDLINE"
-    fi
-
-    # Remove this script
-    rm -f "$BOOT_MNT/firstrun.sh"
 fi
-
-exit 0
 """
                 try:
                     with open(firstrun_path, "w", newline="\n", encoding="utf-8") as f:
@@ -1097,6 +1128,7 @@ exit 0
                                 f"{cmdline_content}"
                                 f" systemd.run=/boot/firmware/firstrun.sh"
                                 f" systemd.run_success_action=reboot"
+                                f" systemd.run_failure_action=reboot"
                                 f" systemd.unit=kernel-command-line.target"
                             )
                             with open(cmdline_path, "w", newline="\n") as f:
