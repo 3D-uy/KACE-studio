@@ -166,8 +166,13 @@ if [ -n "$BOOT_CFG" ]; then
     
     # Securely remove sensitive credentials / file after reading
     # Overwrite first to prevent forensic recovery of clean-text parameters
-    echo "CLEARED" > "$BOOT_CFG" 2>/dev/null || true
-    rm -f "$BOOT_CFG" 2>/dev/null || true
+    if [ -n "$SUDO" ]; then
+        echo "CLEARED" | $SUDO tee "$BOOT_CFG" >/dev/null 2>/dev/null || true
+        $SUDO rm -f "$BOOT_CFG" 2>/dev/null || true
+    else
+        echo "CLEARED" > "$BOOT_CFG" 2>/dev/null || true
+        rm -f "$BOOT_CFG" 2>/dev/null || true
+    fi
 fi
 
 # ── Input Sanitization & Allowlist Validation ────────────────────────────────
