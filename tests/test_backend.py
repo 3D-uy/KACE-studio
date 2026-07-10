@@ -1485,6 +1485,54 @@ class TestKaceBackend(unittest.TestCase):
             finally:
                 shutil.rmtree(temp_boot)
 
+    def test_api_preferences(self):
+        """Tests that Api.get_preferences and Api.set_preferences load and save settings correctly."""
+        import tempfile
+        from main import Api
+
+        api = Api()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_prefs_path = os.path.join(temp_dir, "prefs.json")
+            api._prefs_path = temp_prefs_path
+
+            # Test fallback defaults (missing file case)
+            defaults = api.get_preferences()
+            self.assertEqual(defaults.get("theme"), "dark")
+            self.assertTrue(defaults.get("kace_auto_scan"))
+            self.assertEqual(defaults.get("form_state"), {})
+
+            # Test set preferences
+            new_prefs = {
+                "theme": "light",
+                "kace_auto_scan": False,
+                "form_state": {"hostname-input": "myhost"}
+            }
+            success = api.set_preferences(new_prefs)
+            self.assertTrue(success)
+            self.assertTrue(os.path.exists(temp_prefs_path))
+
+            # Test load preferences
+            loaded = api.get_preferences()
+            self.assertEqual(loaded.get("theme"), "light")
+            self.assertFalse(loaded.get("kace_auto_scan"))
+            self.assertEqual(loaded.get("form_state").get("hostname-input"), "myhost")
+
+            # Test corrupted JSON fallback to defaults
+            with open(temp_prefs_path, "w", encoding="utf-8") as f:
+                f.write("this is not valid json")
+            corrupted = api.get_preferences()
+            self.assertEqual(corrupted.get("theme"), "dark")
+            self.assertTrue(corrupted.get("kace_auto_scan"))
+            self.assertEqual(corrupted.get("form_state"), {})
+
+            # Test partial preferences merging defaults
+            with open(temp_prefs_path, "w", encoding="utf-8") as f:
+                f.write('{"theme": "light"}') # missing kace_auto_scan and form_state
+            partial = api.get_preferences()
+            self.assertEqual(partial.get("theme"), "light") # keeps overridden theme
+            self.assertTrue(partial.get("kace_auto_scan")) # defaults merged
+            self.assertEqual(partial.get("form_state"), {}) # defaults merged
+
 if __name__ == "__main__":
     unittest.main()
 

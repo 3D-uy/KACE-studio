@@ -13,6 +13,24 @@ let loginPassword = '';
 let connectedUsername = 'kace';
 let currentLoginInput = '';
 
+let userPreferences = { theme: 'dark', kace_auto_scan: true, form_state: {} };
+
+function applyTheme(theme) {
+    const body = document.body;
+    const themeIcon = document.getElementById('theme-icon');
+    const themeText = document.getElementById('theme-text');
+    
+    if (theme === 'light') {
+        body.classList.add('light-mode');
+        if (themeIcon) themeIcon.className = 'fa-solid fa-moon';
+        if (themeText) themeText.textContent = 'Dark Mode';
+    } else {
+        body.classList.remove('light-mode');
+        if (themeIcon) themeIcon.className = 'fa-solid fa-sun';
+        if (themeText) themeText.textContent = 'Light Mode';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     // Initialize custom dropdown selectors
     initCustomDropdowns();
@@ -29,15 +47,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize form persistence listeners
     initFormPersistence();
     
-    // Check saved theme preferences
+    // Check saved theme preferences (startup cache fallback)
     const savedTheme = localStorage.getItem('theme') || 'dark';
-    if (savedTheme === 'light') {
-        document.body.classList.add('light-mode');
-        const themeIcon = document.getElementById('theme-icon');
-        const themeText = document.getElementById('theme-text');
-        if (themeIcon) themeIcon.className = 'fa-solid fa-moon';
-        if (themeText) themeText.textContent = 'Dark Mode';
-    }
+    applyTheme(savedTheme);
 
     // Initialize blank xterm terminal once local fonts are loaded
     // This prevents xterm.js from caching incorrect character widths from fallback fonts
@@ -56,17 +68,42 @@ window.addEventListener('pywebviewready', () => {
     console.log("PyWebView Python API connection established.");
     refreshDrives();
     
-    // SECURITY/NETWORK NOTE:
-    // Auto-scanning triggers subnet-wide ping/port probes on startup, which may fire security 
-    // alerts or trigger intrusion detection systems (IDS) on restricted corporate networks.
-    // We gate this behind a 'kace_auto_scan' user preference in localStorage (defaults to true).
-    const autoScanPref = localStorage.getItem('kace_auto_scan') !== 'false';
-    if (autoScanPref) {
-        triggerScan();
+    const FORM_PERSIST_KEY = 'kace_form_state';
+    
+    if (window.pywebview && pywebview.api && pywebview.api.get_preferences) {
+        pywebview.api.get_preferences().then(prefs => {
+            if (prefs) {
+                userPreferences = prefs;
+                
+                // Rule: prefs.json always overwrites localStorage
+                localStorage.setItem('theme', prefs.theme || 'dark');
+                localStorage.setItem(FORM_PERSIST_KEY, JSON.stringify(prefs.form_state || {}));
+                localStorage.setItem('kace_auto_scan', prefs.kace_auto_scan !== false ? 'true' : 'false');
+                
+                // Apply theme from python preferences
+                applyTheme(prefs.theme || 'dark');
+                
+                // Sync form elements with python preferences
+                restoreFormState();
+                
+                // Trigger auto-scan based on python preferences
+                const autoScanPref = prefs.kace_auto_scan !== false;
+                if (autoScanPref) {
+                    triggerScan();
+                } else {
+                    console.log("Auto-scan on startup disabled via user preference.");
+                    const text = document.getElementById('scan-status-text');
+                    if (text) text.textContent = "Auto-scan disabled. Click Scan Subnet below to discover nodes.";
+                }
+            } else {
+                triggerScan();
+            }
+        }).catch(err => {
+            console.error("Error loading preferences from python:", err);
+            triggerScan();
+        });
     } else {
-        console.log("Auto-scan on startup disabled via user preference.");
-        const text = document.getElementById('scan-status-text');
-        if (text) text.textContent = "Auto-scan disabled. Click Scan Subnet below to discover nodes.";
+        triggerScan();
     }
 });
 
@@ -677,7 +714,7 @@ function triggerScan() {
     const text = document.getElementById('scan-status-text');
     const list = document.getElementById('discovered-device-list');
     
-    visual.classList.add('scanning');
+    if (visual) visual.classList.add('scanning');
     text.textContent = "Probing local network subnet...";
     list.innerHTML = `
         <div class="list-empty">
@@ -687,12 +724,12 @@ function triggerScan() {
     
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.scan_network().then(devices => {
-            visual.classList.remove('scanning');
+            if (visual) visual.classList.remove('scanning');
             text.textContent = "Scan completed.";
             populateDevices(devices);
         }).catch(err => {
             console.error(err);
-            visual.classList.remove('scanning');
+            if (visual) visual.classList.remove('scanning');
             text.textContent = "Scan failed.";
             list.innerHTML = '';
             const emptyDiv = document.createElement('div');
@@ -703,11 +740,11 @@ function triggerScan() {
     } else {
         // Mock nodes found
         setTimeout(() => {
-            visual.classList.remove('scanning');
+            if (visual) visual.classList.remove('scanning');
             text.textContent = "Scan complete (Debug Mock Mode).";
             populateDevices([
-                { ip: "192.168.1.99", hostname: "kace.local", ssh: true, moonraker: false },
-                { ip: "192.168.1.121", hostname: "mainsailos.local", ssh: true, moonraker: true }
+                { ip: "192.168.1.99", hostname: "kace.local", ssh: true, moonraker: false, klipper: false, crowsnest: false },
+                { ip: "192.168.1.121", hostname: "mainsailos.local", ssh: true, moonraker: true, klipper: true, crowsnest: true }
             ]);
         }, 1500);
     }
@@ -754,6 +791,18 @@ function populateDevices(devices) {
             tagMoon.className = 'tag tag-moonraker';
             tagMoon.textContent = 'Moonraker';
             deviceTags.appendChild(tagMoon);
+        }
+        if (dev.klipper) {
+            const tagKlip = document.createElement('span');
+            tagKlip.className = 'tag tag-klipper';
+            tagKlip.textContent = 'Klipper';
+            deviceTags.appendChild(tagKlip);
+        }
+        if (dev.crowsnest) {
+            const tagCrows = document.createElement('span');
+            tagCrows.className = 'tag tag-crowsnest';
+            tagCrows.textContent = 'Crowsnest';
+            deviceTags.appendChild(tagCrows);
         }
         
         deviceMeta.appendChild(deviceName);
@@ -804,6 +853,8 @@ function connectManually() {
     
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.probe_device_ip(ip).then(device => {
+            btn.disabled = false;
+            btn.innerHTML = 'Connect to Target';
             if (device) {
                 populateDevices([device]);
             } else {
@@ -815,6 +866,8 @@ function connectManually() {
                 alert("IP Probe failed. Target device is not listening on SSH (22) or Moonraker (7125) ports.");
             }
         }).catch(err => {
+            btn.disabled = false;
+            btn.innerHTML = 'Connect to Target';
             list.innerHTML = '';
             const emptyDiv = document.createElement('div');
             emptyDiv.className = 'list-empty';
@@ -822,9 +875,10 @@ function connectManually() {
             list.appendChild(emptyDiv);
         });
     } else {
-        // Mock fallback in UI debug mode
         setTimeout(() => {
-            populateDevices([{ ip: ip, hostname: "manual-node.local", ssh: true, moonraker: false }]);
+            btn.disabled = false;
+            btn.innerHTML = 'Connect to Target';
+            populateDevices([{ ip: ip, hostname: "manual-node.local", ssh: true, moonraker: false, klipper: false, crowsnest: false }]);
         }, 1000);
     }
 }
@@ -1180,6 +1234,12 @@ function parseBootstrapProgress(data) {
             connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap complete! KACE Node is fully ready.</span>';
         }
         updateTrackerBar('BOOTSTRAPPED');
+        
+        const finishBtn = document.getElementById('finish-btn');
+        if (finishBtn) {
+            finishBtn.disabled = false;
+            finishBtn.classList.add('active');
+        }
 
         // Hide the progress tracker and resize terminal to the full height
         // This ensures the remote interactive TUI (like KACE logo/menus) sees a correct, standard-sized PTY
@@ -1443,24 +1503,20 @@ function initCustomDropdowns() {
 
 // Light / Dark Theme Toggler
 function toggleTheme() {
-    const body = document.body;
-    const themeIcon = document.getElementById('theme-icon');
-    const themeText = document.getElementById('theme-text');
+    const isCurrentlyLight = document.body.classList.contains('light-mode');
+    const newTheme = isCurrentlyLight ? 'dark' : 'light';
+    applyTheme(newTheme);
     
-    if (body.classList.contains('light-mode')) {
-        body.classList.remove('light-mode');
-        localStorage.setItem('theme', 'dark');
-        if (themeIcon) themeIcon.className = 'fa-solid fa-sun';
-        if (themeText) themeText.textContent = 'Light Mode';
-    } else {
-        body.classList.add('light-mode');
-        localStorage.setItem('theme', 'light');
-        if (themeIcon) themeIcon.className = 'fa-solid fa-moon';
-        if (themeText) themeText.textContent = 'Dark Mode';
+    // Save state to python preferences and update localStorage cache
+    userPreferences.theme = newTheme;
+    localStorage.setItem('theme', newTheme);
+    
+    if (window.pywebview && pywebview.api && pywebview.api.set_preferences) {
+        pywebview.api.set_preferences(userPreferences);
     }
 }
 
-// ── Form Persistence (localStorage) ──────────────────────────────────────
+// ── Form Persistence (localStorage + Python preferences) ──────────────────
 
 const FORM_PERSIST_KEY = 'kace_form_state';
 const PERSISTED_FIELDS = [
@@ -1484,18 +1540,30 @@ function saveFormState() {
             state[field.id] = field.type === 'checked' ? el.checked : el.value;
         }
     });
+    
+    userPreferences.form_state = state;
+    
     try {
         localStorage.setItem(FORM_PERSIST_KEY, JSON.stringify(state));
     } catch (e) {
-        console.warn('Failed to persist form state:', e);
+        console.warn('Failed to persist form state to localStorage:', e);
+    }
+    
+    if (window.pywebview && pywebview.api && pywebview.api.set_preferences) {
+        pywebview.api.set_preferences(userPreferences);
     }
 }
 
 function restoreFormState() {
     try {
-        const raw = localStorage.getItem(FORM_PERSIST_KEY);
-        if (!raw) return;
-        const state = JSON.parse(raw);
+        let state = userPreferences.form_state;
+        if (!state || Object.keys(state).length === 0) {
+            const raw = localStorage.getItem(FORM_PERSIST_KEY);
+            if (raw) {
+                state = JSON.parse(raw);
+            }
+        }
+        if (!state) return;
         
         PERSISTED_FIELDS.forEach(field => {
             const el = document.getElementById(field.id);
@@ -1888,4 +1956,8 @@ function handleTerminalPaste(text) {
     } else if (!sshConnected) {
         term.write(text);
     }
+}
+
+function finishSetup() {
+    window.location.reload();
 }

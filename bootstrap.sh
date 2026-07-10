@@ -932,17 +932,51 @@ fi
 # ── 11. KACE Agent ────────────────────────────────────────────────────────────
 log_stage "KACE" "Installing KACE Agent"
 INSTALL_OK=0
+EXPECTED_HASH="281ae79ac40a324adc5ab8d276567289b56f8683bfed69fc15146d33212e2619"
+
 if [ "$(id -un)" != "$PRINTER_USER" ]; then
     # Running as a different user (e.g. root), switch to printer user context
-    if sudo -u "$PRINTER_USER" -i sh -c 'curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh -o /tmp/kace-install.sh && bash /tmp/kace-install.sh'; then
+    if sudo -u "$PRINTER_USER" -i env EXPECTED_HASH="$EXPECTED_HASH" sh -c '
+        tmp_script="/tmp/kace-install.sh"
+        rm -f "$tmp_script"
+        if curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh -o "$tmp_script"; then
+            actual_hash=$(sha256sum "$tmp_script" | cut -d" " -f1)
+            if [ "$actual_hash" = "$EXPECTED_HASH" ]; then
+                bash "$tmp_script"
+                status=$?
+                rm -f "$tmp_script"
+                exit $status
+            else
+                echo "Error: KACE agent script integrity check failed." >&2
+                echo "Expected: $EXPECTED_HASH" >&2
+                echo "Got:      $actual_hash" >&2
+                rm -f "$tmp_script"
+                exit 1
+            fi
+        fi
+        exit 1
+    '; then
         log_ok "KACE agent installed."
         INSTALL_OK=1
     fi
 else
     # Already running as printer user, run directly without sudo
-    if curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh -o /tmp/kace-install.sh && bash /tmp/kace-install.sh; then
-        log_ok "KACE agent installed."
-        INSTALL_OK=1
+    tmp_script="/tmp/kace-install.sh"
+    rm -f "$tmp_script"
+    if curl -sSL https://raw.githubusercontent.com/3D-uy/KACE/main/install.sh -o "$tmp_script"; then
+        actual_hash=$(sha256sum "$tmp_script" | cut -d" " -f1)
+        if [ "$actual_hash" = "$EXPECTED_HASH" ]; then
+            if bash "$tmp_script"; then
+                log_ok "KACE agent installed."
+                INSTALL_OK=1
+            fi
+            rm -f "$tmp_script"
+        else
+            echo "Error: KACE agent script integrity check failed." >&2
+            echo "Expected: $EXPECTED_HASH" >&2
+            echo "Got:      $actual_hash" >&2
+            rm -f "$tmp_script"
+        fi
     fi
 fi
 

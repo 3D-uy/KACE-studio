@@ -28,7 +28,7 @@
     <link rel="stylesheet" href="vendor/xterm/xterm.min.css">
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=2.2.1">
+    <link rel="stylesheet" href="style.css?v=2.2.3">
 </head>
 <body>
     <div class="app-container">
@@ -67,11 +67,6 @@
                 </div>
             </nav>
 
-            <div class="sidebar-footer" style="display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border-color); margin-top: auto;">
-                <button class="theme-toggle-btn" onclick="toggleTheme()" id="theme-toggle-btn" title="Toggle Light/Dark Mode" style="background: transparent; border: 1px solid var(--border-color); color: var(--text-secondary); border-radius: 8px; padding: 6px 8px; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s ease;">
-                    <i class="fa-solid fa-sun" id="theme-icon"></i> <span class="theme-text-lbl" id="theme-text">Light Mode</span>
-                </button>
-            </div>
         </aside>
 
         <!-- Vertical Progress Status Tracker Column -->
@@ -102,6 +97,15 @@
                     <span class="step-num">6</span>
                     <span class="step-label">Bootstrap</span>
                 </div>
+            </div>
+            
+            <div class="progress-footer">
+                <button class="progress-circle-btn" onclick="toggleTheme()" id="theme-toggle-btn" title="Toggle Light/Dark Mode">
+                    <i class="fa-solid fa-sun" id="theme-icon"></i>
+                </button>
+                <button class="progress-circle-btn" id="finish-btn" onclick="finishSetup()" title="Finish Setup" disabled>
+                    <i class="fa-solid fa-check"></i>
+                </button>
             </div>
         </div>
 
@@ -290,8 +294,8 @@
                                 </select>
                             </div>
                         </div>
-                        <div style="display: flex; justify-content: flex-end; margin-top: 24px;">
-                            <button type="button" class="btn btn-primary" onclick="switchTab('credentials-tab')" style="padding: 10px 24px;">
+                        <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+                            <button type="button" class="btn btn-primary" onclick="switchTab('credentials-tab')" style="padding: 8px 24px;">
                                 Next <i class="fa-solid fa-arrow-right" style="margin-left: 6px;"></i>
                             </button>
                         </div>
@@ -384,39 +388,33 @@
                     <p>Search the local network for the booted KACE node and establish a connection.</p>
                 </div>
 
-                <div class="grid-2">
-                    <div class="card">
-                        <h3>Auto-Discovery Scan</h3>
-                        <p class="sub-text">Scanning local network subnet using mDNS and fast port checking.</p>
-                        
-                        <div class="scanning-wrapper" id="scanner-visual">
-                            <div class="pulse-ring"></div>
-                            <i class="fa-solid fa-radar-screen pulse-icon"></i>
-                            <span id="scan-status-text">Searching network...</span>
+                <div class="card">
+                    <div class="discovery-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+                        <h3 style="margin-bottom: 0; font-size: 18px; font-weight: 600;">Discovered Nodes</h3>
+                        <div style="display: flex; align-items: center; gap: 16px;">
+                            <span id="scan-status-text" style="font-size: 13px; color: var(--text-secondary); font-weight: 500;"></span>
+                            <button class="btn btn-primary" onclick="triggerScan()" style="padding: 8px 20px;">
+                                <i class="fa-solid fa-magnifying-glass"></i> Scan Subnet Now
+                            </button>
                         </div>
-                        
-                        <button class="btn btn-secondary btn-block" onclick="triggerScan()">
-                            <i class="fa-solid fa-magnifying-glass"></i> Scan Subnet Now
-                        </button>
                     </div>
 
-                    <div class="card">
-                        <h3>Discovered Nodes</h3>
-                        <div class="device-list" id="discovered-device-list">
-                            <div class="list-empty">
-                                <i class="fa-solid fa-hourglass-start"></i> No active nodes located yet.
-                            </div>
+                    <div class="device-list" id="discovered-device-list">
+                        <div class="list-empty">
+                            <i class="fa-solid fa-hourglass-start"></i> No active nodes located yet. Click Scan Subnet above to scan.
                         </div>
-                        
-                        <div class="manual-connection-area">
-                            <h4>Manual Connection</h4>
-                            <div class="form-group">
-                                <label for="manual-ip">Device IP / Hostname</label>
-                                <input type="text" id="manual-ip" placeholder="e.g. 192.168.1.50 or kace.local">
+                    </div>
+                    
+                    <div class="manual-connection-area" style="margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border-color);">
+                        <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">Manual Connection</h4>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label for="manual-ip" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px;">Device IP / Hostname</label>
+                            <div class="input-row" style="display: flex; gap: 12px;">
+                                <input type="text" id="manual-ip" placeholder="e.g. 192.168.1.50 or kace.local" style="flex-grow: 1;">
+                                <button class="btn btn-secondary" onclick="connectManually()" style="white-space: nowrap; padding: 0 24px;">
+                                    Connect to Target
+                                </button>
                             </div>
-                            <button class="btn btn-secondary btn-block" onclick="connectManually()">
-                                Connect to Target
-                            </button>
                         </div>
                     </div>
                 </div>
@@ -587,6 +585,6 @@
         <button onclick="terminalContextMenuAction('clear')"><i class="fa-solid fa-trash-can"></i> Clear</button>
     </div>
 
-    <script src="app.js?v=2.2.1"></script>
+    <script src="app.js?v=2.2.3"></script>
 </body>
 </html>

@@ -120,6 +120,7 @@ class Api:
         self._flash_cancel_event = threading.Event()
         # INFO-02 FIX: Timestamp for scan rate-limiting (one scan per 10 seconds max).
         self._last_scan_time = 0.0
+        self._prefs_path = os.path.join(os.path.expanduser("~"), ".kace-studio", "prefs.json")
 
     def set_window(self, window):
         self._window = window
@@ -483,12 +484,21 @@ class Api:
         import urllib.request
         import ssl
         import time as _time
+        import shutil
 
         if not redirected_url:
             raise ValueError("Cannot resolve download URL and no cached image is available.")
 
-        self.set_device_state("FLASHING", 0, "Downloading latest official Raspberry Pi OS Lite...")
         cache_dir = os.path.dirname(cached_xz)
+        
+        # Check disk space (require at least 5 GB free)
+        free_bytes = shutil.disk_usage(cache_dir).free
+        if free_bytes < 5 * 1024 ** 3:
+            raise ValueError(
+                f"Not enough disk space: {free_bytes // 1024**2} MB available, ~5 GB required."
+            )
+
+        self.set_device_state("FLASHING", 0, "Downloading latest official Raspberry Pi OS Lite...")
         temp_xz = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}_temp.img.xz")
 
         req_dl = urllib.request.Request(
@@ -788,10 +798,11 @@ class Api:
                     self.set_device_state("ERROR", 0, f"SSH Host Key Mismatch for {ip}.")
             return {"status": "host_key_mismatch", "message": str(host_key_err)}
         except Exception as conn_err:
+            sanitized_msg = self._sanitize_error(conn_err)
             with self._ssh_lock:
                 if current_gen == self._ssh_gen:
-                    self.set_device_state("ERROR", 0, f"SSH connection failed: {conn_err}")
-            return {"status": "failed", "message": str(conn_err)}
+                    self.set_device_state("ERROR", 0, f"SSH connection failed: {sanitized_msg}")
+            return {"status": "failed", "message": sanitized_msg}
 
         if success:
             # Check if Moonraker port (7125) is open to distinguish SSH_READY vs BOOTSTRAPPED
@@ -924,6 +935,42 @@ class Api:
                 return False
                 
         return self._ssh.download_file(remote_path, chosen_path)
+
+    def get_preferences(self) -> dict:
+        """
+        Reads user preferences from a local file, falling back to defaults.
+        """
+        defaults = {
+            "theme": "dark",
+            "kace_auto_scan": True,
+            "form_state": {}
+        }
+        try:
+            if os.path.exists(self._prefs_path):
+                with open(self._prefs_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        # Merge default values for missing keys
+                        for k, v in defaults.items():
+                            if k not in data:
+                                data[k] = v
+                        return data
+        except Exception as e:
+            print(f"Error reading preferences: {e}", file=sys.stderr)
+        return defaults
+
+    def set_preferences(self, prefs: dict) -> bool:
+        """
+        Writes user preferences to a local file.
+        """
+        try:
+            os.makedirs(os.path.dirname(self._prefs_path), exist_ok=True)
+            with open(self._prefs_path, "w", encoding="utf-8") as f:
+                json.dump(prefs, f, indent=2)
+            return True
+        except Exception as e:
+            print(f"Error saving preferences: {e}", file=sys.stderr)
+            return False
 
 def main():
     api = Api()

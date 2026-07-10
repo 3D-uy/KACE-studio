@@ -1,5 +1,7 @@
 import socket
 import concurrent.futures
+import urllib.request
+import json
 from typing import List, Dict
 
 
@@ -109,30 +111,52 @@ def get_local_subnet_ips() -> List[str]:
             ips.append(f"192.168.1.{i}")
     return ips
 
+def check_klipper(ip: str) -> bool:
+    """
+    Checks if Klipper is running/configured on the device by querying Moonraker's /printer/info endpoint.
+    """
+    try:
+        url = f"http://{ip}:7125/printer/info"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=0.5) as response:
+            if response.status == 200:
+                data = json.loads(response.read().decode('utf-8'))
+                if "result" in data and "state" in data["result"]:
+                    return True
+    except Exception:
+        pass
+    return False
+
 def scan_network(custom_subnet_ips: List[str] = None) -> List[Dict]:
     """
-    Scans the local network concurrently for active SSH and Moonraker ports.
+    Scans the local network concurrently for active SSH, Moonraker, and Crowsnest ports.
     Returns a list of discovered devices.
     """
     discovered = []
     ips_to_scan = custom_subnet_ips if custom_subnet_ips is not None else get_local_subnet_ips()
     
     # We use a ThreadPoolExecutor for fast parallel socket probing
-    # 50 threads can scan 254 IPs on two ports in ~2-3 seconds with a 0.5s timeout
+    # 50 threads can scan 254 IPs on three ports in ~2-3 seconds with a 0.5s timeout
     max_workers = 60
     
     def worker(ip: str):
-        ports_status = probe_ip_ports(ip)
+        ports_status = probe_ip_ports(ip, [22, 7125, 8080])
         ssh_open = ports_status.get(22, False)
         moonraker_open = ports_status.get(7125, False)
+        crowsnest_open = ports_status.get(8080, False)
         
         if ssh_open or moonraker_open:
             hostname = _reverse_dns(ip, timeout=0.5, default="kace-discovered.local")
+            klipper_detected = False
+            if moonraker_open:
+                klipper_detected = check_klipper(ip)
             return {
                 "ip": ip,
                 "hostname": hostname,
                 "ssh": ssh_open,
-                "moonraker": moonraker_open
+                "moonraker": moonraker_open,
+                "klipper": klipper_detected,
+                "crowsnest": crowsnest_open
             }
         return None
 
@@ -146,7 +170,7 @@ def scan_network(custom_subnet_ips: List[str] = None) -> List[Dict]:
 
 def probe_manual_ip(ip: str) -> dict:
     """
-    Probes SSH and Moonraker ports on a single manual IP to check if it's active.
+    Probes SSH, Moonraker, and Crowsnest ports on a single manual IP to check if it's active.
     Supports custom ports specified in the format IP:PORT (e.g. 127.0.0.1:2222).
     """
     target_ip = ip
@@ -159,17 +183,23 @@ def probe_manual_ip(ip: str) -> dict:
         except ValueError:
             pass
             
-    ports_status = probe_ip_ports(target_ip, [ssh_port, 7125], timeout=1.0)
+    ports_status = probe_ip_ports(target_ip, [ssh_port, 7125, 8080], timeout=1.0)
     ssh_open = ports_status.get(ssh_port, False)
     moonraker_open = ports_status.get(7125, False)
+    crowsnest_open = ports_status.get(8080, False)
     
     if ssh_open or moonraker_open:
         hostname = _reverse_dns(target_ip, timeout=1.0, default="kace-manual.local")
+        klipper_detected = False
+        if moonraker_open:
+            klipper_detected = check_klipper(target_ip)
         return {
             "ip": ip,
             "hostname": hostname,
             "ssh": ssh_open,
-            "moonraker": moonraker_open
+            "moonraker": moonraker_open,
+            "klipper": klipper_detected,
+            "crowsnest": crowsnest_open
         }
     return None
 
