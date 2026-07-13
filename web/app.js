@@ -1,6 +1,7 @@
 // KACE Desktop Web App logic
 
 let activeTab = 'imager-tab';
+let lastFlashedDriveId = null;
 let term = null;
 let fitAddon = null;
 let searchAddon = null;
@@ -439,6 +440,50 @@ function closeSuccessModal() {
     document.getElementById('success-modal').style.display = 'none';
 }
 
+function ejectFlashedDrive() {
+    if (lastFlashedDriveId === null) {
+        alert("No drive selection available to eject.");
+        return;
+    }
+    const ejectBtn = document.getElementById('eject-btn');
+    if (ejectBtn) {
+        ejectBtn.disabled = true;
+        ejectBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Ejecting...';
+    }
+    
+    if (window.pywebview && pywebview.api && pywebview.api.eject_drive) {
+        pywebview.api.eject_drive(parseInt(lastFlashedDriveId))
+            .then(res => {
+                if (res && res.success) {
+                    if (ejectBtn) {
+                        ejectBtn.className = "btn btn-success";
+                        ejectBtn.innerHTML = '<i class="fa-solid fa-check"></i> Ejected Successfully';
+                    }
+                    refreshDrives();
+                } else {
+                    alert("Error ejecting drive: " + (res.error || "Unknown error"));
+                    if (ejectBtn) {
+                        ejectBtn.disabled = false;
+                        ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
+                    }
+                }
+            })
+            .catch(err => {
+                alert("Failed to eject drive: " + err);
+                if (ejectBtn) {
+                    ejectBtn.disabled = false;
+                    ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
+                }
+            });
+    } else {
+        alert("Eject is only supported on Windows Desktop mode.");
+        if (ejectBtn) {
+            ejectBtn.disabled = false;
+            ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
+        }
+    }
+}
+
 function confirmAndFlash() {
     closeFormatModal();
     startFlashing();
@@ -447,6 +492,7 @@ function confirmAndFlash() {
 function startFlashing() {
     const driveSelect = document.getElementById('drive-select');
     const driveId = driveSelect.value;
+    lastFlashedDriveId = driveId;
     
     // Hardware, OS & Arch
     const piModel = document.getElementById('pi-model-select').value;
@@ -585,6 +631,12 @@ window.updateDeviceState = function(state, progress, message) {
             const progressFillDone = document.getElementById('btn-progress-fill');
             if (progressFillDone) progressFillDone.style.width = '0%';
             
+            const ejectBtn = document.getElementById('eject-btn');
+            if (ejectBtn) {
+                ejectBtn.disabled = false;
+                ejectBtn.className = "btn btn-secondary";
+                ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
+            }
             document.getElementById('success-modal').style.display = 'flex';
             
             // Hide cancel button

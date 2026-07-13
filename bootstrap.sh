@@ -44,25 +44,17 @@ wait_for_apt_locks() {
         local locked=0
         if pgrep -f "apt-get|dpkg|unattended-upgrades" >/dev/null 2>&1; then
             locked=1
-        elif ps aux 2>/dev/null | grep -v grep | grep -E "apt-get|dpkg|unattended-upgrades" >/dev/null 2>&1; then
-            locked=1
         fi
         
-        # Python-based fcntl lock check on all standard apt/dpkg lock files
-        if [ $locked -eq 0 ] && command -v python3 >/dev/null 2>&1; then
-            if ! $SUDO python3 -c '
-import fcntl, sys, os
-for fpath in ["/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock", "/var/lib/apt/lists/lock", "/var/cache/apt/archives/lock"]:
-    if os.path.exists(fpath):
-        try:
-            f = open(fpath, "a")
-            fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            f.close()
-        except (BlockingIOError, PermissionError):
-            sys.exit(1)
-' >/dev/null 2>&1; then
-                locked=1
-            fi
+        # Check file locks on standard apt/dpkg lock files using flock (no interpreter overhead)
+        if [ $locked -eq 0 ]; then
+            for _lockfile in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock \
+                             /var/lib/apt/lists/lock /var/cache/apt/archives/lock; do
+                if [ -f "$_lockfile" ] && ! $SUDO flock -n "$_lockfile" true 2>/dev/null; then
+                    locked=1
+                    break
+                fi
+            done
         fi
         
         if [ $locked -eq 0 ]; then
@@ -77,10 +69,59 @@ for fpath in ["/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock", "/var/lib/apt
     echo "Warning: package locks were not released after 5 minutes. Proceeding anyway..."
 }
 
+# ── Camera Hardware Detection ────────────────────────────────────────────────
+# Returns 0 (true) if any physical camera is detected, 1 (false) otherwise.
+#
+# Three detection layers are attempted in order:
+#   1. USB/UVC cameras  — checks /dev/v4l/by-id/ (udev only populates this for
+#      real devices; BCM2835 VPU codec nodes are NOT symlinked here, so no
+#      false positives from the Raspberry Pi's built-in video codecs).
+#   2. Modern CSI cameras — libcamera-hello --list-cameras (Pi Camera v2/v3,
+#      Arducam IMX519, etc. on the libcamera stack).
+#   3. Legacy CSI cameras — vcgencmd get_camera (Pi Camera v1 on legacy MMAL).
+#
+# This function is idempotent: safe to call multiple times in a run.
+detect_camera_hardware() {
+    # 1. USB / UVC webcams
+    if [ -d /dev/v4l/by-id ] && [ "$(ls -A /dev/v4l/by-id 2>/dev/null)" ]; then
+        echo "Camera detected via /dev/v4l/by-id."
+        return 0
+    fi
+
+    # 2. Modern CSI cameras (libcamera stack)
+    if command -v libcamera-hello &>/dev/null; then
+        if libcamera-hello --list-cameras 2>/dev/null | grep -q -E '^[0-9]+\s*:'  ; then
+            echo "Camera detected via libcamera-hello."
+            return 0
+        fi
+    fi
+
+    # 3. Legacy CSI cameras (MMAL/vcgencmd stack)
+    if command -v vcgencmd &>/dev/null; then
+        if vcgencmd get_camera 2>/dev/null | grep -q -E 'detected=1'; then
+            echo "Camera detected via vcgencmd."
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 # ── Privileges & Logging ─────────────────────────────────────────────────────
 SUDO=""
 if [ "$EUID" -ne 0 ]; then
     SUDO="sudo"
+fi
+
+# Fix local hostname resolution if missing (prevents "sudo: unable to resolve host" warnings)
+if command -v getent &>/dev/null && command -v hostname &>/dev/null; then
+    _HOSTNAME=$(hostname)
+    if [ -n "$_HOSTNAME" ] && ! getent hosts "$_HOSTNAME" &>/dev/null; then
+        echo -e "${C_YELLOW}⚠  Local hostname '${_HOSTNAME}' is not resolvable.${C_RESET}"
+        echo "Attempting to add '${_HOSTNAME}' to /etc/hosts to prevent sudo warnings..."
+        echo "127.0.1.1 $_HOSTNAME" | $SUDO tee -a /etc/hosts >/dev/null
+        echo -e "${C_GREEN}✔  Added ${_HOSTNAME} to /etc/hosts${C_RESET}"
+    fi
 fi
 
 LOG_FILE=""
@@ -146,23 +187,21 @@ fi
 if [ -n "$BOOT_CFG" ]; then
     echo "Loaded configurations from $BOOT_CFG"
 
-    FILE_DASHBOARD=$(grep -E "^DASHBOARD=" "$BOOT_CFG" | cut -d'=' -f2 || true)
-    FILE_CROWSNEST=$(grep -E "^CROWSNEST=" "$BOOT_CFG" | cut -d'=' -f2 || true)
-    FILE_TIMEZONE=$(grep -E "^TIMEZONE="  "$BOOT_CFG" | cut -d'=' -f2 || true)
-    FILE_PREBAKED=$(grep -E "^PREBAKED="  "$BOOT_CFG" | cut -d'=' -f2 || true)
+    # Parse boot config in a single pass (avoids 4× file open + grep + cut chains)
+    FILE_DASHBOARD="" FILE_CROWSNEST="" FILE_TIMEZONE="" FILE_PREBAKED=""
+    while IFS='=' read -r key value; do
+        case "$key" in
+            DASHBOARD) FILE_DASHBOARD="$value" ;;
+            CROWSNEST) FILE_CROWSNEST="$value" ;;
+            TIMEZONE)  FILE_TIMEZONE="$value"  ;;
+            PREBAKED)  FILE_PREBAKED="$value"   ;;
+        esac
+    done < "$BOOT_CFG"
 
-    if [ -z "$DASHBOARD" ]; then
-        DASHBOARD="$FILE_DASHBOARD"
-    fi
-    if [ -z "$CROWSNEST" ]; then
-        CROWSNEST="$FILE_CROWSNEST"
-    fi
-    if [ -z "$TIMEZONE" ]; then
-        TIMEZONE="$FILE_TIMEZONE"
-    fi
-    if [ -z "$PREBAKED" ]; then
-        PREBAKED="$FILE_PREBAKED"
-    fi
+    DASHBOARD="${DASHBOARD:-$FILE_DASHBOARD}"
+    CROWSNEST="${CROWSNEST:-$FILE_CROWSNEST}"
+    TIMEZONE="${TIMEZONE:-$FILE_TIMEZONE}"
+    PREBAKED="${PREBAKED:-$FILE_PREBAKED}"
     
     # Securely remove sensitive credentials / file after reading
     # Overwrite first to prevent forensic recovery of clean-text parameters
@@ -289,7 +328,7 @@ else
         sudo -u "$PRINTER_USER" git clone https://github.com/Klipper3d/klipper.git "$PRINTER_HOME/klipper"
     else
         echo "Klipper repository already exists. Updating..."
-        pushd "$PRINTER_HOME/klipper" > /dev/null && sudo -u "$PRINTER_USER" git pull && popd > /dev/null
+        (cd "$PRINTER_HOME/klipper" && sudo -u "$PRINTER_USER" git pull)
     fi
 
     if [ ! -f "$PRINTER_HOME/klipper/scripts/install-debian.sh" ]; then
@@ -324,8 +363,6 @@ ExecStart=$PRINTER_HOME/klippy-env/bin/python $PRINTER_HOME/klipper/klippy/klipp
     -a $PRINTER_HOME/printer_data/comms/klippy.sock
 EOF
     mkdir -p "$PRINTER_HOME/printer_data/logs" 2>/dev/null || $SUDO mkdir -p "$PRINTER_HOME/printer_data/logs"
-    $SUDO chown -R "$PRINTER_USER:$PRINTER_GROUP" "$PRINTER_HOME/printer_data"
-    $SUDO systemctl daemon-reload
     log_ok "Klipper service patched: using printer_data/config/printer.cfg and klippy.sock."
 fi
 
@@ -339,7 +376,7 @@ else
         sudo -u "$PRINTER_USER" git clone https://github.com/Arksine/moonraker.git "$PRINTER_HOME/moonraker"
     else
         echo "Moonraker repository already exists. Updating..."
-        pushd "$PRINTER_HOME/moonraker" > /dev/null && sudo -u "$PRINTER_USER" git pull && popd > /dev/null
+        (cd "$PRINTER_HOME/moonraker" && sudo -u "$PRINTER_USER" git pull)
     fi
 
     if [ ! -f "$PRINTER_HOME/moonraker/scripts/install-moonraker.sh" ]; then
@@ -376,7 +413,6 @@ Wants=klipper.service
 [Service]
 ExecStartPre=/bin/sleep 5
 EOF
-$SUDO systemctl daemon-reload
 log_ok "Moonraker boot-order optimization applied (starts 5s after Klipper)."
 
 # ── 5. Printer Data Directories & Config Files ───────────────────────────────
@@ -812,40 +848,32 @@ patch_systemd_services() {
 
             for f in "$svc_file" "$dropin_dir"/*.conf; do
                 [ -f "$f" ] || continue
-                local changed=0
 
-                if grep -q "/home/mainsail/" "$f" 2>/dev/null; then
-                    $SUDO sed -i "s|/home/mainsail/|${target_home}/|g" "$f"
-                    echo "  Patched /home/mainsail/ in $f"
-                    changed=1
+                # Snapshot, apply all substitutions in a single sed pass,
+                # then compare hashes to detect actual changes.
+                local before_hash
+                before_hash=$(md5sum "$f" 2>/dev/null | cut -d' ' -f1)
+
+                $SUDO sed -i \
+                    -e "s|/home/mainsail/|${target_home}/|g" \
+                    -e "s|/home/pi/|${target_home}/|g" \
+                    -e "s|^User=mainsail|User=${target_user}|" \
+                    -e "s|^Group=mainsail|Group=${target_group}|" \
+                    "$f"
+
+                local after_hash
+                after_hash=$(md5sum "$f" 2>/dev/null | cut -d' ' -f1)
+
+                if [ "$before_hash" != "$after_hash" ]; then
+                    echo "  Patched $f"
+                    patched=1
                 fi
-
-                if grep -q "/home/pi/" "$f" 2>/dev/null; then
-                    $SUDO sed -i "s|/home/pi/|${target_home}/|g" "$f"
-                    echo "  Patched /home/pi/ in $f"
-                    changed=1
-                fi
-
-                if grep -qE "^User=mainsail" "$f" 2>/dev/null; then
-                    $SUDO sed -i "s|^User=mainsail|User=${target_user}|g" "$f"
-                    echo "  Patched User= in $f"
-                    changed=1
-                fi
-
-                if grep -qE "^Group=mainsail" "$f" 2>/dev/null; then
-                    $SUDO sed -i "s|^Group=mainsail|Group=${target_group}|g" "$f"
-                    echo "  Patched Group= in $f"
-                    changed=1
-                fi
-
-                [ "$changed" -eq 1 ] && patched=1
             done
         done
     done
 
     if [ "$patched" -eq 1 ]; then
-        $SUDO systemctl daemon-reload
-        log_ok "Systemd service files patched and daemon reloaded."
+        log_ok "Systemd service files patched."
     else
         log_ok "No systemd path mismatches found. Nothing to patch."
     fi
@@ -855,6 +883,9 @@ patch_systemd_services
 
 # ── 10. Start Services ────────────────────────────────────────────────────────
 log_stage "SERVICES" "Starting Klipper & Moonraker Services"
+# Single daemon-reload for all preceding drop-in and unit file changes
+# (Klipper override, Moonraker boot-order, systemd path patches).
+$SUDO systemctl daemon-reload
 $SUDO systemctl restart klipper   || true
 $SUDO systemctl restart moonraker || true
 if [ "$PREBAKED" = "false" ] || [ "$DASHBOARD" = "both" ]; then
@@ -885,23 +916,25 @@ max_fps: 15
 EOF
             $SUDO chown "${PRINTER_USER}:${PRINTER_GROUP}" "$PRINTER_HOME/printer_data/config/crowsnest.conf"
         fi
-        $SUDO systemctl restart crowsnest || true
         log_ok "Crowsnest configured."
     else
         log_stage "CROWSNEST" "Installing Crowsnest Webcam Streamer"
         if [ ! -d "$PRINTER_HOME/crowsnest" ]; then
             sudo -u "$PRINTER_USER" git clone https://github.com/mainsail-crew/crowsnest.git "$PRINTER_HOME/crowsnest"
         else
-            pushd "$PRINTER_HOME/crowsnest" > /dev/null && sudo -u "$PRINTER_USER" git pull && popd > /dev/null
+            (cd "$PRINTER_HOME/crowsnest" && sudo -u "$PRINTER_USER" git pull)
         fi
         if [ ! -f "$PRINTER_HOME/crowsnest/tools/install.sh" ]; then
             log_err "Crowsnest install script not found."
             exit 1
         fi
-        pushd "$PRINTER_HOME/crowsnest" > /dev/null
-        wait_for_apt_locks
-        sudo -E env CROWSNEST_UNATTENDED=1 CROWSNEST_SKIP_REBOOT_PROMPT=1 ./tools/install.sh
-        popd > /dev/null
+        (
+            cd "$PRINTER_HOME/crowsnest"
+            wait_for_apt_locks
+            if ! sudo -E env CROWSNEST_UNATTENDED=1 CROWSNEST_SKIP_REBOOT_PROMPT=1 ./tools/install.sh; then
+                log_warn "Crowsnest upstream installer returned an error. Continuing..."
+            fi
+        )
         log_ok "Crowsnest installed."
     fi
 
@@ -924,6 +957,24 @@ ExecStartPre=/bin/sleep 10
 EOF
     $SUDO systemctl daemon-reload
     log_ok "Crowsnest boot-order optimization applied (starts 10s after Moonraker)."
+
+    # Hardware-aware service enablement: only activate crowsnest if a physical
+    # camera (USB/UVC, modern CSI, or legacy CSI) is detected at bootstrap time.
+    # This prevents the systemd fail-restart loop (Restart=on-failure + RestartSec=30
+    # x StartLimitBurst=3) that wastes ~2 minutes of CPU on camera-less Pis.
+    # Idempotent: re-running bootstrap with a webcam plugged in will re-enable.
+    if detect_camera_hardware; then
+        $SUDO systemctl enable crowsnest.service >/dev/null 2>&1 || true
+        $SUDO systemctl restart crowsnest || true
+        log_ok "Camera hardware detected. Crowsnest service enabled and started."
+    else
+        $SUDO systemctl stop crowsnest >/dev/null 2>&1 || true
+        $SUDO systemctl disable crowsnest.service >/dev/null 2>&1 || true
+        log_warn "No physical camera detected. Crowsnest is installed but has been disabled"
+        log_warn "to prevent systemd restart loops and unnecessary boot-time CPU load."
+        log_warn "Connect a webcam and run the following to activate it:"
+        log_warn "  sudo systemctl enable --now crowsnest.service"
+    fi
 else
     log_stage "CROWSNEST" "Installing Crowsnest Webcam Streamer"
     log_ok "Crowsnest was not selected (skipped)."

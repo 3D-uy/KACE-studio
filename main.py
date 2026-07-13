@@ -189,6 +189,61 @@ class Api:
         self._flash_cancel_event.set()
         return True
 
+    def eject_drive(self, disk_number: int) -> dict:
+        """
+        Dismounts and ejects the specified disk number under Windows.
+        """
+        if not isinstance(disk_number, int):
+            try:
+                disk_number = int(disk_number)
+            except ValueError:
+                return {"success": False, "error": "Invalid disk number"}
+                
+        if sys.platform != "win32":
+            return {"success": False, "error": "Eject is only supported on Windows"}
+            
+        import subprocess
+        from backend.imager import SUBPROCESS_FLAGS
+        
+        # Get all partitions of DiskNumber that have a DriveLetter, and run Shell.Application Eject verb.
+        # Also offline/online the disk to ensure everything is flushed.
+        ps_cmd = f"""
+        $ErrorActionPreference = 'Stop'
+        try {{
+            $parts = Get-Partition -DiskNumber {disk_number} -ErrorAction SilentlyContinue
+            if ($parts) {{
+                $ejected = $false
+                foreach ($part in $parts) {{
+                    $letter = $part.DriveLetter
+                    if ($letter -and $letter -ne [char]0 -and $letter -ne "") {{
+                        $drive = "$($letter):"
+                        $shell = New-Object -ComObject Shell.Application
+                        $shell.Namespace(17).ParseName($drive).InvokeVerb("Eject")
+                        $ejected = $true
+                    }}
+                }}
+                if ($ejected) {{
+                    return "SUCCESS"
+                }}
+            }}
+            # Fallback to Set-Disk offline/online if no letters found to trigger cache flush
+            Set-Disk -Number {disk_number} -IsOffline $true -ErrorAction SilentlyContinue
+            Set-Disk -Number {disk_number} -IsOffline $false -ErrorAction SilentlyContinue
+            return "SUCCESS"
+        }} catch {{
+            return $_.Exception.Message
+        }}
+        """
+        try:
+            res = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True, encoding="utf-8", errors="replace", **SUBPROCESS_FLAGS)
+            if res.returncode == 0 and "SUCCESS" in res.stdout:
+                return {"success": True}
+            else:
+                err_msg = res.stdout.strip() or res.stderr.strip()
+                return {"success": False, "error": err_msg or "Failed to eject disk"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
