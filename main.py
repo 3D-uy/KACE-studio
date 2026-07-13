@@ -206,7 +206,8 @@ class Api:
         from backend.imager import SUBPROCESS_FLAGS
         
         # Get all partitions of DiskNumber that have a DriveLetter, and run Shell.Application Eject verb.
-        # Also offline/online the disk to ensure everything is flushed.
+        # Fallback to standard InvokeVerb if localized name is not resolved.
+        # Also nested try-catch block for Set-Disk so that permission errors for standard users are ignored.
         ps_cmd = f"""
         $ErrorActionPreference = 'Stop'
         try {{
@@ -218,17 +219,35 @@ class Api:
                     if ($letter -and $letter -ne [char]0 -and $letter -ne "") {{
                         $drive = "$($letter):"
                         $shell = New-Object -ComObject Shell.Application
-                        $shell.Namespace(17).ParseName($drive).InvokeVerb("Eject")
-                        $ejected = $true
+                        $folder = $shell.Namespace(17)
+                        if ($folder) {{
+                            $item = $folder.ParseName($drive)
+                            if ($item) {{
+                                # Regex-match common localized verbs for eject: Eject (EN), Expulsar (ES), Ejetar (PT), Éjecter (FR), Auswerfen (DE), etc.
+                                $verb = $item.Verbs() | Where-Object {{ $_.Name.Replace('&', '') -match '(?i)^(eject|expulsar|ejetar|éjecter|auswerfen|espelli|извлечь|uitwerpen)' }} | Select-Object -First 1
+                                if ($verb) {{
+                                    $verb.DoIt()
+                                    $ejected = $true
+                                }} else {{
+                                    # Safe fallbacks using standard verb calls
+                                    $item.InvokeVerb("Eject")
+                                    $item.InvokeVerb("Expulsar")
+                                    $ejected = $true
+                                }}
+                            }}
+                        }}
                     }}
                 }}
                 if ($ejected) {{
                     return "SUCCESS"
                 }}
             }}
-            # Fallback to Set-Disk offline/online if no letters found to trigger cache flush
-            Set-Disk -Number {disk_number} -IsOffline $true -ErrorAction SilentlyContinue
-            Set-Disk -Number {disk_number} -IsOffline $false -ErrorAction SilentlyContinue
+            # Fallback to Set-Disk offline/online if no letters found to trigger cache flush.
+            # Wrapped in a nested try-catch so permission errors for standard users are ignored.
+            try {{
+                Set-Disk -Number {disk_number} -IsOffline $true -ErrorAction Stop
+                Set-Disk -Number {disk_number} -IsOffline $false -ErrorAction Stop
+            }} catch {{}}
             return "SUCCESS"
         }} catch {{
             return $_.Exception.Message
