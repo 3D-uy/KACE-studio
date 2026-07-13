@@ -692,8 +692,8 @@ else
     NGINX_CONF="/etc/nginx/sites-available/kace-printer"
 
     # Check if IPv6 is supported by checking if /proc/net/if_inet6 exists
-    local listen_ipv6=""
-    local listen_ipv6_81=""
+    listen_ipv6=""
+    listen_ipv6_81=""
     if [ -f /proc/net/if_inet6 ]; then
         listen_ipv6="listen [::]:80 default_server;"
         listen_ipv6_81="listen [::]:81 default_server;"
