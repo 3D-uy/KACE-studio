@@ -690,13 +690,21 @@ if [ "$PREBAKED" = "true" ] && [ "$DASHBOARD" != "both" ]; then
     log_ok "Nginx already configured on pre-baked image (skipped)."
 else
     NGINX_CONF="/etc/nginx/sites-available/kace-printer"
+
+    # Check if IPv6 is supported by checking if /proc/net/if_inet6 exists
+    local listen_ipv6=""
+    local listen_ipv6_81=""
+    if [ -f /proc/net/if_inet6 ]; then
+        listen_ipv6="listen [::]:80 default_server;"
+        listen_ipv6_81="listen [::]:81 default_server;"
+    fi
     
     if [ "$DEFAULT_UI" = "both" ]; then
         # Configure Nginx for both: Mainsail on port 80, Fluidd on port 81
         $SUDO tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 80 default_server;
-    listen [::]:80 default_server;
+    $listen_ipv6
 
     root /var/www/mainsail;
     index index.html;
@@ -729,7 +737,7 @@ server {
 
 server {
     listen 81 default_server;
-    listen [::]:81 default_server;
+    $listen_ipv6_81
 
     root /var/www/fluidd;
     index index.html;
@@ -775,7 +783,7 @@ EOF
         $SUDO tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 80 default_server;
-    listen [::]:80 default_server;
+    $listen_ipv6
 
     root /var/www/$TEMP_UI;
     index index.html;
@@ -813,13 +821,25 @@ upstream apiserver {
 EOF
     fi
 
+    # Stop potentially conflicting web servers to free up ports 80 and 81
+    $SUDO systemctl stop apache2 2>/dev/null || true
+    $SUDO systemctl disable apache2 2>/dev/null || true
+    $SUDO systemctl stop lighttpd 2>/dev/null || true
+    $SUDO systemctl disable lighttpd 2>/dev/null || true
+
+    # Link the new configuration and remove the default/conflicting configurations
+    $SUDO rm -f /etc/nginx/sites-enabled/default
+    $SUDO rm -f /etc/nginx/sites-enabled/kace-printer
+    $SUDO ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
+
+    # Test the final configuration (which now includes kace-printer and excludes default)
     if ! $SUDO nginx -t 2>&1; then
         log_err "Nginx configuration test failed. Aborting."
+        # Rollback symlink on failure to avoid leaving nginx in a broken state
+        $SUDO rm -f /etc/nginx/sites-enabled/kace-printer
         exit 1
     fi
 
-    $SUDO ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
-    $SUDO rm -f /etc/nginx/sites-enabled/default
     $SUDO systemctl restart nginx
     log_ok "Nginx configured and running."
 fi
