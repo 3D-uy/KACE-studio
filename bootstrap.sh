@@ -715,7 +715,7 @@ server {
     }
 
     location /websocket {
-        proxy_pass http://apiserver;
+        proxy_pass http://kace_apiserver;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -726,7 +726,7 @@ server {
     }
 
     location ~ ^/(printer|api|access|machine|server|files|history)(/.*)?$ {
-        proxy_pass http://apiserver;
+        proxy_pass http://kace_apiserver;
         proxy_http_version 1.1;
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -748,7 +748,7 @@ server {
     }
 
     location /websocket {
-        proxy_pass http://apiserver;
+        proxy_pass http://kace_apiserver;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -759,7 +759,7 @@ server {
     }
 
     location ~ ^/(printer|api|access|machine|server|files|history)(/.*)?$ {
-        proxy_pass http://apiserver;
+        proxy_pass http://kace_apiserver;
         proxy_http_version 1.1;
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -768,7 +768,7 @@ server {
     }
 }
 
-upstream apiserver {
+upstream kace_apiserver {
     ip_hash;
     server 127.0.0.1:7125;
 }
@@ -794,7 +794,7 @@ server {
     }
 
     location /websocket {
-        proxy_pass http://apiserver;
+        proxy_pass http://kace_apiserver;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -805,7 +805,7 @@ server {
     }
 
     location ~ ^/(printer|api|access|machine|server|files|history)(/.*)?$ {
-        proxy_pass http://apiserver;
+        proxy_pass http://kace_apiserver;
         proxy_http_version 1.1;
         proxy_set_header Host \$http_host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -814,7 +814,7 @@ server {
     }
 }
 
-upstream apiserver {
+upstream kace_apiserver {
     ip_hash;
     server 127.0.0.1:7125;
 }
