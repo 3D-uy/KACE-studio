@@ -202,16 +202,6 @@ if [ -n "$BOOT_CFG" ]; then
     CROWSNEST="${CROWSNEST:-$FILE_CROWSNEST}"
     TIMEZONE="${TIMEZONE:-$FILE_TIMEZONE}"
     PREBAKED="${PREBAKED:-$FILE_PREBAKED}"
-    
-    # Securely remove sensitive credentials / file after reading
-    # Overwrite first to prevent forensic recovery of clean-text parameters
-    if [ -n "$SUDO" ]; then
-        echo "CLEARED" | $SUDO tee "$BOOT_CFG" >/dev/null 2>/dev/null || true
-        $SUDO rm -f "$BOOT_CFG" 2>/dev/null || true
-    else
-        echo "CLEARED" > "$BOOT_CFG" 2>/dev/null || true
-        rm -f "$BOOT_CFG" 2>/dev/null || true
-    fi
 fi
 
 # ── Input Sanitization & Allowlist Validation ────────────────────────────────
@@ -1077,3 +1067,14 @@ echo "========================================================"
 echo "      Bootstrap complete! KACE Node is fully ready.     "
 echo "========================================================"
 echo -e "${C_RESET}"
+
+# ── Clean up bootstrap config ────────────────────────────────────────────────
+if [ -n "$BOOT_CFG" ] && [ -f "$BOOT_CFG" ]; then
+    if [ -n "$SUDO" ]; then
+        echo "CLEARED" | $SUDO tee "$BOOT_CFG" >/dev/null 2>/dev/null || true
+        $SUDO rm -f "$BOOT_CFG" 2>/dev/null || true
+    else
+        echo "CLEARED" > "$BOOT_CFG" 2>/dev/null || true
+        rm -f "$BOOT_CFG" 2>/dev/null || true
+    fi
+fi
