@@ -5,6 +5,15 @@ import os
 # Include project root in PATH
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Ensure bootstrap.sh exists locally for testing (pull from sibling KACE repository if missing)
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+bootstrap_dest = os.path.join(project_root, "bootstrap.sh")
+if not os.path.exists(bootstrap_dest):
+    sibling_bootstrap = os.path.abspath(os.path.join(project_root, "..", "KACE", "scripts", "bootstrap.sh"))
+    if os.path.exists(sibling_bootstrap):
+        import shutil
+        shutil.copy2(sibling_bootstrap, bootstrap_dest)
+
 from backend.sha512_crypt import hash_password
 from backend.discovery import get_local_subnet_ips, probe_ip_ports
 from backend.imager import DEFAULT_USERNAME, TIMEZONE_TO_COUNTRY, _get_country_from_timezone
@@ -1411,7 +1420,7 @@ class TestKaceBackend(unittest.TestCase):
                 self.assertIn("usermod -l", fr_content)          # login rename
                 self.assertIn("groupmod -n", fr_content)         # group rename
                 self.assertIn("ln -s", fr_content)               # compat symlink for venv shebangs
-                self.assertIn("klipper moonraker crowsnest", fr_content)  # targeted unit file patch
+                self.assertNotIn("klipper moonraker crowsnest", fr_content)  # service unit patch moved to bootstrap.sh
                 self.assertIn("chpasswd -e", fr_content)
                 self.assertIn("PasswordAuthentication yes", fr_content)
                 self.assertIn(".kace-firstrun-done", fr_content)

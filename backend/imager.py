@@ -824,33 +824,9 @@ else
     # c. Set the target user's password.
     echo "$TARGET_USER:$HASHED_PW" | chpasswd -e
 
-    # d. Rewrite User=/Group= in the known printer service unit files.
-    #    The symlink solves *path* references; systemd resolves User= via NSS at
-    #    runtime and will fail with "No such process" if the string is still the
-    #    old name. We only touch the three known units — no broad system sweep.
-    for svc in klipper moonraker crowsnest; do
-        for dir in /etc/systemd/system /lib/systemd/system /usr/lib/systemd/system; do
-            svc_file="$dir/$svc.service"
-            dropin_dir="$dir/$svc.service.d"
-            if [ -f "$svc_file" ]; then
-                sed -i \
-                    "s|^User=$SOURCE_USER$|User=$TARGET_USER|g;" \
-                    "s|^Group=$SOURCE_USER$|Group=$TARGET_USER|g" \
-                    "$svc_file"
-            fi
-            if [ -d "$dropin_dir" ]; then
-                for conf in "$dropin_dir"/*.conf; do
-                    [ -f "$conf" ] || continue
-                    sed -i \
-                        "s|^User=$SOURCE_USER$|User=$TARGET_USER|g;" \
-                        "s|^Group=$SOURCE_USER$|Group=$TARGET_USER|g" \
-                        "$conf"
-                done
-            fi
-        done
-    done
-
-    systemctl daemon-reload 2>/dev/null || true
+    # d. Systemd services (User=/Group= paths) will be patched during the bootstrap
+    #    phase by bootstrap.sh (owned by KACE), keeping the OS imager decoupled from
+    #    Klipper domain logic.
     echo "Renamed printer user '$SOURCE_USER' -> '$TARGET_USER', home /home/$TARGET_USER"
 fi
 
