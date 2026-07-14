@@ -82,6 +82,10 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
 
+    - name: Fetch Authoritative bootstrap.sh from KACE
+      run: |
+        python -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/3D-uy/KACE/main/scripts/bootstrap.sh', 'bootstrap.sh')"
+
     - name: Build Executable with PyInstaller
       run: |
         pyinstaller --clean -y main.spec
