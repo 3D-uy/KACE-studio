@@ -5,7 +5,7 @@ import os
 # Include project root in PATH
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Ensure bootstrap.sh exists locally for testing (pull from sibling KACE repository if missing)
+# Ensure bootstrap.sh exists locally for testing (pull from sibling KACE repository or create dummy if missing)
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 bootstrap_dest = os.path.join(project_root, "bootstrap.sh")
 if not os.path.exists(bootstrap_dest):
@@ -13,6 +13,34 @@ if not os.path.exists(bootstrap_dest):
     if os.path.exists(sibling_bootstrap):
         import shutil
         shutil.copy2(sibling_bootstrap, bootstrap_dest)
+    else:
+        # Create a mock bootstrap.sh that mimics the configuration print statements expected
+        # by the backend tests. This keeps the test suite completely self-contained for CI runners.
+        mock_content = (
+            "#!/bin/bash\n"
+            "DASHBOARD=\"mainsail\"\n"
+            "CROWSNEST=\"false\"\n"
+            "TIMEZONE=\"\"\n"
+            "\n"
+            "while [[ \"$#\" -gt 0 ]]; do\n"
+            "    case $1 in\n"
+            "        --dashboard) DASHBOARD=\"$2\"; shift ;;\n"
+            "        --crowsnest) CROWSNEST=\"$2\"; shift ;;\n"
+            "        --timezone)  TIMEZONE=\"$2\";  shift ;;\n"
+            "    esac\n"
+            "    shift\n"
+            "done\n"
+            "\n"
+            "echo \"--------------------------------------------------------\"\n"
+            "echo \"  Target Configuration\"\n"
+            "echo \"  Dashboard UI : $DASHBOARD\"\n"
+            "echo \"  Webcam Stream: $CROWSNEST\"\n"
+            "echo \"  Timezone     : ${TIMEZONE:-'(Keep system default)'}\"\n"
+            "echo \"--------------------------------------------------------\"\n"
+            "exit 0\n"
+        )
+        with open(bootstrap_dest, "w", encoding="utf-8", newline="\n") as f:
+            f.write(mock_content)
 
 from backend.sha512_crypt import hash_password
 from backend.discovery import get_local_subnet_ips, probe_ip_ports
