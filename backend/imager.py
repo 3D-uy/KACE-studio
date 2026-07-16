@@ -1121,7 +1121,16 @@ fi
             if hasattr(sys, '_MEIPASS'):
                 local_bootstrap_src = os.path.join(sys._MEIPASS, "bootstrap.sh")
             else:
-                local_bootstrap_src = os.path.join(project_root, "bootstrap.sh")
+                # Developer source run: prefer the authoritative script from the sibling
+                # KACE repository if it is checked out alongside KACE-studio. This avoids
+                # deploying the test-generated mock stub (which tests may leave on disk).
+                sibling_path = os.path.abspath(
+                    os.path.join(project_root, "..", "KACE", "scripts", "bootstrap.sh")
+                )
+                if os.path.isfile(sibling_path):
+                    local_bootstrap_src = sibling_path
+                else:
+                    local_bootstrap_src = os.path.join(project_root, "bootstrap.sh")
 
             if os.path.exists(local_bootstrap_src):
                 git_hash = ""

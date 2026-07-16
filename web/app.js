@@ -777,6 +777,12 @@ function triggerScan() {
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.scan_network().then(devices => {
             if (visual) visual.classList.remove('scanning');
+            // Handle rate-limit signal returned by the backend
+            if (devices && !Array.isArray(devices) && devices.status === 'rate_limited') {
+                const wait = Math.ceil(devices.wait_seconds || 10);
+                text.textContent = `Scan rate-limited. Please wait ${wait}s before scanning again.`;
+                return;
+            }
             text.textContent = "Scan completed.";
             populateDevices(devices);
         }).catch(err => {
@@ -888,7 +894,14 @@ function connectManually() {
         alert("Invalid IP address or hostname format. Only letters, digits, dots, hyphens, and an optional :PORT are allowed.");
         return;
     }
-    
+
+    // Resolve the button by its ID (added to index.html as part of BUG-01 fix)
+    const btn = document.getElementById('manual-connect-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Probing...';
+    }
+
     const list = document.getElementById('discovered-device-list');
     // MED-01 FIX: Replace innerHTML template interpolation of the user-typed IP string
     // with safe DOM node construction. A crafted value like "<img onerror=alert(1)>"
@@ -902,11 +915,10 @@ function connectManually() {
     probeDiv.appendChild(probeIcon);
     probeDiv.appendChild(document.createTextNode(` Probing manual IP address ${ip}...`));
     list.appendChild(probeDiv);
-    
+
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.probe_device_ip(ip).then(device => {
-            btn.disabled = false;
-            btn.innerHTML = 'Connect to Target';
+            if (btn) { btn.disabled = false; btn.innerHTML = 'Connect to Target'; }
             if (device) {
                 populateDevices([device]);
             } else {
@@ -918,8 +930,7 @@ function connectManually() {
                 alert("IP Probe failed. Target device is not listening on SSH (22) or Moonraker (7125) ports.");
             }
         }).catch(err => {
-            btn.disabled = false;
-            btn.innerHTML = 'Connect to Target';
+            if (btn) { btn.disabled = false; btn.innerHTML = 'Connect to Target'; }
             list.innerHTML = '';
             const emptyDiv = document.createElement('div');
             emptyDiv.className = 'list-empty';
@@ -928,8 +939,7 @@ function connectManually() {
         });
     } else {
         setTimeout(() => {
-            btn.disabled = false;
-            btn.innerHTML = 'Connect to Target';
+            if (btn) { btn.disabled = false; btn.innerHTML = 'Connect to Target'; }
             populateDevices([{ ip: ip, hostname: "manual-node.local", ssh: true, moonraker: false, klipper: false, crowsnest: false }]);
         }, 1000);
     }

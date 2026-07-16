@@ -830,7 +830,7 @@ class Api:
         _MIN_SCAN_INTERVAL = 10.0  # seconds
         now = _time.monotonic()
         if now - self._last_scan_time < _MIN_SCAN_INTERVAL:
-            return []
+            return {"status": "rate_limited", "wait_seconds": _MIN_SCAN_INTERVAL - (now - self._last_scan_time)}
         self._last_scan_time = now
         return scan_network()
 
