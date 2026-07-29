@@ -20,7 +20,7 @@ function applyTheme(theme) {
     const body = document.body;
     const themeIcon = document.getElementById('theme-icon');
     const themeText = document.getElementById('theme-text');
-    
+
     if (theme === 'light') {
         body.classList.add('light-mode');
         if (themeIcon) themeIcon.className = 'fa-solid fa-moon';
@@ -35,19 +35,19 @@ function applyTheme(theme) {
 document.addEventListener('DOMContentLoaded', () => {
     // Initialize custom dropdown selectors
     initCustomDropdowns();
-    
+
     // Initialize real-time validation clearing listeners
     initValidationListeners();
-    
+
     // Restore saved form values from localStorage
     restoreFormState();
-    
+
     // Auto-detect timezone if not overridden by saved state
     autoDetectTimezone();
-    
+
     // Initialize form persistence listeners
     initFormPersistence();
-    
+
     // Check saved theme preferences (startup cache fallback)
     const savedTheme = localStorage.getItem('theme') || 'dark';
     applyTheme(savedTheme);
@@ -68,25 +68,25 @@ document.addEventListener('DOMContentLoaded', () => {
 window.addEventListener('pywebviewready', () => {
     console.log("PyWebView Python API connection established.");
     refreshDrives();
-    
+
     const FORM_PERSIST_KEY = 'kace_form_state';
-    
+
     if (window.pywebview && pywebview.api && pywebview.api.get_preferences) {
         pywebview.api.get_preferences().then(prefs => {
             if (prefs) {
                 userPreferences = prefs;
-                
+
                 // Rule: prefs.json always overwrites localStorage
                 localStorage.setItem('theme', prefs.theme || 'dark');
                 localStorage.setItem(FORM_PERSIST_KEY, JSON.stringify(prefs.form_state || {}));
                 localStorage.setItem('kace_auto_scan', prefs.kace_auto_scan !== false ? 'true' : 'false');
-                
+
                 // Apply theme from python preferences
                 applyTheme(prefs.theme || 'dark');
-                
+
                 // Sync form elements with python preferences
                 restoreFormState();
-                
+
                 // Trigger auto-scan based on python preferences
                 const autoScanPref = prefs.kace_auto_scan !== false;
                 if (autoScanPref) {
@@ -116,9 +116,9 @@ function switchTab(tabId) {
     document.querySelectorAll('.nav-item').forEach(btn => {
         btn.classList.remove('active');
     });
-    
+
     document.getElementById(tabId).classList.add('active');
-    
+
     // Highlight sidebar nav item
     if (tabId === 'imager-tab') {
         document.querySelector('.nav-item:nth-child(1)').classList.add('active');
@@ -133,9 +133,9 @@ function switchTab(tabId) {
             if (fitAddon) fitAddon.fit();
         }, 100);
     }
-    
+
     activeTab = tabId;
-    
+
     // Refresh SFTP Panel status
     refreshSftpBrowser();
 }
@@ -144,7 +144,7 @@ function switchTab(tabId) {
 function refreshDrives() {
     const driveSelect = document.getElementById('drive-select');
     driveSelect.innerHTML = '<option value="">Scanning for removable drives...</option>';
-    
+
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.get_drives().then((drives) => {
             driveSelect.innerHTML = '';
@@ -202,12 +202,12 @@ function browseLocalImage() {
 function showInputError(inputId, message) {
     const inputEl = document.getElementById(inputId);
     if (!inputEl) return;
-    
+
     inputEl.classList.add('input-error');
-    
+
     const targetContainer = inputEl.closest('.password-wrapper') || inputEl;
     const parent = targetContainer.parentNode;
-    
+
     // Create text label if not present, specific to this inputId
     let errorEl = parent.querySelector(`.error-message-label[data-for="${inputId}"]`);
     if (!errorEl) {
@@ -227,7 +227,7 @@ function showInputError(inputId, message) {
 function clearInputError(inputId) {
     const inputEl = document.getElementById(inputId);
     if (!inputEl) return;
-    
+
     inputEl.classList.remove('input-error');
     const targetContainer = inputEl.closest('.password-wrapper') || inputEl;
     const parent = targetContainer.parentNode;
@@ -237,10 +237,10 @@ function clearInputError(inputId) {
     }
 }
 
-window.togglePasswordVisibility = function(inputId, iconEl) {
+window.togglePasswordVisibility = function (inputId, iconEl) {
     const inputEl = document.getElementById(inputId);
     if (!inputEl) return;
-    
+
     if (inputEl.type === 'password') {
         inputEl.type = 'text';
         iconEl.classList.remove('fa-eye');
@@ -264,10 +264,10 @@ function clearInputErrors() {
 function validateSshPasswords() {
     const password = document.getElementById('ssh-password').value;
     const passwordConfirm = document.getElementById('ssh-password-confirm').value;
-    
+
     // Always clear the mismatch error on confirm first
     clearInputError('ssh-password-confirm');
-    
+
     // If confirmation is introduced and does not match, show error immediately
     if (passwordConfirm && password !== passwordConfirm) {
         showInputError('ssh-password-confirm', "User credentials passwords do not match.");
@@ -279,10 +279,10 @@ function validateSshPasswords() {
 function validateWifiPasswords() {
     const wifiPassword = document.getElementById('wifi-password').value;
     const wifiPasswordConfirm = document.getElementById('wifi-password-confirm').value;
-    
+
     // Always clear the mismatch error on confirm first
     clearInputError('wifi-password-confirm');
-    
+
     // If confirmation is introduced and does not match, show error immediately
     if (wifiPasswordConfirm && wifiPassword !== wifiPasswordConfirm) {
         showInputError('wifi-password-confirm', "Wi-Fi passwords do not match.");
@@ -340,7 +340,7 @@ function openFormatModal() {
     clearInputErrors();
     let hasErrors = false;
     let errTab = null;
-    
+
     const imageSource = document.getElementById('image-source-select').value;
     if (imageSource === 'custom') {
         const customPath = document.getElementById('custom-image-path').value.trim();
@@ -350,7 +350,7 @@ function openFormatModal() {
             if (!errTab) errTab = 'imager-tab';
         }
     }
-    
+
     const driveSelect = document.getElementById('drive-select');
     const driveId = driveSelect.value;
     if (!driveId) {
@@ -358,14 +358,14 @@ function openFormatModal() {
         hasErrors = true;
         if (!errTab) errTab = 'imager-tab';
     }
-    
+
     const hostname = document.getElementById('hostname-input').value.trim();
     if (!hostname) {
         showInputError('hostname-input', "Please specify a Hostname.");
         hasErrors = true;
         if (!errTab) errTab = 'imager-tab';
     }
-    
+
     // Step 7: User Credentials check
     const username = document.getElementById('ssh-username').value.trim();
     if (!username) {
@@ -390,12 +390,12 @@ function openFormatModal() {
         hasErrors = true;
         if (!errTab) errTab = 'credentials-tab';
     }
-    
+
     // Step 8: WiFi credentials check
     const wifiSsid = document.getElementById('wifi-ssid').value.trim();
     const wifiPassword = document.getElementById('wifi-password').value;
     const wifiPasswordConfirm = document.getElementById('wifi-password-confirm').value;
-    
+
     if (wifiSsid || wifiPassword || wifiPasswordConfirm) {
         if (!wifiSsid) {
             showInputError('wifi-ssid', "SSID is required when Wi-Fi passwords are provided.");
@@ -408,14 +408,14 @@ function openFormatModal() {
             if (!errTab) errTab = 'credentials-tab';
         }
     }
-    
+
     if (hasErrors) {
         if (errTab) {
             switchTab(errTab);
         }
         return;
     }
-    
+
     // Get drive name for display in modal
     const selectedOption = driveSelect.options[driveSelect.selectedIndex];
     // MED-02 FIX: Use createElement + textContent instead of innerHTML to neutralise
@@ -427,7 +427,7 @@ function openFormatModal() {
     strong.textContent = selectedOption.textContent;
     modalDriveName.appendChild(prefix);
     modalDriveName.appendChild(strong);
-    
+
     // Show step 10 modal
     document.getElementById('format-modal').style.display = 'flex';
 }
@@ -450,7 +450,7 @@ function ejectFlashedDrive() {
         ejectBtn.disabled = true;
         ejectBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Ejecting...';
     }
-    
+
     if (window.pywebview && pywebview.api && pywebview.api.eject_drive) {
         pywebview.api.eject_drive(parseInt(lastFlashedDriveId))
             .then(res => {
@@ -493,23 +493,23 @@ function startFlashing() {
     const driveSelect = document.getElementById('drive-select');
     const driveId = driveSelect.value;
     lastFlashedDriveId = driveId;
-    
+
     // Hardware, OS & Arch
     const piModel = document.getElementById('pi-model-select').value;
     const dashboardUi = document.getElementById('bootstrap-ui-select-imager').value;
     const osArch = document.getElementById('os-arch-select').value;
-    
+
     const hostname = document.getElementById('hostname-input').value.trim();
     const timezone = document.getElementById('timezone-select').value;
-    
+
     // Credentials
     const sshUsername = document.getElementById('ssh-username').value.trim() || 'kace';
     const sshPassword = document.getElementById('ssh-password').value;
-    
+
     // WiFi setup
     const wifiSsid = document.getElementById('wifi-ssid').value;
     const wifiPassword = document.getElementById('wifi-password').value;
-    
+
     // Services
     const sshEnabled = document.getElementById('ssh-enable').checked;
     const crowsnest = document.getElementById('crowsnest-enable').checked;
@@ -517,7 +517,7 @@ function startFlashing() {
     // Previously this checkbox was a dead UI control — the backend always wrote
     // password_authentication = true regardless of its state.
     const passwordAuth = document.getElementById('ssh-password-auth').checked;
-    
+
     // Image configuration
     const imageSource = document.getElementById('image-source-select').value;
     let imagePath = "default_prebaked";
@@ -526,7 +526,7 @@ function startFlashing() {
     } else if (imageSource === 'raspios_lite') {
         imagePath = "default_lite";
     }
-    
+
     // Show progress elements
     const flashBtn = document.getElementById('flash-action-btn');
     const cancelBtn = document.getElementById('cancel-flash-btn');
@@ -538,17 +538,17 @@ function startFlashing() {
         cancelBtn.disabled = false;
         cancelBtn.innerHTML = '<i class="fa-solid fa-xmark"></i> Cancel';
     }
-    
+
     updateProgress(0, "Requesting administrative privileges...");
     window.updateDeviceState("FLASHING", 0, "Requesting administrative privileges...");
-    
+
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.start_flash(
-            parseInt(driveId), 
-            imagePath, 
-            hostname, 
-            wifiSsid, 
-            wifiPassword, 
+            parseInt(driveId),
+            imagePath,
+            hostname,
+            wifiSsid,
+            wifiPassword,
             sshPassword,
             dashboardUi,
             timezone,
@@ -598,15 +598,15 @@ function cancelFlashing() {
 // Global functions exposed to Python flasher thread and state machine
 let currentDeviceState = "UNKNOWN";
 
-window.updateDeviceState = function(state, progress, message) {
+window.updateDeviceState = function (state, progress, message) {
     console.log(`State Transition: ${currentDeviceState} -> ${state} (${progress}%) - ${message}`);
     currentDeviceState = state;
-    
+
     updateTrackerBar(state);
-    
+
     const flashBtn = document.getElementById('flash-action-btn');
-    
-    switch(state) {
+
+    switch (state) {
         case 'UNKNOWN':
             break;
         case 'FLASHING':
@@ -614,7 +614,7 @@ window.updateDeviceState = function(state, progress, message) {
             if (statusContainer) statusContainer.style.display = 'flex';
             flashBtn.disabled = true;
             updateProgress(progress, message);
-            
+
             // Disable cancel once block writing starts (to prevent SD corruption)
             const cancelBtnFlashing = document.getElementById('cancel-flash-btn');
             if (cancelBtnFlashing && message && message.toLowerCase().startsWith('writing blocks')) {
@@ -624,13 +624,13 @@ window.updateDeviceState = function(state, progress, message) {
         case 'FLASHED':
             flashBtn.disabled = false;
             updateProgress(100, message);
-            
+
             // Hide progress container and reset progress fill
             const statusContainerDone = document.getElementById('flash-status-container');
             if (statusContainerDone) statusContainerDone.style.display = 'none';
             const progressFillDone = document.getElementById('btn-progress-fill');
             if (progressFillDone) progressFillDone.style.width = '0%';
-            
+
             const ejectBtn = document.getElementById('eject-btn');
             if (ejectBtn) {
                 ejectBtn.disabled = false;
@@ -638,14 +638,14 @@ window.updateDeviceState = function(state, progress, message) {
                 ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
             }
             document.getElementById('success-modal').style.display = 'flex';
-            
+
             // Hide cancel button
             const cancelBtnDone = document.getElementById('cancel-flash-btn');
             if (cancelBtnDone) { cancelBtnDone.style.display = 'none'; cancelBtnDone.disabled = false; cancelBtnDone.innerHTML = '<i class="fa-solid fa-xmark"></i> Cancel'; }
-            
+
             // Play completion notification sound
             playFlashCompletionSound();
-            
+
             // Show desktop notification if window not focused
             showFlashNotification();
             break;
@@ -665,17 +665,17 @@ window.updateDeviceState = function(state, progress, message) {
             break;
         case 'ERROR':
             flashBtn.disabled = false;
-            
+
             // Hide progress container and reset progress fill
             const statusContainerErr = document.getElementById('flash-status-container');
             if (statusContainerErr) statusContainerErr.style.display = 'none';
             const progressFillErr = document.getElementById('btn-progress-fill');
             if (progressFillErr) progressFillErr.style.width = '0%';
-            
+
             // Reset cancel button state
             const cancelBtnErr = document.getElementById('cancel-flash-btn');
             if (cancelBtnErr) { cancelBtnErr.style.display = 'none'; cancelBtnErr.disabled = false; cancelBtnErr.innerHTML = '<i class="fa-solid fa-xmark"></i> Cancel'; }
-            
+
             if (activeTab === 'imager-tab' || activeTab === 'credentials-tab') {
                 updateProgress(0, `Error: ${message}`);
             } else if (activeTab === 'terminal-tab') {
@@ -705,18 +705,18 @@ function updateTrackerBar(state) {
         { id: 'step-ssh', states: ['SSH_READY'] },
         { id: 'step-bootstrapped', states: ['BOOTSTRAPPED'] }
     ];
-    
+
     let activeIndex = -1;
     steps.forEach((step, idx) => {
         if (step.states.includes(state)) {
             activeIndex = idx;
         }
     });
-    
+
     if (state === 'ERROR' || activeIndex === -1) {
-        return; 
+        return;
     }
-    
+
     steps.forEach((step, idx) => {
         const el = document.getElementById(step.id);
         if (!el) return;
@@ -740,7 +740,7 @@ function updateProgress(percent, message) {
     const fill = document.getElementById('btn-progress-fill');
     const textContent = document.getElementById('btn-text-content');
     const msg = document.getElementById('flasher-status-msg');
-    
+
     if (fill) {
         fill.style.width = `${percent}%`;
     }
@@ -765,7 +765,7 @@ function triggerScan() {
     const visual = document.getElementById('scanner-visual');
     const text = document.getElementById('scan-status-text');
     const list = document.getElementById('discovered-device-list');
-    
+
     if (visual) visual.classList.add('scanning');
     text.textContent = "Probing local network subnet...";
     list.innerHTML = `
@@ -773,7 +773,7 @@ function triggerScan() {
             <i class="fa-solid fa-spinner fa-spin"></i> Subnet port scanning active...
         </div>
     `;
-    
+
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.scan_network().then(devices => {
             if (visual) visual.classList.remove('scanning');
@@ -811,7 +811,7 @@ function triggerScan() {
 function populateDevices(devices) {
     const list = document.getElementById('discovered-device-list');
     list.innerHTML = '';
-    
+
     if (devices.length === 0) {
         const emptyDiv = document.createElement('div');
         emptyDiv.className = 'list-empty';
@@ -819,25 +819,25 @@ function populateDevices(devices) {
         list.appendChild(emptyDiv);
         return;
     }
-    
+
     devices.forEach(dev => {
         const item = document.createElement('div');
         item.className = 'device-item';
-        
+
         const deviceMeta = document.createElement('div');
         deviceMeta.className = 'device-meta';
-        
+
         const deviceName = document.createElement('span');
         deviceName.className = 'device-name';
         deviceName.textContent = dev.hostname || 'Unknown';
-        
+
         const deviceIp = document.createElement('span');
         deviceIp.className = 'device-ip';
         deviceIp.textContent = dev.ip || '';
-        
+
         const deviceTags = document.createElement('div');
         deviceTags.className = 'device-tags';
-        
+
         if (dev.ssh) {
             const tagSsh = document.createElement('span');
             tagSsh.className = 'tag tag-ssh';
@@ -862,18 +862,18 @@ function populateDevices(devices) {
             tagCrows.textContent = 'Crowsnest';
             deviceTags.appendChild(tagCrows);
         }
-        
+
         deviceMeta.appendChild(deviceName);
         deviceMeta.appendChild(deviceIp);
         deviceMeta.appendChild(deviceTags);
-        
+
         const connectBtn = document.createElement('button');
         connectBtn.className = 'btn btn-primary btn-sm';
         connectBtn.textContent = 'Connect';
         connectBtn.addEventListener('click', () => {
             connectToDevice(dev.ip, dev.hostname);
         });
-        
+
         item.appendChild(deviceMeta);
         item.appendChild(connectBtn);
         list.appendChild(item);
@@ -1004,16 +1004,16 @@ function performSshLogin(username, password) {
             password = '';
             loginPassword = '';
             currentLoginInput = '';
-            
+
             const isSuccess = (res === true || (res && res.status === 'success'));
             const isHostKeyMismatch = (res && res.status === 'host_key_mismatch');
-            
+
             if (isSuccess) {
                 connectedUsername = username;
                 term.write("\x1b[1;32m[KACE Workspace] SSH connection established successfully.\x1b[0m\r\n");
                 updateConnectionStatus(true);
                 loginState = 'DISCONNECTED';
-                
+
                 // Synchronize terminal dimensions with the remote PTY
                 if (window.pywebview && window.pywebview.api) {
                     window.pywebview.api.resize_ssh_pty(term.cols, term.rows);
@@ -1065,13 +1065,13 @@ function performSshLogin(username, password) {
 function connectToDevice(ip, name) {
     currentDeviceIp = ip;
     currentDeviceName = name;
-    
+
     const terminalNav = document.getElementById('terminal-nav-btn');
     terminalNav.click(); // Switch to terminal workspace tab
-    
+
     term.clear();
     term.write(`\x1b[1;36m[KACE Workspace] Connecting to ${name} (${ip})...\x1b[0m\r\n`);
-    
+
     promptTerminalLogin();
 }
 
@@ -1080,7 +1080,7 @@ function connectToDevice(ip, name) {
 function initTerminal() {
     const container = document.getElementById('terminal-container');
     container.innerHTML = '';
-    
+
     term = new Terminal({
         cursorBlink: true,
         fontSize: 14,
@@ -1095,16 +1095,16 @@ function initTerminal() {
             red: '#ef4444'
         }
     });
-    
+
     fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
-    
+
     // Load search addon if available
     if (typeof SearchAddon !== 'undefined') {
         searchAddon = new SearchAddon.SearchAddon();
         term.loadAddon(searchAddon);
     }
-    
+
     term.open(container);
     fitAddon.fit();
 
@@ -1114,7 +1114,7 @@ function initTerminal() {
             window.pywebview.api.resize_ssh_pty(size.cols, size.rows);
         }
     });
-    
+
     // Intercept right-click context menu inside the terminal container
     container.addEventListener('contextmenu', (e) => {
         e.preventDefault();
@@ -1125,7 +1125,7 @@ function initTerminal() {
             contextMenu.style.display = 'flex';
         }
     });
-    
+
     // Add keydown listener to support standard keyboard copy & paste (Ctrl+C / Ctrl+V)
     container.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
@@ -1150,7 +1150,7 @@ function initTerminal() {
             }
         }
     }, true); // useCapture = true to intercept before xterm.js handlers
-    
+
     // Dismiss custom context menu when clicking anywhere else
     document.addEventListener('click', (e) => {
         const contextMenu = document.getElementById('terminal-context-menu');
@@ -1158,12 +1158,12 @@ function initTerminal() {
             contextMenu.style.display = 'none';
         }
     });
-    
+
     // Bind window resize event
     window.addEventListener('resize', () => {
         if (fitAddon) fitAddon.fit();
     });
-    
+
     // Ctrl+F to toggle terminal search bar
     document.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'f' && activeTab === 'terminal-tab') {
@@ -1171,7 +1171,7 @@ function initTerminal() {
             toggleTerminalSearch();
         }
     });
-    
+
     // Enter key in search input triggers findNext
     const searchInput = document.getElementById('terminal-search-input');
     if (searchInput) {
@@ -1188,7 +1188,7 @@ function initTerminal() {
             }
         });
     }
-    
+
     // Send terminal input to Python SSH bridge
     term.onData(data => {
         if (sshConnected && window.pywebview && window.pywebview.api) {
@@ -1224,18 +1224,18 @@ let bootstrapBuffer = "";
 // Each entry maps a STAGE_ID (emitted by bootstrap.sh as "=== STAGE: ID ===")
 // to a human-readable label shown in the UI status area.
 const BOOTSTRAP_STAGES = [
-    { id: 'PACKAGES',   label: 'Updating system packages'      },
-    { id: 'KLIPPER',      label: 'Installing Klipper'              },
-    { id: 'KLIPPER_FIX',  label: 'Patching Klipper service paths'   },
-    { id: 'MOONRAKER',    label: 'Installing Moonraker'              },
-    { id: 'CONFIGS',    label: 'Writing printer configuration' },
-    { id: 'MAINSAIL',   label: 'Installing Mainsail'           },
-    { id: 'FLUIDD',     label: 'Installing Fluidd'             },
-    { id: 'CLIENT_CFG', label: 'Downloading UI client config'  },
-    { id: 'NGINX',      label: 'Configuring Nginx'             },
-    { id: 'SERVICES',   label: 'Starting services'             },
-    { id: 'CROWSNEST',  label: 'Installing Crowsnest'          },
-    { id: 'KACE',       label: 'Installing KACE agent'         },
+    { id: 'PACKAGES', label: 'Updating system packages' },
+    { id: 'KLIPPER', label: 'Installing Klipper' },
+    { id: 'KLIPPER_FIX', label: 'Patching Klipper service paths' },
+    { id: 'MOONRAKER', label: 'Installing Moonraker' },
+    { id: 'CONFIGS', label: 'Writing printer configuration' },
+    { id: 'MAINSAIL', label: 'Installing Mainsail' },
+    { id: 'FLUIDD', label: 'Installing Fluidd' },
+    { id: 'CLIENT_CFG', label: 'Downloading UI client config' },
+    { id: 'NGINX', label: 'Configuring Nginx' },
+    { id: 'SERVICES', label: 'Starting services' },
+    { id: 'CROWSNEST', label: 'Installing Crowsnest' },
+    { id: 'KACE', label: 'Installing KACE agent' },
 ];
 
 let lastBootstrapStageIdx = -1;
@@ -1296,7 +1296,7 @@ function parseBootstrapProgress(data) {
             connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap complete! KACE Node is fully ready.</span>';
         }
         updateTrackerBar('BOOTSTRAPPED');
-        
+
         const finishBtn = document.getElementById('finish-btn');
         if (finishBtn) {
             finishBtn.disabled = false;
@@ -1320,7 +1320,7 @@ function parseBootstrapProgress(data) {
 }
 
 // Push data from Python SSH output stream into xterm terminal
-window.writeTerminalData = function(data) {
+window.writeTerminalData = function (data) {
     if (term) {
         term.write(data);
     }
@@ -1333,7 +1333,7 @@ function updateConnectionStatus(connected) {
     const disconnectBtn = document.getElementById('disconnect-btn');
     const connTitle = document.getElementById('connection-title');
     const connSubtitle = document.getElementById('connection-subtitle');
-    
+
     if (connected) {
         bootstrapBtn.disabled = false;
         disconnectBtn.style.display = 'block';
@@ -1344,7 +1344,7 @@ function updateConnectionStatus(connected) {
         disconnectBtn.style.display = 'none';
         connTitle.textContent = `SSH Session: Disconnected`;
         connSubtitle.textContent = `No active session. Select a device in the Discovery tab to connect.`;
-        
+
         // Hide the progress tracker and resize terminal
         const tracker = document.getElementById('bootstrap-progress-tracker');
         if (tracker && tracker.style.display !== 'none') {
@@ -1354,7 +1354,7 @@ function updateConnectionStatus(connected) {
             }, 50);
         }
     }
-    
+
     // Refresh SFTP Panel status
     refreshSftpBrowser();
 }
@@ -1374,16 +1374,16 @@ function disconnectSSH() {
 
 function startBootstrap() {
     if (!sshConnected) return;
-    
+
     const selectedUi = document.getElementById('bootstrap-ui-select-imager').value || 'mainsail';
-    
+
     // Strict allowlist validation to prevent remote SSH command injection
     const validUis = ['mainsail', 'fluidd', 'both'];
     if (!validUis.includes(selectedUi)) {
         term.write(`\r\n\x1b[1;31m[Error] Invalid dashboard UI selection: ${selectedUi}\x1b[0m\r\n`);
         return;
     }
-    
+
     // Show the stage progress tracker and reset state
     const tracker = document.getElementById('bootstrap-progress-tracker');
     if (tracker) {
@@ -1406,10 +1406,10 @@ function startBootstrap() {
     // This has been removed: if the bootstrap script is not found on the SD card,
     // the command now exits with an error instead of silently fetching and executing
     // arbitrary code from the internet over the authenticated SSH session.
-    
+
     // Reset buffer at start
     bootstrapBuffer = "";
-    
+
     if (window.pywebview && window.pywebview.api) {
         // Send the shell command to execute the bootstrap
         window.pywebview.api.send_ssh_input(bootstrapCmd);
@@ -1428,7 +1428,7 @@ function startBootstrap() {
             '=== STAGE: KACE ===',
             'Bootstrap complete! KACE Node is fully ready.',
         ];
-        
+
         term.write(`$ ${bootstrapCmd}`);
         let idx = 0;
         const interval = setInterval(() => {
@@ -1453,7 +1453,7 @@ function syncCustomDropdown(container) {
     const options = container.querySelectorAll('.custom-option');
     const trigger = container.querySelector('.custom-select-trigger');
     if (!trigger) return;
-    
+
     let selectedOption = null;
     options.forEach(option => {
         if (option.getAttribute('data-value') === val) {
@@ -1463,21 +1463,21 @@ function syncCustomDropdown(container) {
             option.classList.remove('selected');
         }
     });
-    
+
     if (selectedOption) {
         const optImg = selectedOption.querySelector('img');
         const optGroup = selectedOption.querySelector('.logo-group');
         const optTitle = selectedOption.querySelector('.option-title').textContent;
         const optDesc = selectedOption.querySelector('.option-desc').textContent;
-        
+
         const triggerImg = trigger.querySelector('.trigger-icon');
         const triggerGroup = trigger.querySelector('.logo-group');
         const triggerTitle = trigger.querySelector('.trigger-title');
         const triggerDesc = trigger.querySelector('.trigger-desc');
-        
+
         if (triggerTitle) triggerTitle.textContent = optTitle;
         if (triggerDesc) triggerDesc.textContent = optDesc;
-        
+
         if (triggerImg && optImg) {
             triggerImg.src = optImg.getAttribute('src');
             triggerImg.style.display = 'block';
@@ -1495,13 +1495,13 @@ function syncCustomDropdown(container) {
 // Custom Dropdowns Initialization & Event Handling
 function initCustomDropdowns() {
     const dropdowns = document.querySelectorAll('.custom-select-container');
-    
+
     dropdowns.forEach(container => {
         const trigger = container.querySelector('.custom-select-trigger');
         const optionsList = container.querySelector('.custom-options-list');
         const options = container.querySelectorAll('.custom-option');
         const hiddenInput = container.querySelector('input[type="hidden"]');
-        
+
         // Toggle dropdown open state
         trigger.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1512,32 +1512,32 @@ function initCustomDropdowns() {
             });
             container.classList.toggle('open');
         });
-        
+
         // Handle selection
         options.forEach(option => {
             option.addEventListener('click', (e) => {
                 e.stopPropagation();
-                
+
                 const val = option.getAttribute('data-value');
                 options.forEach(opt => opt.classList.remove('selected'));
                 option.classList.add('selected');
-                
+
                 hiddenInput.value = val;
-                
+
                 // Update trigger visual values
                 const optImg = option.querySelector('img');
                 const optGroup = option.querySelector('.logo-group');
                 const optTitle = option.querySelector('.option-title').textContent;
                 const optDesc = option.querySelector('.option-desc').textContent;
-                
+
                 const triggerImg = trigger.querySelector('.trigger-icon');
                 const triggerGroup = trigger.querySelector('.logo-group');
                 const triggerTitle = trigger.querySelector('.trigger-title');
                 const triggerDesc = trigger.querySelector('.trigger-desc');
-                
+
                 triggerTitle.textContent = optTitle;
                 triggerDesc.textContent = optDesc;
-                
+
                 if (triggerImg && optImg) {
                     triggerImg.src = optImg.getAttribute('src');
                     triggerImg.style.display = 'block';
@@ -1549,12 +1549,12 @@ function initCustomDropdowns() {
                     }
                     triggerGroup.style.display = 'flex';
                 }
-                
+
                 container.classList.remove('open');
             });
         });
     });
-    
+
     // Close dropdowns if clicking outside container
     document.addEventListener('click', () => {
         dropdowns.forEach(container => {
@@ -1568,11 +1568,11 @@ function toggleTheme() {
     const isCurrentlyLight = document.body.classList.contains('light-mode');
     const newTheme = isCurrentlyLight ? 'dark' : 'light';
     applyTheme(newTheme);
-    
+
     // Save state to python preferences and update localStorage cache
     userPreferences.theme = newTheme;
     localStorage.setItem('theme', newTheme);
-    
+
     if (window.pywebview && pywebview.api && pywebview.api.set_preferences) {
         pywebview.api.set_preferences(userPreferences);
     }
@@ -1583,7 +1583,6 @@ function toggleTheme() {
 const FORM_PERSIST_KEY = 'kace_form_state';
 const PERSISTED_FIELDS = [
     { id: 'hostname-input', type: 'value' },
-    { id: 'wifi-ssid', type: 'value' },
     { id: 'timezone-select', type: 'value' },
     { id: 'os-arch-select', type: 'value' },
     { id: 'image-source-select', type: 'value' },
@@ -1602,15 +1601,15 @@ function saveFormState() {
             state[field.id] = field.type === 'checked' ? el.checked : el.value;
         }
     });
-    
+
     userPreferences.form_state = state;
-    
+
     try {
         localStorage.setItem(FORM_PERSIST_KEY, JSON.stringify(state));
     } catch (e) {
         console.warn('Failed to persist form state to localStorage:', e);
     }
-    
+
     if (window.pywebview && pywebview.api && pywebview.api.set_preferences) {
         pywebview.api.set_preferences(userPreferences);
     }
@@ -1626,7 +1625,7 @@ function restoreFormState() {
             }
         }
         if (!state) return;
-        
+
         PERSISTED_FIELDS.forEach(field => {
             const el = document.getElementById(field.id);
             if (el && state[field.id] !== undefined) {
@@ -1637,16 +1636,16 @@ function restoreFormState() {
                 }
             }
         });
-        
+
         // Sync image source toggle visibility
         const imageSource = document.getElementById('image-source-select');
         if (imageSource) toggleImageSource(imageSource.value);
-        
+
         // Sync custom dropdowns visual states
         document.querySelectorAll('.custom-select-container').forEach(container => {
             syncCustomDropdown(container);
         });
-        
+
     } catch (e) {
         console.warn('Failed to restore form state:', e);
     }
@@ -1662,7 +1661,7 @@ function initFormPersistence() {
             }
         }
     });
-    
+
     // Also save when custom dropdown hidden inputs change (via MutationObserver)
     ['pi-model-select', 'bootstrap-ui-select-imager'].forEach(hiddenId => {
         const hiddenEl = document.getElementById(hiddenId);
@@ -1691,8 +1690,8 @@ function autoDetectTimezone() {
             const state = JSON.parse(raw);
             if (state['timezone-select']) return; // User has a saved preference
         }
-    } catch (e) {}
-    
+    } catch (e) { }
+
     try {
         const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
         if (detected) {
@@ -1721,7 +1720,7 @@ function autoDetectTimezone() {
 function toggleTerminalSearch() {
     const bar = document.getElementById('terminal-search-bar');
     if (!bar) return;
-    
+
     if (bar.style.display === 'none' || !bar.style.display) {
         bar.style.display = 'flex';
         document.getElementById('terminal-search-input').focus();
@@ -1747,7 +1746,7 @@ function terminalSearchPrev() {
 function playFlashCompletionSound() {
     try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        
+
         // Play two ascending tones for a pleasant chime
         const notes = [523.25, 659.25]; // C5, E5
         notes.forEach((freq, i) => {
@@ -1803,10 +1802,10 @@ function clearSftpSelection() {
     });
 }
 
-window.refreshSftpBrowser = function() {
+window.refreshSftpBrowser = function () {
     const panel = document.getElementById('sftp-browser-panel');
     if (!panel) return;
-    
+
     if (sshConnected && activeTab === 'terminal-tab') {
         panel.style.display = 'flex';
         loadSftpDirectory(sftpCurrentPath);
@@ -1819,11 +1818,11 @@ window.refreshSftpBrowser = function() {
     }
 };
 
-window.loadSftpDirectory = function(path) {
+window.loadSftpDirectory = function (path) {
     sftpCurrentPath = path;
     const pathInput = document.getElementById('sftp-current-path');
     if (pathInput) pathInput.value = sftpCurrentPath;
-    
+
     fetch(`/api/sftp/list?path=${encodeURIComponent(path)}`)
         .then(response => {
             if (!response.ok) {
@@ -1850,9 +1849,9 @@ window.loadSftpDirectory = function(path) {
 function renderSftpList(items) {
     const listContainer = document.getElementById('sftp-file-list');
     if (!listContainer) return;
-    
+
     listContainer.innerHTML = '';
-    
+
     if (!items || items.length === 0) {
         listContainer.innerHTML = `
             <div class="list-empty">
@@ -1861,13 +1860,13 @@ function renderSftpList(items) {
         `;
         return;
     }
-    
+
     items.sort((a, b) => {
         if (a.is_dir && !b.is_dir) return -1;
         if (!a.is_dir && b.is_dir) return 1;
         return a.name.localeCompare(b.name);
     });
-    
+
     items.forEach(item => {
         const itemEl = document.createElement('div');
         itemEl.className = `sftp-item ${item.is_dir ? 'folder' : 'file'}`;
@@ -1919,19 +1918,19 @@ function renderSftpList(items) {
 }
 
 // Real implementation using POST and triggers browser file download using blob URL
-window.downloadSelectedSftpFile = function() {
+window.downloadSelectedSftpFile = function () {
     if (sftpSelectedFile) {
         downloadSftpFile(sftpSelectedFile);
     }
 };
 
-window.downloadSftpFile = function(fileName) {
+window.downloadSftpFile = function (fileName) {
     const fullPath = sftpCurrentPath === "/" ? "/" + fileName : sftpCurrentPath + "/" + fileName;
     console.log(`SFTP Native Download requested for file: ${fullPath}`);
-    
+
     const dlBtn = document.getElementById('sftp-download-btn');
     if (dlBtn) dlBtn.disabled = true;
-    
+
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.download_file(fullPath)
             .then(success => {
@@ -1958,7 +1957,7 @@ window.downloadSftpFile = function(fileName) {
     }
 };
 
-window.navigateSftpInto = function(folderName) {
+window.navigateSftpInto = function (folderName) {
     clearSftpSelection();
     if (sftpCurrentPath === "/") {
         sftpCurrentPath = "/" + folderName;
@@ -1968,10 +1967,10 @@ window.navigateSftpInto = function(folderName) {
     loadSftpDirectory(sftpCurrentPath);
 };
 
-window.navigateSftpUp = function() {
+window.navigateSftpUp = function () {
     clearSftpSelection();
     if (sftpCurrentPath === "/") return;
-    
+
     const parts = sftpCurrentPath.split('/');
     parts.pop();
     let parentPath = parts.join('/');
@@ -1982,10 +1981,10 @@ window.navigateSftpUp = function() {
     loadSftpDirectory(sftpCurrentPath);
 };
 
-window.terminalContextMenuAction = function(action) {
+window.terminalContextMenuAction = function (action) {
     const contextMenu = document.getElementById('terminal-context-menu');
     if (contextMenu) contextMenu.style.display = 'none';
-    
+
     if (action === 'copy') {
         if (term) {
             const selection = term.getSelection();
