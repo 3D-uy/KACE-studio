@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   KACE_BOOTSTRAP_REF: 13de4a07ee53a3c7b37af8a3c628fec20dde1fd0
@@ -58,18 +58,14 @@ jobs:
         python -m pytest -v > pytest_run.log 2>&1
         cat pytest_run.log
 
-    - name: Push logs on failure
+    - name: Upload logs on failure
       if: failure()
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git config --local --unset http.https://github.com/.extraheader || true
-        git checkout -b ci-debug-logs || git checkout ci-debug-logs
-        git add pytest_run.log
-        git commit -m "ci: save failed test logs [skip ci]"
-        git push https://x-access-token:$GH_TOKEN@github.com/${{ github.repository }}.git ci-debug-logs --force
+      uses: actions/upload-artifact@v4
+      with:
+        name: pytest-logs-${{ matrix.os }}-py${{ matrix.python-version }}
+        path: pytest_run.log
+        if-no-files-found: warn
+        retention-days: 7
 
   build-windows:
     name: Build Windows Executable
