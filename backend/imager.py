@@ -872,7 +872,8 @@ password_authentication = {"true" if password_auth else "false"}
             # This mirrors what Raspberry Pi Imager does and avoids the 'create new
             # user alongside pi' approach that orphaned all pre-installed software.
             firstrun_path = os.path.join(boot_path, "firstrun.sh")
-            pw_auth_str = "true" if password_auth else "false"
+            ssh_enabled_str = "true" if ssh_enabled else "false"
+            pw_auth_str = "true" if ssh_enabled and password_auth else "false"
 
             firstrun_content = f"""#!/bin/bash
 # KACE Studio prebaked firstboot credentials setup.
@@ -925,6 +926,7 @@ fi
 
 HASHED_PW='{hashed_pw}'
 TARGET_USER='{username}'
+SSH_ENABLED='{ssh_enabled_str}'
 
 # ── 1. Detect the pre-existing printer user ──────────────────────────────────
 # On pre-baked images (MainsailOS / FluiddPi) Klipper lives under the default
@@ -949,7 +951,14 @@ if [ -z "$SOURCE_USER" ]; then
 fi
 
 # ── 2. User setup ─────────────────────────────────────────────────────────────
-if [ -z "$SOURCE_USER" ] || [ "$TARGET_USER" = "$SOURCE_USER" ]; then
+if [ -z "$SOURCE_USER" ]; then
+    if ! id "$TARGET_USER" &>/dev/null; then
+        echo "No existing printer user was found and target user '$TARGET_USER' does not exist." >&2
+        exit 1
+    fi
+    EFFECTIVE_USER="$TARGET_USER"
+    echo "$EFFECTIVE_USER:$HASHED_PW" | chpasswd -e
+elif [ "$TARGET_USER" = "$SOURCE_USER" ]; then
     # No rename needed — just update the password for the existing/target user.
     EFFECTIVE_USER="${{SOURCE_USER:-$TARGET_USER}}"
     echo "$EFFECTIVE_USER:$HASHED_PW" | chpasswd -e
@@ -957,6 +966,11 @@ else
     # Rename SOURCE_USER → TARGET_USER (mirroring Raspberry Pi Imager behavior).
 
     # a. Rename the login name and primary group.
+    if id "$TARGET_USER" &>/dev/null; then
+        echo "Refusing to merge existing target user '$TARGET_USER' with '$SOURCE_USER'." >&2
+        exit 1
+    fi
+
     groupmod -n "$TARGET_USER" "$SOURCE_USER" 2>/dev/null || true
     usermod -l "$TARGET_USER" -d "/home/$TARGET_USER" -m "$SOURCE_USER"
 
@@ -977,17 +991,20 @@ else
 fi
 
 # ── 3. Configure SSH Password Authentication ──────────────────────────────────
-mkdir -p /etc/ssh/sshd_config.d
-if [ "{pw_auth_str}" = "true" ]; then
-    echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/00-kace.conf
-    sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-elif [ "{pw_auth_str}" = "false" ]; then
-    echo "PasswordAuthentication no" > /etc/ssh/sshd_config.d/00-kace.conf
-    sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-fi
-
-if systemctl is-active ssh &>/dev/null; then
-    systemctl reload ssh || true
+if [ "$SSH_ENABLED" = "true" ]; then
+    mkdir -p /etc/ssh/sshd_config.d
+    if [ "{pw_auth_str}" = "true" ]; then
+        echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/00-kace.conf
+        sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    else
+        echo "PasswordAuthentication no" > /etc/ssh/sshd_config.d/00-kace.conf
+        sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+    fi
+    systemctl enable ssh >/dev/null 2>&1 || systemctl enable sshd >/dev/null 2>&1 || true
+    systemctl restart ssh || systemctl restart sshd
+else
+    systemctl disable --now ssh >/dev/null 2>&1 || \
+        systemctl disable --now sshd >/dev/null 2>&1 || true
 fi
 
 if [ -n "$BOOT_MNT" ]; then

@@ -70,3 +70,31 @@ def test_prebaked_headless_wifi_cannot_inject_lines(tmp_path, monkeypatch):
         'HIDDEN="false"',
         'REGDOMAIN="US"',
     ]
+
+
+def test_prebaked_ssh_disable_is_enforced_on_first_boot(tmp_path, monkeypatch):
+    (tmp_path / "cmdline.txt").write_text(
+        "console=tty1 root=PARTUUID=abc-02 rootwait\n", encoding="utf-8"
+    )
+    (tmp_path / "ssh").touch()
+    (tmp_path / "ssh.txt").touch()
+    monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda _disk: str(tmp_path))
+
+    assert inject_config(
+        disk_number=99,
+        hostname="kace-test",
+        wifi_ssid="",
+        wifi_password="",
+        ssh_password="local-password",
+        dashboard_ui="mainsail",
+        ssh_enabled=False,
+        password_auth=True,
+        is_prebaked=True,
+    )
+
+    script = (tmp_path / "firstrun.sh").read_text(encoding="utf-8")
+    assert "SSH_ENABLED='false'" in script
+    assert "systemctl disable --now ssh" in script
+    assert "Refusing to merge existing target user" in script
+    assert not (tmp_path / "ssh").exists()
+    assert not (tmp_path / "ssh.txt").exists()
