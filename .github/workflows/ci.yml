@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+env:
+  KACE_BOOTSTRAP_REF: 13de4a07ee53a3c7b37af8a3c628fec20dde1fd0
+  KACE_BOOTSTRAP_SHA256: b9debaa47ade9ca8596a8d7ec9f1fcd15847ffc5d75070978682331b9ecf0238
+
 jobs:
   test:
     name: Run Tests
@@ -43,6 +47,11 @@ jobs:
         pip install pytest
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
+
+    - name: Fetch and verify pinned KACE bootstrap
+      run: |
+        python -c "import os, urllib.request; ref=os.environ['KACE_BOOTSTRAP_REF']; urllib.request.urlretrieve(f'https://raw.githubusercontent.com/3D-uy/KACE/{ref}/scripts/bootstrap.sh', 'bootstrap.sh')"
+        python -c "import hashlib, os, pathlib; actual=hashlib.sha256(pathlib.Path('bootstrap.sh').read_bytes()).hexdigest(); expected=os.environ['KACE_BOOTSTRAP_SHA256']; assert actual == expected, f'bootstrap.sh SHA-256 mismatch: {actual} != {expected}'"
 
     - name: Run Backend Tests
       run: |
@@ -82,9 +91,10 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
 
-    - name: Fetch Authoritative bootstrap.sh from KACE
+    - name: Fetch and verify pinned KACE bootstrap
       run: |
-        python -c "import urllib.request; urllib.request.urlretrieve('https://raw.githubusercontent.com/3D-uy/KACE/main/scripts/bootstrap.sh', 'bootstrap.sh')"
+        python -c "import os, urllib.request; ref=os.environ['KACE_BOOTSTRAP_REF']; urllib.request.urlretrieve(f'https://raw.githubusercontent.com/3D-uy/KACE/{ref}/scripts/bootstrap.sh', 'bootstrap.sh')"
+        python -c "import hashlib, os, pathlib; actual=hashlib.sha256(pathlib.Path('bootstrap.sh').read_bytes()).hexdigest(); expected=os.environ['KACE_BOOTSTRAP_SHA256']; assert actual == expected, f'bootstrap.sh SHA-256 mismatch: {actual} != {expected}'"
 
     - name: Build Executable with PyInstaller
       run: |

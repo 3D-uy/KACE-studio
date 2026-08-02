@@ -1219,6 +1219,7 @@ function initTerminal() {
 }
 
 let bootstrapBuffer = "";
+let bootstrapFailureHandled = false;
 
 // Stage definitions — ordered for the progress bar.
 // Each entry maps a STAGE_ID (emitted by bootstrap.sh as "=== STAGE: ID ===")
@@ -1282,8 +1283,29 @@ function parseBootstrapProgress(data) {
         setBootstrapStage(match[1]);
     }
 
+    const failureMatch = bootstrapBuffer.match(/=== KACE_BOOTSTRAP_ERROR: ([A-Z_]+) ===/);
+    if (failureMatch && !bootstrapFailureHandled) {
+        bootstrapFailureHandled = true;
+        const message = failureMatch[1] === 'KACE_INSTALL'
+            ? 'Bootstrap failed: KACE could not be installed.'
+            : `Bootstrap failed at ${failureMatch[1]}.`;
+        const label = document.getElementById('bootstrap-stage-label');
+        if (label) label.textContent = `✖ ${message}`;
+        const connSubtitle = document.getElementById('connection-subtitle');
+        if (connSubtitle) {
+            connSubtitle.textContent = message;
+            connSubtitle.style.color = 'var(--danger-color)';
+        }
+        const finishBtn = document.getElementById('finish-btn');
+        if (finishBtn) {
+            finishBtn.disabled = true;
+            finishBtn.classList.remove('active');
+        }
+        window.updateDeviceState('ERROR', 0, message);
+    }
+
     // Detect completion banner
-    if (bootstrapBuffer.includes('Bootstrap complete! KACE Node is fully ready.')) {
+    if (!bootstrapFailureHandled && bootstrapBuffer.includes('Bootstrap complete! KACE Node is fully ready.')) {
         // Mark all stages done
         BOOTSTRAP_STAGES.forEach(stage => {
             const el = document.getElementById('bstage-' + stage.id);
@@ -1409,6 +1431,7 @@ function startBootstrap() {
 
     // Reset buffer at start
     bootstrapBuffer = "";
+    bootstrapFailureHandled = false;
 
     if (window.pywebview && window.pywebview.api) {
         // Send the shell command to execute the bootstrap
