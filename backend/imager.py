@@ -17,6 +17,15 @@ def _dbg(msg: str):
     if _DEBUG:
         print(f"[DEBUG] {msg}", file=sys.stderr)
 
+
+def _yaml_quote(value: str) -> str:
+    """Return a YAML-safe double-quoted scalar without adding a dependency.
+
+    JSON string escaping is a strict subset accepted by YAML parsers.  Using it
+    here avoids hand-built quoting for user-controlled Wi-Fi credentials.
+    """
+    return json.dumps(value, ensure_ascii=False)
+
 # Subprocess flags to run silent processes on Windows (CREATE_NO_WINDOW)
 SUBPROCESS_FLAGS = {}
 if sys.platform == "win32":
@@ -565,8 +574,12 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         clean_toml_password = wifi_password.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '')
 
         # C. SSH Enablement
+        ssh_marker_paths = (
+            os.path.join(boot_path, "ssh"),
+            os.path.join(boot_path, "ssh.txt"),
+        )
         if ssh_enabled:
-            ssh_file = os.path.join(boot_path, "ssh")
+            ssh_file = ssh_marker_paths[0]
             try:
                 with open(ssh_file, "w") as f:
                     pass # Writes empty file to enable SSH
@@ -576,7 +589,7 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
                 print(f"[ERROR] Failed to verify SSH enablement file: {e}", file=sys.stderr)
                 raise e
                 
-            ssh_txt_file = os.path.join(boot_path, "ssh.txt")
+            ssh_txt_file = ssh_marker_paths[1]
             try:
                 with open(ssh_txt_file, "w") as f:
                     pass
@@ -585,6 +598,15 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
             except Exception as e:
                 print(f"[ERROR] Failed to verify SSH txt enablement file: {e}", file=sys.stderr)
                 raise e
+        else:
+            # Images may ship with one of these marker files already present.
+            # Removing them makes the requested disabled state deterministic.
+            for ssh_marker_path in ssh_marker_paths:
+                try:
+                    if os.path.exists(ssh_marker_path):
+                        os.remove(ssh_marker_path)
+                except OSError as e:
+                    raise IOError(f"Failed to disable SSH marker {ssh_marker_path}: {e}") from e
             
         # D. User Credentials configuration (userconf.txt)
         hashed_pw = hash_password(ssh_password)
@@ -820,8 +842,8 @@ password_authentication = {"true" if password_auth else "false"}
                 headless_nm_path = os.path.join(boot_path, "headless_nm.txt")
                 # Escape double-quote characters in SSID/password for the
                 # key="value" format used by headless_nm.
-                esc_hl_ssid = wifi_ssid.replace('"', '\\"')
-                esc_hl_password = wifi_password.replace('"', '\\"')
+                esc_hl_ssid = clean_toml_ssid
+                esc_hl_password = clean_toml_password
                 headless_content = (
                     f'SSID="{esc_hl_ssid}"\n'
                     f'PASSWORD="{esc_hl_password}"\n'
@@ -1027,6 +1049,7 @@ exit 0
 
             # M6 FIX: use sanitized clean_timezone to prevent YAML injection via the timezone field.
             # The clean_timezone value has had \r, \n, and = stripped already.
+            effective_password_auth = bool(ssh_enabled and password_auth)
             userdata_content = f"""#cloud-config
 hostname: {clean_hostname}
 manage_etc_hosts: true
@@ -1039,8 +1062,8 @@ users:
   shell: /bin/bash
   lock_passwd: false
   passwd: "{hashed_pw}"
-enable_ssh: true
-ssh_pwauth: {"true" if password_auth else "false"}
+enable_ssh: {"true" if ssh_enabled else "false"}
+ssh_pwauth: {"true" if effective_password_auth else "false"}
 """
             try:
                 with open(userdata_path, "w", newline="\n") as f:
@@ -1062,6 +1085,8 @@ ssh_pwauth: {"true" if password_auth else "false"}
             # wpa_supplicant.conf and NetworkManager psk= fields.
             network_config_path = os.path.join(boot_path, "network-config")
             if wifi_ssid:
+                yaml_ssid = _yaml_quote(wifi_ssid)
+                yaml_password = _yaml_quote(wifi_password)
                 network_content = f"""network:
   version: 2
   ethernets:
@@ -1073,8 +1098,8 @@ ssh_pwauth: {"true" if password_auth else "false"}
       dhcp4: true
       regulatory-domain: "{country_code}"
       access-points:
-        "{wifi_ssid}":
-          password: "{clean_wpa_password}"
+        {yaml_ssid}:
+          password: {yaml_password}
       optional: true
 """
             else:
@@ -1094,7 +1119,7 @@ ssh_pwauth: {"true" if password_auth else "false"}
                     c = f_check.read()
                 if "version: 2" not in c:
                     raise ValueError("network-config verification failed.")
-                if wifi_ssid and wifi_ssid not in c:
+                if wifi_ssid and yaml_ssid not in c:
                     raise ValueError("network-config verification failed (missing SSID).")
                 _dbg(f"Successfully verified network-config write at {network_config_path}")
             except Exception as e:
