@@ -1,5 +1,6 @@
 import socket
 import concurrent.futures
+import threading
 import urllib.request
 import json
 from typing import List, Dict
@@ -9,16 +10,24 @@ def _reverse_dns(ip: str, timeout: float = 0.5, default: str = "unknown") -> str
     """Reverse DNS lookup with a short timeout to prevent thread pool starvation.
 
     Standard socket.gethostbyaddr blocks for the system resolver timeout
-    (typically 2-5 seconds) on hosts without PTR records.  Wrapping it in a
-    single-thread executor lets us bail out quickly.
+    (typically 2-5 seconds) on hosts without PTR records.  A daemon lookup
+    thread lets the caller honor its deadline without ThreadPoolExecutor's
+    context-manager shutdown waiting for the blocked resolver.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(socket.gethostbyaddr, ip)
+    result = []
+
+    def lookup():
         try:
-            result = future.result(timeout=timeout)
-            return result[0] if result else default
-        except (concurrent.futures.TimeoutError, Exception):
-            return default
+            resolved = socket.gethostbyaddr(ip)
+            if resolved:
+                result.append(resolved[0])
+        except Exception:
+            pass
+
+    worker = threading.Thread(target=lookup, name="kace-reverse-dns", daemon=True)
+    worker.start()
+    worker.join(max(float(timeout), 0.0))
+    return result[0] if result else default
 
 def resolve_hostname(hostname: str = "kace.local") -> str:
     """
@@ -105,10 +114,8 @@ def get_local_subnet_ips() -> List[str]:
                 ip_str = f"{subnet_prefix}{i}"
                 if ip_str != local_ip:
                     ips.append(ip_str)
-    else:
-        # Default fallback
-        for i in range(1, 255):
-            ips.append(f"192.168.1.{i}")
+    # If no active IPv4 interface can be identified, do not scan an arbitrary
+    # private subnet.  Manual discovery remains available to the user.
     return ips
 
 def check_klipper(ip: str) -> bool:

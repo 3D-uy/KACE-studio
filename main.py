@@ -14,6 +14,8 @@ from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
 import mimetypes
 
+HTTP_TIMEOUT_SECONDS = 30
+
 # Prevent Windows registry pollution from overriding MIME types
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
@@ -30,7 +32,7 @@ class KaceWsgiApp:
     and SFTP API routes (/api/sftp/list) are only accessible locally and not exposed to the local network.
     """
     def __init__(self, web_dir, api_instance):
-        self.web_dir = os.path.abspath(web_dir)
+        self.web_dir = os.path.realpath(os.path.abspath(web_dir))
         self.api = api_instance
 
     def __call__(self, environ, start_response):
@@ -38,6 +40,14 @@ class KaceWsgiApp:
         
         # Route: GET /api/sftp/list
         if path == '/api/sftp/list':
+            if environ.get('REQUEST_METHOD', 'GET').upper() != 'GET':
+                data = b'{"error":"Method not allowed"}'
+                start_response('405 Method Not Allowed', [
+                    ('Content-Type', 'application/json'),
+                    ('Content-Length', str(len(data))),
+                    ('Allow', 'GET'),
+                ])
+                return [data]
             import urllib.parse
             import posixpath
             query = environ.get('QUERY_STRING', '')
@@ -61,7 +71,7 @@ class KaceWsgiApp:
                 ])
                 return [data]
             except Exception as e:
-                err_msg = json.dumps({"error": str(e)}).encode('utf-8')
+                err_msg = json.dumps({"error": self.api._sanitize_error(e)}).encode('utf-8')
                 start_response('500 Internal Server Error', [
                     ('Content-Type', 'application/json'),
                     ('Content-Length', str(len(err_msg)))
@@ -74,8 +84,12 @@ class KaceWsgiApp:
             if not clean_path or clean_path == 'index.html':
                 clean_path = 'index.html'
                 
-            file_path = os.path.abspath(os.path.join(self.web_dir, clean_path))
-            if not file_path.startswith(self.web_dir):
+            file_path = os.path.realpath(os.path.abspath(os.path.join(self.web_dir, clean_path)))
+            try:
+                path_is_contained = os.path.commonpath((self.web_dir, file_path)) == self.web_dir
+            except ValueError:
+                path_is_contained = False
+            if not path_is_contained:
                 start_response('403 Forbidden', [('Content-Type', 'text/plain')])
                 return [b'Forbidden']
                 
@@ -488,7 +502,7 @@ class Api:
         )
         ssl_ctx = ssl.create_default_context()
         
-        with urllib.request.urlopen(req, context=ssl_ctx) as response:
+        with urllib.request.urlopen(req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as response:
             data = json.loads(response.read().decode('utf-8'))
             
         assets = data.get("assets", [])
@@ -597,7 +611,7 @@ class Api:
                     sha256_url,
                     headers={'User-Agent': 'Mozilla/5.0'}
                 )
-                with urllib.request.urlopen(sha_req, context=ssl_ctx) as sha_response:
+                with urllib.request.urlopen(sha_req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as sha_response:
                     sha_content = sha_response.read().decode('utf-8').strip()
                     remote_sha256 = sha_content.split()[0]
             except Exception as net_err:
@@ -655,7 +669,7 @@ class Api:
         ssl_ctx = ssl.create_default_context()
 
         try:
-            with urllib.request.urlopen(request, context=ssl_ctx) as response:
+            with urllib.request.urlopen(request, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as response:
                 content_length = int(response.info().get('Content-Length', 0))
                 bytes_downloaded = 0
                 chunk_size = 1024 * 1024
@@ -741,7 +755,7 @@ class Api:
         import ssl
         ssl_ctx = ssl.create_default_context()
         try:
-            with urllib.request.urlopen(req, context=ssl_ctx) as response:
+            with urllib.request.urlopen(req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as response:
                 redirected_url = response.geturl()
 
             sha_url = redirected_url + ".sha256"
@@ -749,7 +763,7 @@ class Api:
                 sha_url,
                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
             )
-            with urllib.request.urlopen(sha_req, context=ssl_ctx) as sha_response:
+            with urllib.request.urlopen(sha_req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as sha_response:
                 sha_content = sha_response.read().decode('utf-8').strip()
                 remote_sha256 = sha_content.split()[0]
         except Exception as net_err:
