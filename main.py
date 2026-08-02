@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import threading
 import webview
 from typing import Dict, Any
@@ -175,7 +176,10 @@ class Api:
         if not self._window:
             return ""
         
-        file_types = ('Raspberry Pi Images (*.img;*.zip;*.xz)', 'All files (*.*)')
+        # Compressed custom images are intentionally not accepted here. Automatic
+        # images are extracted through the verified cache pipeline; custom files
+        # must already be raw images so they can never reach the writer compressed.
+        file_types = ('Raw Raspberry Pi Images (*.img)', 'All files (*.*)')
         result = self._window.create_file_dialog(webview.OPEN_DIALOG, file_types=file_types)
         if result and len(result) > 0:
             return result[0]
@@ -293,6 +297,7 @@ class Api:
 
         with open(file_path, "rb") as f:
             while True:
+                self._check_cancelled()
                 chunk = f.read(chunk_size)
                 if not chunk:
                     break
@@ -303,70 +308,131 @@ class Api:
                     self.set_device_state("FLASHING", pct, f"{action_message}: {pct}%")
         return sha256.hexdigest()
 
+    @staticmethod
+    def _remove_file_if_present(file_path: str):
+        try:
+            os.remove(file_path)
+        except FileNotFoundError:
+            pass
+
+    @staticmethod
+    def _validate_raw_image(image_path: str) -> int:
+        """Rejects empty/non-disk files before they can reach the raw writer."""
+        image_size = os.path.getsize(image_path)
+        if image_size < 512:
+            raise ValueError("OS image is too small to contain a partition table.")
+        with open(image_path, "rb") as image_file:
+            first_sector = image_file.read(512)
+        if len(first_sector) != 512 or first_sector[510:512] != b"\x55\xaa":
+            raise ValueError("OS image does not contain a valid MBR/GPT boot signature.")
+        return image_size
+
+    def _cached_file_is_valid(self, file_path: str, expected_sha256: str = "", *, raw_image: bool = False) -> bool:
+        """Requires a matching checksum sidecar before reusing a cached file."""
+        if not os.path.isfile(file_path):
+            return False
+        sidecar = file_path + ".sha256"
+        if not os.path.isfile(sidecar):
+            return False
+        try:
+            with open(sidecar, "r", encoding="utf-8") as checksum_file:
+                recorded = checksum_file.read().strip().split()[0]
+            if not re.fullmatch(r"[0-9a-fA-F]{64}", recorded):
+                return False
+            if expected_sha256 and recorded.lower() != expected_sha256.lower():
+                return False
+            actual = self._compute_sha256(file_path, "Verifying cached file")
+            if actual.lower() != recorded.lower():
+                return False
+            if raw_image:
+                self._validate_raw_image(file_path)
+            return True
+        except ValueError:
+            if self._flash_cancel_event.is_set():
+                raise
+            return False
+        except (OSError, IndexError):
+            return False
+
     def _decompress_archive(self, cached_file: str, target_img: str, status_prefix: str = "Decompressing OS image"):
         """
         Decompresses a compressed archive (.xz or .zip) to a target .img file with progress reporting.
         Returns the SHA-256 hash of the decompressed image.
         """
-        if cached_file.lower().endswith(".zip"):
-            import zipfile
-            if os.path.exists(target_img):
-                os.remove(target_img)
-            self._check_cancelled()
-            with zipfile.ZipFile(cached_file, "r") as z:
-                img_names = [name for name in z.namelist() if name.lower().endswith(".img")]
-                if not img_names:
-                    raise ValueError(f"No .img file found inside the zip archive: {cached_file}")
-                img_name = img_names[0]
-                
-                info = z.getinfo(img_name)
-                total_size = info.file_size
-                bytes_written = 0
+        import lzma
+        import zipfile
+
+        target_part = target_img + ".part"
+        sidecar_part = target_img + ".sha256.part"
+        self._remove_file_if_present(target_part)
+        self._remove_file_if_present(sidecar_part)
+
+        try:
+            if cached_file.lower().endswith(".zip"):
+                self._check_cancelled()
+                with zipfile.ZipFile(cached_file, "r") as archive:
+                    img_names = [name for name in archive.namelist() if name.lower().endswith(".img")]
+                    if len(img_names) != 1:
+                        raise ValueError(
+                            f"ZIP archive must contain exactly one .img file; found {len(img_names)}."
+                        )
+                    img_name = img_names[0]
+                    info = archive.getinfo(img_name)
+                    expected_size = info.file_size
+                    bytes_written = 0
+                    chunk_size = 4 * 1024 * 1024
+
+                    with archive.open(img_name) as source, open(target_part, "wb") as target:
+                        while True:
+                            self._check_cancelled()
+                            chunk = source.read(chunk_size)
+                            if not chunk:
+                                break
+                            target.write(chunk)
+                            bytes_written += len(chunk)
+                            if expected_size > 0:
+                                pct = int((bytes_written / expected_size) * 100)
+                                self.set_device_state("FLASHING", pct, f"{status_prefix}: {pct}%")
+                    if bytes_written != expected_size:
+                        raise ValueError(
+                            f"ZIP image size mismatch: expected {expected_size} bytes, extracted {bytes_written}."
+                        )
+            elif cached_file.lower().endswith((".xz", ".img.xz")):
+                decompressor = lzma.LZMADecompressor()
+                compressed_size = os.path.getsize(cached_file)
+                bytes_read = 0
                 chunk_size = 4 * 1024 * 1024
-                
-                with z.open(img_name) as source, open(target_img, "wb") as target:
+
+                with open(cached_file, "rb") as source, open(target_part, "wb") as target:
                     while True:
                         self._check_cancelled()
                         chunk = source.read(chunk_size)
                         if not chunk:
                             break
-                        target.write(chunk)
-                        bytes_written += len(chunk)
-                        if total_size > 0:
-                            pct = int((bytes_written / total_size) * 100)
-                            self.set_device_state("FLASHING", pct, f"{status_prefix}: {pct}%")
-        else:
-            # Fallback/default: lzma decompressor
-            import lzma
-            if os.path.exists(target_img):
-                os.remove(target_img)
-            decompressor = lzma.LZMADecompressor()
-            compressed_size = os.path.getsize(cached_file)
-            bytes_read = 0
-            chunk_size = 4 * 1024 * 1024  # 4MB chunks
+                        bytes_read += len(chunk)
+                        data = decompressor.decompress(chunk)
+                        if data:
+                            target.write(data)
+                        pct = int((bytes_read / compressed_size) * 100) if compressed_size else 0
+                        self.set_device_state("FLASHING", pct, f"{status_prefix}: {pct}%")
+                if not decompressor.eof:
+                    raise ValueError("XZ archive ended before a complete compressed stream was read.")
+            else:
+                raise ValueError(f"Unsupported compressed image format: {cached_file}")
 
-            with open(cached_file, "rb") as f_in, open(target_img, "wb") as f_out:
-                while True:
-                    self._check_cancelled()
-                    chunk = f_in.read(chunk_size)
-                    if not chunk:
-                        break
-                    bytes_read += len(chunk)
-                    decompressed_data = decompressor.decompress(chunk)
-                    if decompressed_data:
-                        f_out.write(decompressed_data)
+            self._validate_raw_image(target_part)
+            self.set_device_state("FLASHING", 0, "Saving decompressed image checksum cache...")
+            calculated_img_sha = self._compute_sha256(target_part, "Generating checksum cache")
+            with open(sidecar_part, "w", encoding="utf-8", newline="\n") as sidecar:
+                sidecar.write(calculated_img_sha + "\n")
 
-                    pct = int((bytes_read / compressed_size) * 100)
-                    self.set_device_state("FLASHING", pct, f"{status_prefix}: {pct}%")
-
-        # Calculate and save decompressed image checksum
-        self.set_device_state("FLASHING", 0, "Saving decompressed image checksum cache...")
-        target_img_sha = target_img + ".sha256"
-        calculated_img_sha = self._compute_sha256(target_img, "Generating checksum cache")
-        with open(target_img_sha, "w", encoding="utf-8") as f:
-            f.write(calculated_img_sha)
-
-        return calculated_img_sha
+            os.replace(target_part, target_img)
+            os.replace(sidecar_part, target_img + ".sha256")
+            return calculated_img_sha
+        except Exception:
+            self._remove_file_if_present(target_part)
+            self._remove_file_if_present(sidecar_part)
+            raise
 
     def _decompress_xz(self, cached_xz: str, target_img: str, status_prefix: str = "Decompressing OS image"):
         """Wrapper for backward compatibility."""
@@ -486,7 +552,6 @@ class Api:
         if not base_name.endswith(".img"):
             base_name += ".img"
         target_img = os.path.join(cache_dir, base_name)
-        target_img_sha = target_img + ".sha256"
         
         # Fetch remote SHA256 if available
         remote_sha256 = ""
@@ -506,23 +571,12 @@ class Api:
                 
         self._check_cancelled()
         
-        # Determine if download is needed
-        need_download = False
-        need_decompress = False
-        
-        if not os.path.exists(cached_archive):
-            need_download = True
-        elif remote_sha256:
-            if os.path.exists(cached_archive_sha):
-                with open(cached_archive_sha, "r", encoding="utf-8") as f:
-                    local_archive_sha = f.read().strip()
-                if local_archive_sha != remote_sha256:
-                    need_download = True
-            else:
-                need_download = True
-                
-        if not os.path.exists(target_img):
-            need_decompress = True
+        # Cache entries are reusable only when an atomically-published checksum
+        # sidecar matches the complete file.
+        archive_valid = self._cached_file_is_valid(cached_archive, remote_sha256)
+        image_valid = self._cached_file_is_valid(target_img, raw_image=True)
+        need_download = not archive_valid and (not image_valid or bool(remote_sha256))
+        need_decompress = not image_valid
             
         # Download stage
         if need_download:
@@ -532,40 +586,21 @@ class Api:
         # Decompression stage
         if need_decompress:
             self._decompress_archive(cached_archive, target_img, "Decompressing OS image")
-        else:
-            # Verify existing cached .img integrity
-            self.set_device_state("FLASHING", 0, "Verifying cached image integrity...")
-            if os.path.exists(target_img_sha):
-                with open(target_img_sha, "r", encoding="utf-8") as f:
-                    expected_img_sha = f.read().strip()
-            else:
-                expected_img_sha = ""
-                
-            calculated_img_sha = self._compute_sha256(target_img, "Verifying cached image")
-            
-            if expected_img_sha and calculated_img_sha != expected_img_sha:
-                print("Cache verification failed. Re-decompressing image...", file=sys.stderr)
-                self.set_device_state("FLASHING", 0, "Cached image corrupted. Re-decompressing OS image...")
-                self._decompress_archive(cached_archive, target_img, "Decompressing OS image")
-                
+
+        self._validate_raw_image(target_img)
         return target_img
 
     def _download_os_image(self, download_url: str, cached_xz: str, cached_xz_sha: str, remote_sha256: str, redirected_url: str, arch_suffix: str):
-        """
-        Downloads the official Raspberry Pi OS Lite .xz archive with progress and ETA reporting.
-        Verifies integrity against the remote SHA-256 hash.
-        """
-        import urllib.request
+        """Downloads and atomically publishes a validated image archive."""
+        import shutil
         import ssl
         import time as _time
-        import shutil
+        import urllib.request
 
         if not redirected_url:
             raise ValueError("Cannot resolve download URL and no cached image is available.")
 
         cache_dir = os.path.dirname(cached_xz)
-        
-        # Check disk space (require at least 5 GB free)
         free_bytes = shutil.disk_usage(cache_dir).free
         if free_bytes < 5 * 1024 ** 3:
             raise ValueError(
@@ -573,67 +608,68 @@ class Api:
             )
 
         self.set_device_state("FLASHING", 0, "Downloading latest official Raspberry Pi OS Lite...")
-        temp_xz = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}_temp.img.xz")
+        archive_part = cached_xz + ".part"
+        checksum_part = cached_xz_sha + ".part"
+        self._remove_file_if_present(archive_part)
+        self._remove_file_if_present(checksum_part)
 
-        req_dl = urllib.request.Request(
+        request = urllib.request.Request(
             redirected_url,
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         )
-
-        dl_start_time = _time.monotonic()
-        # L6 FIX: Explicit SSL context ensures TLS certificates are validated against
-        # the system CA store, protecting against MITM on the OS image download.
+        download_started = _time.monotonic()
         ssl_ctx = ssl.create_default_context()
 
-        with urllib.request.urlopen(req_dl, context=ssl_ctx) as response:
-            content_length = int(response.info().get('Content-Length', 0))
-            bytes_downloaded = 0
-            chunk_size = 1024 * 1024  # 1MB chunks
-
-            with open(temp_xz, "wb") as f_temp:
-                while True:
-                    self._check_cancelled()
-                    chunk = response.read(chunk_size)
-                    if not chunk:
-                        break
-                    f_temp.write(chunk)
-                    bytes_downloaded += len(chunk)
-
-                    mb_downloaded = round(bytes_downloaded / (1024 * 1024), 1)
-
-                    if content_length > 0:
-                        pct = int((bytes_downloaded / content_length) * 100)
-                        # Calculate ETA
-                        elapsed = _time.monotonic() - dl_start_time
-                        if elapsed > 0.5 and bytes_downloaded > 0:
-                            speed = bytes_downloaded / elapsed
-                            remaining_bytes = content_length - bytes_downloaded
-                            eta_secs = int(remaining_bytes / speed) if speed > 0 else 0
-                            eta_min, eta_sec = divmod(eta_secs, 60)
-                            eta_str = f"{eta_min}m {eta_sec:02d}s" if eta_min > 0 else f"{eta_sec}s"
-                            self.set_device_state("FLASHING", pct, f"Downloading OS image: {pct}% ({mb_downloaded} MB) — ~{eta_str} remaining")
+        try:
+            with urllib.request.urlopen(request, context=ssl_ctx) as response:
+                content_length = int(response.info().get('Content-Length', 0))
+                bytes_downloaded = 0
+                chunk_size = 1024 * 1024
+                with open(archive_part, "wb") as output:
+                    while True:
+                        self._check_cancelled()
+                        chunk = response.read(chunk_size)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        bytes_downloaded += len(chunk)
+                        downloaded_mb = round(bytes_downloaded / (1024 * 1024), 1)
+                        if content_length > 0:
+                            pct = int((bytes_downloaded / content_length) * 100)
+                            elapsed = _time.monotonic() - download_started
+                            if elapsed > 0.5 and bytes_downloaded > 0:
+                                speed = bytes_downloaded / elapsed
+                                remaining = max(content_length - bytes_downloaded, 0)
+                                eta_secs = int(remaining / speed) if speed > 0 else 0
+                                eta_min, eta_sec = divmod(eta_secs, 60)
+                                eta = f"{eta_min}m {eta_sec:02d}s" if eta_min else f"{eta_sec}s"
+                                message = f"Downloading OS image: {pct}% ({downloaded_mb} MB) — ~{eta} remaining"
+                            else:
+                                message = f"Downloading OS image: {pct}% ({downloaded_mb} MB)..."
+                            self.set_device_state("FLASHING", pct, message)
                         else:
-                            self.set_device_state("FLASHING", pct, f"Downloading OS image: {pct}% ({mb_downloaded} MB)...")
-                    else:
-                        self.set_device_state("FLASHING", 15, f"Downloading OS image ({mb_downloaded} MB)...")
+                            self.set_device_state("FLASHING", 15, f"Downloading OS image ({downloaded_mb} MB)...")
 
-        # Verify downloaded .xz integrity
-        self.set_device_state("FLASHING", 0, "Verifying downloaded archive integrity...")
-        calculated_xz_sha = self._compute_sha256(temp_xz, "Verifying archive integrity")
+            if content_length and bytes_downloaded != content_length:
+                raise ValueError(
+                    f"Downloaded archive size mismatch: expected {content_length} bytes, received {bytes_downloaded}."
+                )
 
-        if remote_sha256 and calculated_xz_sha != remote_sha256:
-            if os.path.exists(temp_xz):
-                os.remove(temp_xz)
-            raise ValueError(f"Integrity check failed: SHA256 mismatch.\nExpected: {remote_sha256}\nCalculated: {calculated_xz_sha}")
+            self.set_device_state("FLASHING", 0, "Verifying downloaded archive integrity...")
+            calculated_sha256 = self._compute_sha256(archive_part, "Verifying archive integrity")
+            if remote_sha256 and calculated_sha256.lower() != remote_sha256.lower():
+                raise ValueError(
+                    f"Integrity check failed: SHA256 mismatch.\nExpected: {remote_sha256}\nCalculated: {calculated_sha256}"
+                )
 
-        # Cache the validated .xz file and its hash
-        if os.path.exists(cached_xz):
-            os.remove(cached_xz)
-        os.rename(temp_xz, cached_xz)
-
-        if remote_sha256:
-            with open(cached_xz_sha, "w", encoding="utf-8") as f:
-                f.write(remote_sha256)
+            with open(checksum_part, "w", encoding="utf-8", newline="\n") as sidecar:
+                sidecar.write(calculated_sha256 + "\n")
+            os.replace(archive_part, cached_xz)
+            os.replace(checksum_part, cached_xz_sha)
+        except Exception:
+            self._remove_file_if_present(archive_part)
+            self._remove_file_if_present(checksum_part)
+            raise
 
     def _resolve_default_image(self, os_arch: str) -> str:
         """
@@ -648,7 +684,6 @@ class Api:
 
         arch_suffix = "arm64" if os_arch == "64bit" else "armhf"
         target_img = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}.img")
-        target_img_sha = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}.img.sha256")
         cached_xz = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}.img.xz")
         cached_xz_sha = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}.img.xz.sha256")
 
@@ -688,23 +723,10 @@ class Api:
 
         self._check_cancelled()
 
-        # Determine if download is needed
-        need_download = False
-        need_decompress = False
-
-        if not os.path.exists(cached_xz):
-            need_download = True
-        elif remote_sha256:
-            if os.path.exists(cached_xz_sha):
-                with open(cached_xz_sha, "r", encoding="utf-8") as f:
-                    local_xz_sha = f.read().strip()
-                if local_xz_sha != remote_sha256:
-                    need_download = True
-            else:
-                need_download = True
-
-        if not os.path.exists(target_img):
-            need_decompress = True
+        archive_valid = self._cached_file_is_valid(cached_xz, remote_sha256)
+        image_valid = self._cached_file_is_valid(target_img, raw_image=True)
+        need_download = not archive_valid and (not image_valid or bool(remote_sha256))
+        need_decompress = not image_valid
 
         # Download stage
         if need_download:
@@ -714,22 +736,8 @@ class Api:
         # Decompression stage
         if need_decompress:
             self._decompress_xz(cached_xz, target_img, "Decompressing OS image")
-        else:
-            # Verify existing cached .img integrity
-            self.set_device_state("FLASHING", 0, "Verifying cached image integrity...")
-            if os.path.exists(target_img_sha):
-                with open(target_img_sha, "r", encoding="utf-8") as f:
-                    expected_img_sha = f.read().strip()
-            else:
-                expected_img_sha = ""
 
-            calculated_img_sha = self._compute_sha256(target_img, "Verifying cached image")
-
-            if expected_img_sha and calculated_img_sha != expected_img_sha:
-                print("Cache verification failed. Re-decompressing image...", file=sys.stderr)
-                self.set_device_state("FLASHING", 0, "Cached image corrupted. Re-decompressing OS image...")
-                self._decompress_xz(cached_xz, target_img, "Decompressing OS image")
-
+        self._validate_raw_image(target_img)
         return target_img
 
     def _resolve_custom_image(self, image_path: str) -> str:
@@ -740,6 +748,8 @@ class Api:
         """
         if not os.path.exists(image_path):
             raise ValueError(f"Custom image file not found: {image_path}")
+        if not image_path.lower().endswith(".img"):
+            raise ValueError("Custom images must be uncompressed .img files.")
 
         # Check for matching .sha256 file next to the custom image
         custom_sha_path = image_path + ".sha256"
@@ -770,6 +780,7 @@ class Api:
             calculated_custom_sha = self._compute_sha256(image_path, "Reading custom image")
             print(f"Custom image SHA256: {calculated_custom_sha}", file=sys.stderr)
 
+        self._validate_raw_image(image_path)
         return image_path
 
     # ── Flash Worker Orchestrator ─────────────────────────────────────────
@@ -788,6 +799,7 @@ class Api:
                 image_path = self._resolve_custom_image(image_path)
 
             self._check_cancelled()
+            self._validate_raw_image(image_path)
 
             # Stage 2: Flash image to drive
             self.set_device_state("FLASHING", 0, "Writing blocks to SD card...")
@@ -1084,4 +1096,3 @@ if __name__ == "__main__":
         sys.exit(0)
     else:
         main()
-
