@@ -46,6 +46,24 @@ def test_bootstrap_contains_immutable_installer_contract_and_terminal_failure():
     assert "exit 1" in failure_block
 
 
+def test_bootstrap_enables_native_klipper_features_idempotently():
+    script = BOOTSTRAP.read_text(encoding="utf-8")
+    assert "# BEGIN KACE_CONFIG_DEFAULT_HELPER" in script
+    assert "os.replace(temporary_name, path)" in script
+    assert '"exclude_object"' in script
+    assert '"force_move" "enable_force_move" "True"' in script
+    assert '"file_manager" "enable_object_processing" "True"' in script
+
+
+def test_bootstrap_preserves_existing_moonraker_configuration():
+    script = BOOTSTRAP.read_text(encoding="utf-8")
+    creation_guard = (
+        'if [ ! -f "$PRINTER_HOME/printer_data/config/moonraker.conf" ]; then'
+    )
+    assert creation_guard in script
+    assert '! grep -q "\\[authorization\\]"' not in script
+
+
 def test_pyinstaller_bundles_the_verified_bootstrap():
     spec = (ROOT / "main.spec").read_text(encoding="utf-8")
     assert "('bootstrap.sh', '.')" in spec
