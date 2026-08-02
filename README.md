@@ -1,176 +1,206 @@
-# 🚀 KACE Studio
+<p align="center">
+  <img src="web/KACE-studio-banner.png" width="1000" alt="KACE Studio banner">
+</p>
+
+<h1 align="center">KACE Studio</h1>
 
 <p align="center">
-  <img src="web/KACE-studio-banner.png" alt="KACE Studio Banner" width="100%" />
+  Windows provisioning and management companion for KACE
 </p>
 
 <p align="center">
-  <a href="https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml">
-    <img src="https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml/badge.svg" alt="CI Pipeline Status" />
-  </a>
-  <a href="https://github.com/3D-uy/KACE-studio/releases/tag/v0.2.0">
-    <img src="https://img.shields.io/badge/Release-v0.2.0-orange.svg" alt="Release Version" />
-  </a>
-  <a href="https://www.python.org/">
-    <img src="https://img.shields.io/badge/Python-3.8%2B-blue.svg" alt="Python Version" />
-  </a>
-  <a href="#">
-    <img src="https://img.shields.io/badge/Platform-Windows-00e5ff.svg" alt="Platform Support: Windows" />
-  </a>
-  <a href="https://www.gnu.org/licenses/gpl-3.0">
-    <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPLv3" />
-  </a>
-  <a href="https://www.klipper3d.org/">
-    <img src="https://img.shields.io/badge/Klipper-Compatible-green.svg" alt="Klipper Compatible" />
-  </a>
+  <a href="https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml"><img src="https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <img src="https://img.shields.io/badge/status-pre--1.0-yellow" alt="Project status: pre-1.0">
+  <img src="https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue" alt="Python 3.11 and 3.12">
+  <img src="https://img.shields.io/badge/platform-Windows-0078D4" alt="Windows">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0 license"></a>
 </p>
 
----
+## Overview
 
-## 📖 About KACE Studio
+KACE Studio is the Windows-first desktop provisioner in the KACE ecosystem. It writes a supported Raspberry Pi operating-system image, injects first-boot configuration, discovers the new host, provides SSH/SFTP management, and launches the pinned KACE provisioning bootstrap.
 
-**KACE Studio** is the unified desktop application used to provision and deploy KACE on Single Board Computers (SBCs) for Klipper-based 3D printers. 
+Studio is not the printer-configuration generator. That responsibility belongs to [KACE](https://github.com/3D-uy/KACE), which runs on the Linux printer host after provisioning.
 
-Historically, configuring a new Raspberry Pi to run Klipper required juggling multiple fragmented tools: disk imagers, credentials setup files, IP subnet scanners, SSH clients, text editors, and terminal consoles. **KACE Studio** consolidates this entire onboarding pipeline into a single, guided visual desktop workflow requiring **zero CLI expertise** from the end-user.
+Writing a raw disk image is destructive. Studio includes target checks and an elevated helper boundary, but the user remains responsible for confirming the selected physical device and preserving any data on it.
 
-| 📦 Project | 🎯 Purpose |
-|:---|:---|
-| **KACE Studio** | Desktop provisioning & deployment tool |
-| **KACE** | Klipper Automatic Configuration Ecosystem |
+## How KACE and KACE Studio work together
 
-*   ➡️ **Looking for KACE itself?** [github.com/3D-uy/kace](https://github.com/3D-uy/kace)
-*   ➡️ **Looking for the desktop installer and provisioning tool?** [github.com/3D-uy/KACE-studio](https://github.com/3D-uy/KACE-studio)
+The two projects are independent repositories with a deliberately narrow integration boundary:
 
-Built using a hybrid desktop architecture (**Python + PyWebView + Vanilla HTML5/JS/CSS**), it provides premium aesthetics, smooth animations, and active state transitions while ensuring system safety.
+1. Studio downloads or accepts a raw Raspberry Pi image, validates it, and writes it to the selected device.
+2. Studio injects network, credentials, first-boot settings, and `bootstrap.sh` onto the boot partition.
+3. After the Pi boots, Studio discovers it and connects over SSH.
+4. The Studio UI launches the bootstrap and follows its machine-readable stage and error markers.
+5. The bootstrap installs Klipper, Moonraker, the selected web interface, optional Crowsnest support, and KACE.
+6. KACE generates and deploys the printer-specific configuration and firmware artifacts.
 
----
+Studio CI fetches `scripts/bootstrap.sh` from an immutable KACE commit, verifies its SHA-256, and supplies that exact file to the PyInstaller build. Source mode prefers the sibling `KACE/scripts/bootstrap.sh` checkout when both repositories share this workspace; packaged mode uses the bundled copy.
 
-## ✨ Key Features
+## Current status
 
-## 💾 Stage A: Smart SD Card Imager
+KACE Studio is in active pre-1.0 development. Its backend tests run on Windows and Linux with Python 3.11 and 3.12, and CI builds a Windows executable after the tests pass. Automated tests use mocks and temporary files: they do not write to physical disks or validate a complete printer installation on real hardware.
 
-*   **📂 OS Image Caching**: Automatically downloads, validates, and decompresses (`lzma` extraction) official Raspberry Pi OS Lite images, caching them for future use.
+The `main` branch and CI artifacts are development outputs, not a stable compatibility promise or a published release process.
 
-*   **🔧 Custom Selectors**: Guided dropdowns for board selection, dashboard layout, and target architectures.
+## Features
 
-*   **🛡️ Administrative Separation**: Employs a secure partition layout. The main app runs in user-space, launching a UAC-elevated helper script (`backend/kace_writer.
-                                       py`) only for block-writing physical disks.
+- Guided desktop flow built with PyWebView and a local HTML/CSS/JavaScript interface.
+- Official image discovery, download, checksum handling, cache reuse, and atomic `.part` publication.
+- Complete ZIP and XZ extraction checks before a raw image becomes flashable.
+- Custom-image support limited to uncompressed `.img` files, with optional adjacent SHA-256 sidecars.
+- Minimum raw-image plausibility and destination-capacity checks.
+- Windows disk discovery with system/boot exclusions and allowed-bus filtering.
+- A full selected-device identity snapshot passed to the elevated writer for revalidation.
+- Reinforced confirmation for higher-risk USB HDD and SSD targets.
+- UAC-elevated raw writer isolated from the normal desktop process.
+- Boot-partition injection for supported prebuilt, first-boot, and cloud-init paths.
+- Local network discovery for SSH and Moonraker endpoints.
+- Embedded SSH terminal and SFTP file management.
+- Bootstrap progress and failure reporting in the desktop UI.
 
-*   **⚙️ Multi-Format Network Configuration**: Automatically mounts boot partitions to inject modern network profiles:
+## Requirements
 
-    *   **MainsailOS (Pre-baked)**: Injects `headless_nm.txt` for native network setup.
+### End users
 
-    *   **Vanilla OS Fallback (Bookworm/Trixie)**: Writes `firstrun.sh` to copy Connection Profiles on first boot via `systemd.run` in `cmdline.txt` 
-                                                   (cleaning up automatically afterwards).
+- Windows for physical raw-disk flashing.
+- A supported Raspberry Pi and an SD card or other explicitly accepted removable target.
+- Administrator approval when the writer helper is launched.
+- Network access for image downloads, provisioning dependencies, and GitHub-hosted KACE contracts.
+- A local network path from the Windows machine to the newly booted Pi.
 
-    *   **Cloud-Init**: Injects standard cloud-init files (`user-data`, `network-config`, `meta-data`).
+### Contributors
 
-*   **🔒 Physical Volume Exclusive Locking**: Aborts flashing with a diagnostic error if target disk volumes cannot be exclusively locked 
-                                              (e.g., if locked by File Explorer or another application), preventing half-written corruptions.
+- Python 3.11 or 3.12.
+- Git.
+- Windows for real writer validation; Linux is supported for non-destructive CI tests.
+- PyInstaller when building the executable.
 
-*   **📊 Crash & Exit Code Diagnostics**: Captures and translates the exit code if the administrative subprocess terminates abruptly before writing status reports.
+Docker is not required to run Studio. It is used by the KACE repository for configuration and firmware validation.
 
-## 🔍 Stage B: Subnet Auto-Discovery
+## Installation
 
-*   **📡 Subnet Scans**: Parallelized port scanners look up Port 22 (SSH) and Port 7125 (Moonraker) to automatically find the Pi on the local network.
+KACE Studio does not currently document a stable binary release channel. Run it from source for development or use a Windows executable produced by a trusted CI run after verifying its provenance.
 
-*   **⏱️ Fast Reverse DNS Lookups**: Restricts DNS resolution to a `0.5s` timeout threshold using a thread pool worker wrapper, preventing scanner hang-ups on 
-                                      hosts lacking PTR records.
+### Run from source
 
-*   **🛡️ Proactive Client Validation**: Sanitizes IP and hostname manual connection fields using front-end RegExp checks before invoking network lookup commands.
-
-*   **🏷️ Visual Badges**: Discovered endpoints show visual state indicators (`SSH Enabled`, `Moonraker`).
-
-## 💻 Stage C: Interactive SSH Workspace
-
-*   **🖥️ Embedded Terminal**: Integrates `xterm.js` for real-time terminal output streaming directly in the app.
-
-*   **⚡ Automated Installer Pipeline**: Triggers remote KACE bootstrapping installer scripts via SSH to download and install Klipper, Moonraker, control interfaces 
-                                          (Mainsail/Fluidd), and webcam services (Crowsnest) in a single click.
-
----
-
-## 🛠️ How it Works: The Onboarding Flow
-
-```mermaid
-graph TD
-    A["💾 1. Configure & Flash"] -->|Injects settings & bootstrap.txt| B["📡 2. Boot Pi on Network"]
-    
-    B -->|Auto-detects IP| C["⚡ 3. Connect & Bootstrap"]
-    
-    C -->|One-Click Curl Script| D["🎉 4. Stack Fully Installed"]
-```
-
-1.  **Step 1: Configuration & Flashing**: The user selects their Pi model, desired dashboard UI (Mainsail, Fluidd, or both), credentials, and Wi-Fi networks. The SD 
-                                          card is flashed, and KACE Studio injects `kace-bootstrap.txt` along with networking files into the `/boot` partition.
-2.  **Step 2: Network Discovery**: The Pi boots, automatically connects to the network using the injected details, and registers on the local subnet. KACE Studio 
-                                   discovers it.
-3.  **Step 3: Bootstrapping**: The user connects to the device via the embedded SSH tab and clicks **"Bootstrap KACE"**, which streams the installer command directly to 
-                               the host:
-
-    ```bash
-    curl -sSL https://raw.githubusercontent.com/3D-uy/KACE-studio/main/bootstrap.sh | bash -s -- --dashboard <mainsail|fluidd|both>
-    ```
-    This script downloads and configures Klipper (automatically patched for Python 3 compatibility on modern distros), Moonraker, control interfaces, and the Crowsnest webcam streamer, creating a functional 3D printing control hub.
-
----
-
-## ⚙️ CI/CD Pipeline
-
-The repository includes a GitHub Actions Continuous Integration (CI) configuration (`.github/workflows/ci.yml`):
-
-*   **Test Jobs**: Runs the Python `pytest` backend test suite across Windows (`windows-latest`) and Linux (`ubuntu-latest`) environments for Python versions `3.11` 
-                   and `3.12`. It automatically installs required GUI rendering dependencies on Linux (e.g. WebKit2GTK).
-
-*   **Windows Build Job**: Builds the single-executable file (`KACE-studio.exe`) dynamically using PyInstaller and uploads it as a workflow run artifact upon 
-                           successful test suites completion.
-
----
-
-## 💻 Development & Local Setup
-
-### 📋 Prerequisites
-
-*   Python 3.11+
-*   Windows OS (required for direct disk block flashing API capabilities)
-
-### 📥 Installing Dependencies
-
-Install the Python requirements listed in `requirements.txt`:
-
-```bash
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
-```
-
-### ⚙️ Running the Application Locally
-
-Start the main application launcher:
-
-```bash
+```powershell
+git clone https://github.com/3D-uy/KACE-studio.git
+Set-Location KACE-studio
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 python main.py
 ```
 
-### 🧪 Running Unit Tests
+### Build the Windows executable
 
-Run the test suite locally:
-
-```bash
-py -m pytest tests/test_backend.py -v
-```
-
-### 📦 Compiling to a Single Executable
-
-To bundle the application, web assets, and background helper binaries into a single executable, compile via PyInstaller:
-
-```bash
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 pyinstaller --clean -y main.spec
 ```
 
-The output executable will be created in `dist/KACE-studio.exe`.
+Before building, place the bootstrap file verified against the pinned KACE commit and SHA-256 at `bootstrap.sh`. The CI workflow performs that download and verification automatically. See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the complete contract check.
 
----
+## End-to-end workflow
 
-## 📄 License
+1. Install or launch KACE Studio on Windows.
+2. Choose the Raspberry Pi model, operating-system source, target device, network, credentials, and provisioning options.
+3. Review the selected disk identity and destructive-operation warning. Higher-risk external HDD/SSD targets require reinforced confirmation.
+4. Let Studio resolve a complete raw `.img`, confirm that it fits, and launch the elevated writer.
+5. The writer re-queries the selected physical device and rejects changed or incomplete identity before writing.
+6. Studio injects first-boot configuration and the verified bootstrap onto the new boot partition.
+7. Boot the Raspberry Pi, wait for it to join the network, and discover or enter its address in Studio.
+8. Connect through the embedded SSH workspace and start provisioning.
+9. Studio reports completion only after the bootstrap's KACE stage succeeds; a missing KACE installation is a provisioning failure.
+10. Launch KACE on the Pi, generate and deploy `printer.cfg` and any required MCU firmware, then follow Klipper's official commissioning checks before operating the printer.
 
-This project is licensed under the GNU General Public License v3 (GPLv3). See the [LICENSE](LICENSE) file for details.
+## Architecture
+
+| Area | Responsibility |
+| --- | --- |
+| `main.py` | PyWebView API, desktop lifecycle, image acquisition, cache orchestration, and workflow state |
+| `web/` | Local user interface, workflow state, validation, terminal, and bundled front-end assets |
+| `backend/imager.py` | Disk discovery, identity policy, elevated-writer invocation, and boot-partition injection |
+| `backend/kace_writer.py` | UAC-elevated physical-device revalidation and raw image writing |
+| `backend/discovery.py` | Local-network host and service discovery |
+| `backend/ssh_client.py` | SSH terminal and SFTP operations |
+| `backend/sha512_crypt.py` | Password-hash support for injected Linux account data |
+| `bootstrap.sh` | Build input copied from a pinned KACE revision |
+| `main.spec` | PyInstaller definition, including the verified bootstrap and web assets |
+| `tests/` | Unit and regression coverage using disk, PowerShell, process, network, cache, and filesystem mocks |
+
+The application normally runs without elevation. Only the physical writer helper crosses the administrative boundary.
+
+## Technologies
+
+- Python and PyWebView.
+- Vanilla HTML, CSS, and JavaScript.
+- xterm.js for the embedded terminal.
+- Paramiko for SSH/SFTP.
+- PowerShell and Win32 disk APIs for Windows imaging.
+- PyInstaller for the Windows executable.
+- Pytest and GitHub Actions for validation and CI.
+
+## Testing and validation
+
+Install both runtime and development dependencies, then run:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
+python -m pytest -v
+```
+
+The suite covers the image cache and extraction paths, cancellation cleanup, raw-image checks, disk filtering, device-identity snapshots, elevated-helper revalidation, bootstrap delivery, discovery, SSH behavior, and UI-facing backend contracts. Disk and writer tests are mocked and must never target real hardware.
+
+For bootstrap-sensitive changes, validate both delivery modes:
+
+- Source mode with a sibling `KACE/scripts/bootstrap.sh`.
+- Packaged mode with the verified `bootstrap.sh` included by `main.spec`.
+
+## Docker
+
+Studio has no supported Docker runtime image because a container cannot represent its Windows desktop, UAC, and physical-disk workflow. Linux CI installs GTK/WebKit system libraries only to import and exercise non-destructive application paths.
+
+Docker-based Klipper parser matrices and firmware builds live in the [KACE repository](https://github.com/3D-uy/KACE). They validate generated printer artifacts after Studio has provisioned the host; they do not validate the Windows writer itself.
+
+## CI/CD
+
+GitHub Actions currently:
+
+- Runs the Pytest suite on Windows and Ubuntu with Python 3.11 and 3.12.
+- Fetches KACE's bootstrap from a fixed commit and rejects a SHA-256 mismatch.
+- Builds `KACE-studio.exe` on Windows only after the test matrix passes.
+- Includes the verified `bootstrap.sh` and local web assets through `main.spec`.
+- Uploads the executable as a CI artifact.
+
+CI does not publish a release, sign the executable, or flash physical media.
+
+## Compatibility and limits
+
+- Physical imaging is Windows-only.
+- Automated official-image paths handle the ZIP/XZ formats implemented by the acquisition pipeline.
+- Manually selected custom images must already be raw `.img` files; compressed custom files are rejected before the writer.
+- The current removable-target policy accepts supported USB, SD, and MMC paths after system/boot and identity checks. External USB HDD/SSD devices remain high-risk even with reinforced confirmation.
+- Network discovery depends on local routing, firewall rules, SSH availability, and Moonraker port visibility.
+- Studio can provision the dashboard choices implemented by the KACE bootstrap. Upstream images and installers can change independently.
+- Automated tests do not prove electrical, storage, or printer safety on real hardware.
+
+## Roadmap
+
+Before 1.0, the project should prioritize signed and reproducible Windows artifacts, physical-device qualification, end-to-end provisioning evidence, explicit compatibility records, and continuous verification of the cross-repository bootstrap contract. After 1.0, work should focus on upgrade stability, diagnostics, accessibility, and broader verified platform coverage. Additional provisioning features belong in a later roadmap only when they have ownership and automated coverage.
+
+Roadmap items are intentions, not shipped features.
+
+## Contributing
+
+Open an issue before making a broad workflow or writer change. Keep changes narrow, preserve the unelevated/elevated boundary, add non-destructive regression coverage, and document any change to the bootstrap markers or packaged data contract.
+
+Issues and pull requests are managed in the [KACE Studio repository](https://github.com/3D-uy/KACE-studio).
+
+## License
+
+KACE Studio is licensed under the [GNU General Public License v3.0](LICENSE).
