@@ -15,7 +15,7 @@
     <img src="https://img.shields.io/badge/Python-3.8%2B-blue.svg" alt="Python Version" />
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-00e5ff.svg" alt="Platform Support" />
+    <img src="https://img.shields.io/badge/Platform-Windows-00e5ff.svg" alt="Platform Support: Windows" />
   </a>
   <a href="https://www.gnu.org/licenses/gpl-3.0">
     <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPLv3" />
