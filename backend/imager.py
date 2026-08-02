@@ -111,6 +111,16 @@ def _is_high_risk_disk(identity: dict) -> bool:
         re.search(r"\b(ssd|hdd|hard[ -]?disk|portable drive|external drive)\b", name)
     )
 
+
+def _sha256_file(file_path: str) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(file_path, "rb") as source:
+        for chunk in iter(lambda: source.read(4 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
 # Maps timezone names to ISO 3166-1 alpha-2 WiFi regulatory country codes
 # We build this dynamically using pytz to support ALL timezones in the world.
 TIMEZONE_TO_COUNTRY = {}
@@ -304,6 +314,11 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
             f"Image is too large for target disk: {image_size} bytes required, "
             f"{identity['size_bytes']} bytes available."
         )
+    image_contract = {
+        "disk_identity": identity,
+        "image_size": image_size,
+        "image_sha256": _sha256_file(image_path),
+    }
 
     if sys.platform != "win32":
         err = "Raw flashing is only fully supported on Windows in this MVP client."
@@ -336,7 +351,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
             str(disk_number),
             str(image_path),
             str(status_file),
-            json.dumps(identity, separators=(",", ":")),
+            json.dumps(image_contract, separators=(",", ":")),
         ]
         exec_path = sys.executable
     else:
@@ -348,7 +363,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
             str(disk_number),
             str(image_path),
             str(status_file),
-            json.dumps(identity, separators=(",", ":")),
+            json.dumps(image_contract, separators=(",", ":")),
         ]
         exec_path = sys.executable
 

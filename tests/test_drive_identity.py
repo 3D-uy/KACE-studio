@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -148,7 +149,8 @@ def test_helper_capacity_failure_never_opens_physical_drive(tmp_path, monkeypatc
     image = tmp_path / "large.img"
     image.write_bytes(b"X" * 1024)
     expected = snapshot(size_bytes=512)
-    status = tmp_path / "status.json"
+    status = tmp_path / ".kace" / "temp" / "kace_flash_3.json"
+    status.parent.mkdir(parents=True)
     opened = False
 
     class ForbiddenWriter:
@@ -159,16 +161,74 @@ def test_helper_capacity_failure_never_opens_physical_drive(tmp_path, monkeypatc
 
     monkeypatch.setattr(kace_writer, "_query_disk_identity", lambda _number: dict(expected))
     monkeypatch.setattr(kace_writer, "Win32DiskWriter", ForbiddenWriter)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    write_contract = {
+        "disk_identity": expected,
+        "image_size": image.stat().st_size,
+        "image_sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+    }
     monkeypatch.setattr(
         kace_writer.sys,
         "argv",
-        ["kace_writer.py", "3", str(image), str(status), json.dumps(expected)],
+        ["kace_writer.py", "3", str(image), str(status), json.dumps(write_contract)],
     )
 
     with pytest.raises(SystemExit) as exit_info:
         kace_writer.main()
     assert exit_info.value.code == 1
     assert opened is False
+
+
+def test_helper_rejects_changed_image_before_opening_physical_drive(tmp_path, monkeypatch):
+    image = tmp_path / "image.img"
+    image.write_bytes(b"original")
+    expected = snapshot()
+    status = tmp_path / ".kace" / "temp" / "kace_flash_3.json"
+    status.parent.mkdir(parents=True)
+    contract = {
+        "disk_identity": expected,
+        "image_size": image.stat().st_size,
+        "image_sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+    }
+    image.write_bytes(b"modified")
+    opened = False
+
+    class ForbiddenWriter:
+        def __init__(self, *_args, **_kwargs):
+            nonlocal opened
+            opened = True
+
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(kace_writer, "Win32DiskWriter", ForbiddenWriter)
+    monkeypatch.setattr(
+        kace_writer.sys,
+        "argv",
+        ["kace_writer.py", "3", str(image), str(status), json.dumps(contract)],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        kace_writer.main()
+    assert exit_info.value.code == 1
+    assert opened is False
+
+
+def test_helper_rejects_arbitrary_status_path(tmp_path, monkeypatch):
+    image = tmp_path / "image.img"
+    image.write_bytes(b"image")
+    contract = {
+        "disk_identity": snapshot(),
+        "image_size": image.stat().st_size,
+        "image_sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+    }
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(
+        kace_writer.sys,
+        "argv",
+        ["kace_writer.py", "3", str(image), str(tmp_path / "arbitrary.json"), json.dumps(contract)],
+    )
+    with pytest.raises(SystemExit) as exit_info:
+        kace_writer.main()
+    assert exit_info.value.code == 1
+    assert not (tmp_path / "arbitrary.json").exists()
 
 
 def test_api_rejects_missing_identity_before_starting_thread(monkeypatch):
@@ -208,6 +268,31 @@ def test_api_requires_reinforced_confirmation_for_high_risk_disk():
         high_risk_confirmed=False,
     )
     assert result is False
+
+
+def test_api_rejects_concurrent_flash_operations(monkeypatch):
+    api = main.Api()
+    selected = snapshot()
+    api._drive_snapshots[3] = dict(selected)
+
+    class InertThread:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(main.threading, "Thread", InertThread)
+    first = api.start_flash(
+        3, "image.img", "host", "", "", "pw", "mainsail",
+        drive_identity=selected,
+    )
+    second = api.start_flash(
+        3, "image.img", "host", "", "", "pw", "mainsail",
+        drive_identity=selected,
+    )
+    assert first is True
+    assert second is False
 
 
 def test_frontend_passes_snapshot_and_requires_typed_high_risk_confirmation():

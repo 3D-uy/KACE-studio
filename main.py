@@ -119,6 +119,8 @@ class Api:
         self._window = None
         # L8 FIX: Use threading.Event for cross-thread cancel signalling.
         self._flash_cancel_event = threading.Event()
+        self._flash_lock = threading.Lock()
+        self._flash_active = False
         self._drive_snapshots = {}
         # INFO-02 FIX: Timestamp for scan rate-limiting (one scan per 10 seconds max).
         self._last_scan_time = 0.0
@@ -293,13 +295,23 @@ class Api:
 
         drive_identity = selected_snapshot
 
-        self._flash_cancel_event.clear()
-        thread = threading.Thread(
-            target=self._flash_worker,
-            args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth, drive_identity),
-            daemon=True
-        )
-        thread.start()
+        with self._flash_lock:
+            if self._flash_active:
+                self.set_device_state("ERROR", 0, "A flash operation is already running.")
+                return False
+            self._flash_active = True
+            self._flash_cancel_event.clear()
+        try:
+            thread = threading.Thread(
+                target=self._flash_worker,
+                args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth, drive_identity),
+                daemon=True
+            )
+            thread.start()
+        except Exception:
+            with self._flash_lock:
+                self._flash_active = False
+            raise
         return True
 
     # ── Flash Worker Helpers ──────────────────────────────────────────────
@@ -853,6 +865,9 @@ class Api:
                 self.set_device_state("ERROR", 0, "Flashing cancelled by user.")
             else:
                 self.set_device_state("ERROR", 0, f"Exception occurred: {self._sanitize_error(e)}")
+        finally:
+            with self._flash_lock:
+                self._flash_active = False
 
     def scan_network(self):
         """

@@ -1,6 +1,8 @@
 import os
 import sys
 import json
+import hashlib
+import re
 import subprocess
 import ctypes
 from pathlib import Path
@@ -350,6 +352,39 @@ def _validate_disk_is_removable(disk_number: int, expected_identity: dict = None
     return _validate_disk_identity(disk_number, expected_identity) is not None
 
 
+def _expected_status_path(disk_number: int) -> str:
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile and os.path.exists(user_profile):
+        temp_dir = os.path.join(user_profile, ".kace", "temp")
+    else:
+        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
+    return os.path.realpath(os.path.join(temp_dir, f"kace_flash_{disk_number}.json"))
+
+
+def _open_verified_image(image_path: str, expected_size: int, expected_sha256: str):
+    """Opens, verifies, rewinds, and returns the same handle used for writing."""
+    source = open(image_path, "rb")
+    try:
+        actual_size = os.fstat(source.fileno()).st_size
+        if actual_size != expected_size:
+            raise ValueError(
+                f"image size changed: expected {expected_size} bytes, got {actual_size}"
+            )
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: source.read(4 * 1024 * 1024), b""):
+            digest.update(chunk)
+        actual_sha256 = digest.hexdigest()
+        if actual_sha256.lower() != expected_sha256.lower():
+            raise ValueError(
+                f"image checksum changed: expected {expected_sha256}, got {actual_sha256}"
+            )
+        source.seek(0)
+        return source
+    except Exception:
+        source.close()
+        raise
+
+
 def main():
     if len(sys.argv) < 5:
         safe_print_err(
@@ -366,12 +401,21 @@ def main():
         
     image_path = sys.argv[2]
     status_file = sys.argv[3]
+    expected_status = _expected_status_path(disk_number)
+    if os.path.normcase(os.path.realpath(status_file)) != os.path.normcase(expected_status):
+        safe_print_err("ERROR: Status file path is outside the application-owned flash directory.")
+        sys.exit(1)
     try:
-        expected_identity = json.loads(sys.argv[4])
+        write_contract = json.loads(sys.argv[4])
+        expected_identity = write_contract["disk_identity"]
         _normalize_identity(expected_identity)
-    except (json.JSONDecodeError, TypeError, ValueError) as identity_error:
-        safe_print_err(f"ERROR: Invalid target disk identity: {identity_error}")
-        write_status(status_file, "error", message="Invalid or incomplete target disk identity.")
+        expected_image_size = int(write_contract["image_size"])
+        expected_image_sha256 = str(write_contract["image_sha256"])
+        if expected_image_size <= 0 or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_image_sha256):
+            raise ValueError("invalid image size or SHA-256")
+    except (KeyError, json.JSONDecodeError, TypeError, ValueError) as contract_error:
+        safe_print_err(f"ERROR: Invalid write contract: {contract_error}")
+        write_status(status_file, "error", message="Invalid or incomplete write contract.")
         sys.exit(1)
 
     if not os.path.exists(image_path):
@@ -380,15 +424,27 @@ def main():
         write_status(status_file, "error", message=err_msg)
         sys.exit(1)
 
+    try:
+        verified_source = _open_verified_image(
+            image_path, expected_image_size, expected_image_sha256
+        )
+    except (OSError, ValueError) as image_error:
+        err_msg = f"Image verification failed: {image_error}"
+        safe_print_err(f"ERROR: {err_msg}")
+        write_status(status_file, "error", message=err_msg)
+        sys.exit(1)
+
     current_identity = _validate_disk_identity(disk_number, expected_identity)
     if current_identity is None:
+        verified_source.close()
         err_msg = f"Security check failed: disk {disk_number} identity changed or is unsafe. Aborting write."
         safe_print_err(f"ERROR: {err_msg}")
         write_status(status_file, "error", message=err_msg)
         sys.exit(1)
 
-    image_size = os.path.getsize(image_path)
+    image_size = expected_image_size
     if image_size > current_identity["size_bytes"]:
+        verified_source.close()
         err_msg = (
             f"Image is too large for disk {disk_number}: {image_size} bytes required, "
             f"{current_identity['size_bytes']} bytes available."
@@ -422,7 +478,7 @@ def main():
         chunk_size = 4 * 1024 * 1024  # 4MB chunks
         
         last_pct = -1
-        with open(image_path, "rb") as src, Win32DiskWriter(physical_path, disk_number) as dest:
+        with verified_source as src, Win32DiskWriter(physical_path, disk_number) as dest:
             # Verify exclusive lock was obtained on all volumes
             if dest.lock_failed:
                 raise OSError(
