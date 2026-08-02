@@ -9,7 +9,7 @@ from typing import Dict, Any
 # Adjust path to allow absolute imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from backend.imager import list_drives, flash_drive, inject_config
+from backend.imager import list_drives, flash_drive, inject_config, _normalize_disk_identity
 from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
 import mimetypes
@@ -119,6 +119,7 @@ class Api:
         self._window = None
         # L8 FIX: Use threading.Event for cross-thread cancel signalling.
         self._flash_cancel_event = threading.Event()
+        self._drive_snapshots = {}
         # INFO-02 FIX: Timestamp for scan rate-limiting (one scan per 10 seconds max).
         self._last_scan_time = 0.0
         self._prefs_path = os.path.join(os.path.expanduser("~"), ".kace-studio", "prefs.json")
@@ -167,7 +168,9 @@ class Api:
         """
         Invoked by JS to get a list of safe storage drives.
         """
-        return list_drives()
+        drives = list_drives()
+        self._drive_snapshots = {int(drive["number"]): dict(drive) for drive in drives}
+        return drives
 
     def browse_image(self):
         """
@@ -267,14 +270,33 @@ class Api:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True):
+    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
         """
+        if not isinstance(drive_identity, dict):
+            self.set_device_state("ERROR", 0, "Target disk identity is missing. Refresh the drive list and try again.")
+            return False
+        try:
+            drive_id = int(drive_id)
+            selected_snapshot = self._drive_snapshots[drive_id]
+            client_identity = _normalize_disk_identity(drive_identity)
+            selected_identity = _normalize_disk_identity(selected_snapshot)
+            if client_identity != selected_identity:
+                raise ValueError("disk identity mismatch")
+        except (KeyError, TypeError, ValueError):
+            self.set_device_state("ERROR", 0, "Target disk identity does not match the selected drive.")
+            return False
+        if selected_snapshot.get("high_risk") and high_risk_confirmed is not True:
+            self.set_device_state("ERROR", 0, "High-risk HDD/SSD destination requires reinforced confirmation.")
+            return False
+
+        drive_identity = selected_snapshot
+
         self._flash_cancel_event.clear()
         thread = threading.Thread(
             target=self._flash_worker,
-            args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth),
+            args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth, drive_identity),
             daemon=True
         )
         thread.start()
@@ -785,7 +807,7 @@ class Api:
 
     # ── Flash Worker Orchestrator ─────────────────────────────────────────
 
-    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str, password_auth: bool):
+    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str, password_auth: bool, drive_identity: dict = None):
         try:
             self.set_device_state("FLASHING", 0, "Initializing physical block-writing...")
 
@@ -807,7 +829,7 @@ class Api:
             def progress_callback(percent):
                 self.set_device_state("FLASHING", percent, f"Writing blocks: {percent}%")
 
-            success, err_msg = flash_drive(drive_id, image_path, progress_callback)
+            success, err_msg = flash_drive(drive_id, image_path, progress_callback, drive_identity)
             if not success:
                 self.set_device_state("ERROR", 0, f"Flashing failed: {err_msg}")
                 return

@@ -28,6 +28,89 @@ DEFAULT_USERNAME = "kace"
 
 import pytz
 
+DISK_IDENTITY_FIELDS = (
+    "number", "friendly_name", "size_bytes", "bus_type", "is_system",
+    "is_boot", "serial_number", "unique_id", "path",
+)
+
+
+def _disk_query_command(disk_number=None) -> str:
+    disk_source = "Get-Disk" if disk_number is None else f"Get-Disk -Number {int(disk_number)}"
+    return f"""
+    $physicalById = @{{}}
+    Get-PhysicalDisk -ErrorAction SilentlyContinue | ForEach-Object {{
+        $physicalById[[string]$_.DeviceId] = $_
+    }}
+    {disk_source} | ForEach-Object {{
+        $disk = $_
+        $physical = $physicalById[[string]$disk.Number]
+        [PSCustomObject]@{{
+            Number = $disk.Number
+            FriendlyName = $disk.FriendlyName
+            Size = $disk.Size
+            BusType = [string]$disk.BusType
+            IsSystem = $disk.IsSystem
+            IsBoot = $disk.IsBoot
+            SerialNumber = $disk.SerialNumber
+            UniqueId = $disk.UniqueId
+            Path = $disk.Path
+            MediaType = if ($physical) {{ [string]$physical.MediaType }} else {{ "Unspecified" }}
+        }}
+    }} | ConvertTo-Json -Depth 3
+    """
+
+
+def _normalize_disk_identity(disk: dict) -> dict:
+    """Converts a PowerShell disk object or UI snapshot to a strict identity."""
+    aliases = {
+        "number": ("number", "Number", "id"),
+        "friendly_name": ("friendly_name", "FriendlyName", "name"),
+        "size_bytes": ("size_bytes", "Size"),
+        "bus_type": ("bus_type", "BusType", "bus"),
+        "is_system": ("is_system", "IsSystem"),
+        "is_boot": ("is_boot", "IsBoot"),
+        "serial_number": ("serial_number", "SerialNumber"),
+        "unique_id": ("unique_id", "UniqueId"),
+        "path": ("path", "Path"),
+    }
+
+    values = {}
+    for field, candidates in aliases.items():
+        for candidate in candidates:
+            if candidate in disk:
+                values[field] = disk[candidate]
+                break
+        else:
+            raise ValueError(f"Disk identity is missing required property: {field}")
+
+    if isinstance(values["number"], bool):
+        raise ValueError("Disk number must be an integer.")
+    values["number"] = int(values["number"])
+    values["size_bytes"] = int(values["size_bytes"])
+    if values["number"] < 0 or values["size_bytes"] <= 0:
+        raise ValueError("Disk number and size must be positive values.")
+    if not isinstance(values["is_system"], bool) or not isinstance(values["is_boot"], bool):
+        raise ValueError("Disk boot/system flags must be boolean values.")
+
+    for field in ("friendly_name", "bus_type", "serial_number", "unique_id", "path"):
+        value = str(values[field]).strip() if values[field] is not None else ""
+        if not value:
+            raise ValueError(f"Disk identity property is empty: {field}")
+        values[field] = value
+    values["bus_type"] = values["bus_type"].upper()
+    values["media_type"] = str(disk.get("media_type", disk.get("MediaType", "Unspecified"))).strip()
+    return values
+
+
+def _is_high_risk_disk(identity: dict) -> bool:
+    if identity["bus_type"] not in ("USB", "1394"):
+        return False
+    media_type = identity.get("media_type", "").upper()
+    name = identity["friendly_name"].lower()
+    return media_type in ("HDD", "SSD") or bool(
+        re.search(r"\b(ssd|hdd|hard[ -]?disk|portable drive|external drive)\b", name)
+    )
+
 # Maps timezone names to ISO 3166-1 alpha-2 WiFi regulatory country codes
 # We build this dynamically using pytz to support ALL timezones in the world.
 TIMEZONE_TO_COUNTRY = {}
@@ -72,8 +155,11 @@ def list_drives() -> list:
     
     if sys.platform == "win32":
         try:
-            # Query physical disks
-            res = subprocess.run(["powershell", "-Command", "Get-Disk | Select-Object Number, FriendlyName, Size, BusType, IsSystem, IsBoot | ConvertTo-Json"], capture_output=True, text=True, encoding="utf-8", errors="replace", **SUBPROCESS_FLAGS)
+            res = subprocess.run(
+                ["powershell", "-Command", _disk_query_command()],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                **SUBPROCESS_FLAGS,
+            )
             if res.returncode == 0 and res.stdout.strip():
                 data = json.loads(res.stdout.strip())
                 # If there's only one disk, ConvertTo-Json returns a dict instead of a list
@@ -81,20 +167,28 @@ def list_drives() -> list:
                     data = [data]
                 
                 for disk in data:
-                    # Filter for USB, SD, or CardReader drives, and exclude system/boot drives
-                    bus_type = disk.get("BusType", "").upper()
-                    is_system = disk.get("IsSystem", False)
-                    is_boot = disk.get("IsBoot", False)
-                    
-                    # We only show removable-type buses to prevent flashing the main OS drive
-                    if bus_type in ("USB", "SD", "MMC", "1394") and not is_system and not is_boot:
-                        size_gb = round(disk.get("Size", 0) / (1024**3), 2)
-                        drives.append({
-                            "id": disk.get("Number"),
-                            "name": disk.get("FriendlyName", "Unknown Drive"),
-                            "size": f"{size_gb} GB",
-                            "bus": bus_type
-                        })
+                    try:
+                        identity = _normalize_disk_identity(disk)
+                    except (TypeError, ValueError) as identity_error:
+                        print(f"Ignoring disk with incomplete identity: {identity_error}", file=sys.stderr)
+                        continue
+
+                    if identity["bus_type"] not in ("USB", "SD", "MMC", "1394"):
+                        continue
+                    if identity["is_system"] or identity["is_boot"]:
+                        continue
+
+                    high_risk = _is_high_risk_disk(identity)
+                    size_gb = round(identity["size_bytes"] / (1024**3), 2)
+                    drives.append({
+                        **identity,
+                        "id": identity["number"],
+                        "name": identity["friendly_name"],
+                        "size": f"{size_gb} GB",
+                        "bus": identity["bus_type"],
+                        "high_risk": high_risk,
+                        "risk_reason": "External USB/1394 HDD or SSD" if high_risk else "",
+                    })
         except Exception as e:
             print(f"Error listing Windows drives: {e}", file=sys.stderr)
             
@@ -185,7 +279,7 @@ try {{
         
     return None
 
-def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tuple:
+def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive_identity=None) -> tuple:
     """
     Flashes the image block-by-block onto the target drive by spawning
     the elevated helper process kace_writer.py.
@@ -193,13 +287,26 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
     # SEC FIX: Runtime guard replacing assert (assert is disabled with -O).
     if not isinstance(disk_number, int):
         raise TypeError(f"disk_number must be an integer, got {type(disk_number).__name__}")
-    if sys.platform != "win32":
-        err = "Raw flashing is only fully supported on Windows in this MVP client."
-        print(err, file=sys.stderr)
-        return False, err
-        
+    try:
+        identity = _normalize_disk_identity(drive_identity or {})
+    except (TypeError, ValueError) as identity_error:
+        return False, f"Invalid or incomplete target disk identity: {identity_error}"
+    if identity["number"] != disk_number:
+        return False, "Target disk number does not match the selected disk identity."
+
     if not os.path.exists(image_path):
         err = f"Image path does not exist: {image_path}"
+        print(err, file=sys.stderr)
+        return False, err
+    image_size = os.path.getsize(image_path)
+    if image_size > identity["size_bytes"]:
+        return False, (
+            f"Image is too large for target disk: {image_size} bytes required, "
+            f"{identity['size_bytes']} bytes available."
+        )
+
+    if sys.platform != "win32":
+        err = "Raw flashing is only fully supported on Windows in this MVP client."
         print(err, file=sys.stderr)
         return False, err
 
@@ -228,7 +335,8 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
             "--write-disk",
             str(disk_number),
             str(image_path),
-            str(status_file)
+            str(status_file),
+            json.dumps(identity, separators=(",", ":")),
         ]
         exec_path = sys.executable
     else:
@@ -239,7 +347,8 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None) -> tu
             "--write-disk",
             str(disk_number),
             str(image_path),
-            str(status_file)
+            str(status_file),
+            json.dumps(identity, separators=(",", ":")),
         ]
         exec_path = sys.executable
 

@@ -2,6 +2,7 @@
 
 let activeTab = 'imager-tab';
 let lastFlashedDriveId = null;
+const driveIdentitySnapshots = new Map();
 let term = null;
 let fitAddon = null;
 let searchAddon = null;
@@ -148,14 +149,17 @@ function refreshDrives() {
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.get_drives().then((drives) => {
             driveSelect.innerHTML = '';
+            driveIdentitySnapshots.clear();
             if (drives.length === 0) {
                 driveSelect.innerHTML = '<option value="">No removable drives found.</option>';
                 return;
             }
             drives.forEach(drive => {
+                driveIdentitySnapshots.set(String(drive.id), Object.freeze({ ...drive }));
                 const opt = document.createElement('option');
                 opt.value = drive.id;
-                opt.textContent = `${drive.name} (${drive.size}) [Drive ${drive.id}]`;
+                const riskLabel = drive.high_risk ? ' [HIGH-RISK HDD/SSD]' : '';
+                opt.textContent = `${drive.name} (${drive.size}) [Drive ${drive.id}]${riskLabel}`;
                 driveSelect.appendChild(opt);
             });
         }).catch(err => {
@@ -428,12 +432,39 @@ function openFormatModal() {
     modalDriveName.appendChild(prefix);
     modalDriveName.appendChild(strong);
 
+    const selectedIdentity = driveIdentitySnapshots.get(String(driveId));
+    const highRiskPanel = document.getElementById('high-risk-drive-confirmation');
+    const highRiskInput = document.getElementById('high-risk-confirm-input');
+    const highRiskPhrase = document.getElementById('high-risk-confirm-phrase');
+    const agreeButton = document.getElementById('modal-agree-btn');
+    if (selectedIdentity && selectedIdentity.high_risk) {
+        const expectedPhrase = `ERASE DRIVE ${selectedIdentity.number}`;
+        highRiskPanel.style.display = 'block';
+        highRiskInput.value = '';
+        highRiskInput.dataset.expectedPhrase = expectedPhrase;
+        highRiskPhrase.textContent = expectedPhrase;
+        agreeButton.disabled = true;
+        setTimeout(() => highRiskInput.focus(), 0);
+    } else {
+        highRiskPanel.style.display = 'none';
+        highRiskInput.value = '';
+        delete highRiskInput.dataset.expectedPhrase;
+        agreeButton.disabled = false;
+    }
+
     // Show step 10 modal
     document.getElementById('format-modal').style.display = 'flex';
 }
 
 function closeFormatModal() {
     document.getElementById('format-modal').style.display = 'none';
+}
+
+function updateHighRiskConfirmation() {
+    const input = document.getElementById('high-risk-confirm-input');
+    const agreeButton = document.getElementById('modal-agree-btn');
+    const expected = input.dataset.expectedPhrase;
+    agreeButton.disabled = Boolean(expected) && input.value.trim() !== expected;
 }
 
 function closeSuccessModal() {
@@ -485,6 +516,11 @@ function ejectFlashedDrive() {
 }
 
 function confirmAndFlash() {
+    const highRiskInput = document.getElementById('high-risk-confirm-input');
+    if (highRiskInput.dataset.expectedPhrase &&
+        highRiskInput.value.trim() !== highRiskInput.dataset.expectedPhrase) {
+        return;
+    }
     closeFormatModal();
     startFlashing();
 }
@@ -492,6 +528,16 @@ function confirmAndFlash() {
 function startFlashing() {
     const driveSelect = document.getElementById('drive-select');
     const driveId = driveSelect.value;
+    const driveIdentity = driveIdentitySnapshots.get(String(driveId));
+    if (window.pywebview && window.pywebview.api && !driveIdentity) {
+        window.updateDeviceState("ERROR", 0, "Target drive identity expired. Refresh the drive list and select it again.");
+        return;
+    }
+    const highRiskInput = document.getElementById('high-risk-confirm-input');
+    const highRiskConfirmed = !driveIdentity?.high_risk || (
+        highRiskInput.dataset.expectedPhrase &&
+        highRiskInput.value.trim() === highRiskInput.dataset.expectedPhrase
+    );
     lastFlashedDriveId = driveId;
 
     // Hardware, OS & Arch
@@ -557,7 +603,9 @@ function startFlashing() {
             sshEnabled,
             crowsnest,
             sshUsername,
-            passwordAuth
+            passwordAuth,
+            driveIdentity,
+            highRiskConfirmed
         ).then(res => {
             if (!res) {
                 window.updateDeviceState("ERROR", 0, "Flashing aborted or failed.");

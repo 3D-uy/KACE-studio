@@ -569,6 +569,14 @@
                 <p><strong>Warning!</strong> This operation will completely format the selected storage device:</p>
                 <div class="target-drive-summary" id="modal-drive-name">Drive Selection: None</div>
                 <p>All existing partitions and data on this drive will be <strong>permanently destroyed</strong>. This action cannot be undone.</p>
+                <div id="high-risk-drive-confirmation" style="display: none;">
+                    <p><strong>High-risk destination:</strong> this USB/1394 device appears to be an HDD or SSD.</p>
+                    <label for="high-risk-confirm-input">
+                        Type <strong id="high-risk-confirm-phrase"></strong> to confirm:
+                    </label>
+                    <input id="high-risk-confirm-input" type="text" autocomplete="off"
+                           oninput="updateHighRiskConfirmation()">
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeFormatModal()">Cancel</button>

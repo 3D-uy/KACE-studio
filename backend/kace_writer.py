@@ -11,6 +11,11 @@ SUBPROCESS_FLAGS = {}
 if sys.platform == "win32":
     SUBPROCESS_FLAGS["creationflags"] = subprocess.CREATE_NO_WINDOW
 
+REQUIRED_IDENTITY_FIELDS = (
+    "number", "friendly_name", "size_bytes", "bus_type", "is_system",
+    "is_boot", "serial_number", "unique_id", "path",
+)
+
 
 class Win32DiskWriter:
     def __init__(self, physical_path, disk_number=None):
@@ -242,50 +247,115 @@ def write_status(file_path, status, progress=0, message=""):
     except Exception as e:
         safe_print_err(f"Failed to write progress status file: {e}")
 
-def _validate_disk_is_removable(disk_number: int) -> bool:
+def _normalize_identity(data: dict, *, powershell: bool = False) -> dict:
+    names = {
+        "number": "Number" if powershell else "number",
+        "friendly_name": "FriendlyName" if powershell else "friendly_name",
+        "size_bytes": "Size" if powershell else "size_bytes",
+        "bus_type": "BusType" if powershell else "bus_type",
+        "is_system": "IsSystem" if powershell else "is_system",
+        "is_boot": "IsBoot" if powershell else "is_boot",
+        "serial_number": "SerialNumber" if powershell else "serial_number",
+        "unique_id": "UniqueId" if powershell else "unique_id",
+        "path": "Path" if powershell else "path",
+    }
+    identity = {}
+    for field, source_name in names.items():
+        if source_name not in data:
+            raise ValueError(f"missing property: {field}")
+        identity[field] = data[source_name]
+
+    if isinstance(identity["number"], bool):
+        raise ValueError("invalid disk number")
+    identity["number"] = int(identity["number"])
+    identity["size_bytes"] = int(identity["size_bytes"])
+    if identity["number"] < 0 or identity["size_bytes"] <= 0:
+        raise ValueError("invalid disk number or size")
+    if not isinstance(identity["is_system"], bool) or not isinstance(identity["is_boot"], bool):
+        raise ValueError("invalid boot/system flags")
+
+    for field in ("friendly_name", "bus_type", "serial_number", "unique_id", "path"):
+        value = str(identity[field]).strip() if identity[field] is not None else ""
+        if not value:
+            raise ValueError(f"empty property: {field}")
+        identity[field] = value
+    identity["bus_type"] = identity["bus_type"].upper()
+    return identity
+
+
+def _query_disk_identity(disk_number: int):
+    command = f"""
+    $physicalById = @{{}}
+    Get-PhysicalDisk -ErrorAction SilentlyContinue | ForEach-Object {{
+        $physicalById[[string]$_.DeviceId] = $_
+    }}
+    Get-Disk -Number {disk_number} | ForEach-Object {{
+        $disk = $_
+        $physical = $physicalById[[string]$disk.Number]
+        [PSCustomObject]@{{
+            Number = $disk.Number
+            FriendlyName = $disk.FriendlyName
+            Size = $disk.Size
+            BusType = [string]$disk.BusType
+            IsSystem = $disk.IsSystem
+            IsBoot = $disk.IsBoot
+            SerialNumber = $disk.SerialNumber
+            UniqueId = $disk.UniqueId
+            Path = $disk.Path
+            MediaType = if ($physical) {{ [string]$physical.MediaType }} else {{ "Unspecified" }}
+        }}
+    }} | ConvertTo-Json -Depth 3
     """
-    H2 FIX: Re-validates inside the elevated writer process that the target disk
-    is a removable bus type (USB/SD/MMC/1394) and is not the system or boot drive.
-    This prevents a privilege escalation where a crafted disk number could target
-    the system drive from the elevated context.
-    """
-    # SEC FIX: Runtime guard replacing assert (assert is disabled with -O).
+    result = subprocess.run(
+        ["powershell", "-Command", command],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        **SUBPROCESS_FLAGS,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise ValueError("disk identity query failed")
+    data = json.loads(result.stdout.strip())
+    if isinstance(data, list):
+        if len(data) != 1:
+            raise ValueError("disk identity query returned an unexpected number of disks")
+        data = data[0]
+    return _normalize_identity(data, powershell=True)
+
+
+def _validate_disk_identity(disk_number: int, expected_identity: dict = None):
     if not isinstance(disk_number, int):
         raise TypeError(f"disk_number must be an integer, got {type(disk_number).__name__}")
     if sys.platform != "win32":
-        return False
+        return None
     try:
-        res = subprocess.run(
-            ["powershell", "-Command",
-             f"Get-Disk -Number {disk_number} | Select-Object BusType, IsSystem, IsBoot | ConvertTo-Json"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            **SUBPROCESS_FLAGS
-        )
-        if res.returncode != 0 or not res.stdout.strip():
-            safe_print_err(f"[SECURITY] Disk validation query failed for disk {disk_number}.")
-            return False
-        import json as _json
-        data = _json.loads(res.stdout.strip())
-        if isinstance(data, list):
-            data = data[0]
-        bus_type = data.get("BusType", "").upper()
-        is_system = data.get("IsSystem", True)
-        is_boot = data.get("IsBoot", True)
-        if bus_type not in ("USB", "SD", "MMC", "1394"):
-            safe_print_err(f"[SECURITY] Disk {disk_number} has bus type '{bus_type}' — not a removable drive. Aborting.")
-            return False
-        if is_system or is_boot:
-            safe_print_err(f"[SECURITY] Disk {disk_number} is a system/boot drive. Aborting.")
-            return False
-        return True
-    except Exception as e:
-        safe_print_err(f"[SECURITY] Exception during disk validation for disk {disk_number}: {e}")
-        return False
+        current = _query_disk_identity(disk_number)
+        if current["bus_type"] not in ("USB", "SD", "MMC", "1394"):
+            raise ValueError(f"bus type '{current['bus_type']}' is not allowed")
+        if current["is_system"] or current["is_boot"]:
+            raise ValueError("disk is a system/boot drive")
+        if expected_identity is not None:
+            expected = _normalize_identity(expected_identity)
+            for field in REQUIRED_IDENTITY_FIELDS:
+                if current[field] != expected[field]:
+                    raise ValueError(
+                        f"disk identity changed for {field}: expected {expected[field]!r}, got {current[field]!r}"
+                    )
+        return current
+    except Exception as error:
+        safe_print_err(f"[SECURITY] Disk {disk_number} identity validation failed: {error}")
+        return None
+
+
+def _validate_disk_is_removable(disk_number: int, expected_identity: dict = None) -> bool:
+    """Backward-compatible boolean wrapper for the strict identity validation."""
+    return _validate_disk_identity(disk_number, expected_identity) is not None
 
 
 def main():
-    if len(sys.argv) < 3:
-        safe_print_err("ERROR: Missing arguments. Usage: kace_writer.py <disk_number> <image_path> [status_file_path]")
+    if len(sys.argv) < 5:
+        safe_print_err(
+            "ERROR: Missing arguments. Usage: kace_writer.py "
+            "<disk_number> <image_path> <status_file_path> <disk_identity_json>"
+        )
         sys.exit(1)
         
     try:
@@ -295,7 +365,14 @@ def main():
         sys.exit(1)
         
     image_path = sys.argv[2]
-    status_file = sys.argv[3] if len(sys.argv) > 3 else None
+    status_file = sys.argv[3]
+    try:
+        expected_identity = json.loads(sys.argv[4])
+        _normalize_identity(expected_identity)
+    except (json.JSONDecodeError, TypeError, ValueError) as identity_error:
+        safe_print_err(f"ERROR: Invalid target disk identity: {identity_error}")
+        write_status(status_file, "error", message="Invalid or incomplete target disk identity.")
+        sys.exit(1)
 
     if not os.path.exists(image_path):
         err_msg = f"Image file not found."
@@ -303,11 +380,19 @@ def main():
         write_status(status_file, "error", message=err_msg)
         sys.exit(1)
 
-    # H2 FIX: Re-validate that the disk is a removable drive inside the elevated process.
-    # This is a defense-in-depth check — even if the parent process was tricked into
-    # passing a non-removable disk number, the elevated writer will refuse to write.
-    if not _validate_disk_is_removable(disk_number):
-        err_msg = f"Security check failed: disk {disk_number} is not a recognized removable drive. Aborting write."
+    current_identity = _validate_disk_identity(disk_number, expected_identity)
+    if current_identity is None:
+        err_msg = f"Security check failed: disk {disk_number} identity changed or is unsafe. Aborting write."
+        safe_print_err(f"ERROR: {err_msg}")
+        write_status(status_file, "error", message=err_msg)
+        sys.exit(1)
+
+    image_size = os.path.getsize(image_path)
+    if image_size > current_identity["size_bytes"]:
+        err_msg = (
+            f"Image is too large for disk {disk_number}: {image_size} bytes required, "
+            f"{current_identity['size_bytes']} bytes available."
+        )
         safe_print_err(f"ERROR: {err_msg}")
         write_status(status_file, "error", message=err_msg)
         sys.exit(1)
@@ -333,7 +418,6 @@ def main():
         safe_print_out("STATUS: Starting physical block write...")
         write_status(status_file, "writing", progress=0, message="Writing blocks...")
         
-        image_size = os.path.getsize(image_path)
         bytes_written = 0
         chunk_size = 4 * 1024 * 1024  # 4MB chunks
         
