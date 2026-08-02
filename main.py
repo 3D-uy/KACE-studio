@@ -4,7 +4,6 @@ import json
 import re
 import threading
 import webview
-from typing import Dict, Any
 
 # Adjust path to allow absolute imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

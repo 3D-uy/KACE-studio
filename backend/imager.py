@@ -5,7 +5,6 @@ import time
 import subprocess
 import uuid
 import re
-from pathlib import Path
 from backend.sha512_crypt import hash_password
 
 # Set KACE_DEBUG=1 in the environment to enable verbose path/status logging.

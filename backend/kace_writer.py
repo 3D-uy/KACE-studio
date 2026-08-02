@@ -347,11 +347,6 @@ def _validate_disk_identity(disk_number: int, expected_identity: dict = None):
         return None
 
 
-def _validate_disk_is_removable(disk_number: int, expected_identity: dict = None) -> bool:
-    """Backward-compatible boolean wrapper for the strict identity validation."""
-    return _validate_disk_identity(disk_number, expected_identity) is not None
-
-
 def _expected_status_path(disk_number: int) -> str:
     user_profile = os.environ.get("USERPROFILE")
     if user_profile and os.path.exists(user_profile):
