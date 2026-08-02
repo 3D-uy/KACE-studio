@@ -139,6 +139,7 @@ class Api:
         # INFO-02 FIX: Timestamp for scan rate-limiting (one scan per 10 seconds max).
         self._last_scan_time = 0.0
         self._prefs_path = os.path.join(os.path.expanduser("~"), ".kace-studio", "prefs.json")
+        self._prefs_lock = threading.Lock()
 
     def set_window(self, window):
         self._window = window
@@ -1098,14 +1099,54 @@ class Api:
 
     def set_preferences(self, prefs: dict) -> bool:
         """
-        Writes user preferences to a local file.
+        Validates and atomically writes user preferences to a local file.
         """
+        allowed_form_fields = {
+            "hostname-input", "timezone-select", "os-arch-select",
+            "image-source-select", "pi-model-select",
+            "bootstrap-ui-select-imager", "ssh-enable",
+            "crowsnest-enable", "ssh-username",
+        }
+        if not isinstance(prefs, dict):
+            return False
+
+        theme = prefs.get("theme", "dark")
+        if theme not in ("dark", "light"):
+            theme = "dark"
+        auto_scan = prefs.get("kace_auto_scan", True)
+        if not isinstance(auto_scan, bool):
+            auto_scan = True
+        raw_form_state = prefs.get("form_state", {})
+        if not isinstance(raw_form_state, dict):
+            raw_form_state = {}
+        form_state = {
+            key: value
+            for key, value in raw_form_state.items()
+            if key in allowed_form_fields
+            and isinstance(value, (str, bool))
+            and (not isinstance(value, str) or len(value) <= 1024)
+        }
+        validated = {
+            "theme": theme,
+            "kace_auto_scan": auto_scan,
+            "form_state": form_state,
+        }
+        part_path = self._prefs_path + ".part"
         try:
-            os.makedirs(os.path.dirname(self._prefs_path), exist_ok=True)
-            with open(self._prefs_path, "w", encoding="utf-8") as f:
-                json.dump(prefs, f, indent=2)
+            with self._prefs_lock:
+                os.makedirs(os.path.dirname(self._prefs_path), exist_ok=True)
+                with open(part_path, "w", encoding="utf-8", newline="\n") as f:
+                    json.dump(validated, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(part_path, self._prefs_path)
             return True
         except Exception as e:
+            try:
+                if os.path.exists(part_path):
+                    os.remove(part_path)
+            except OSError:
+                pass
             print(f"Error saving preferences: {e}", file=sys.stderr)
             return False
 
