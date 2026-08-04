@@ -1065,6 +1065,9 @@ function performSshLogin(username, password) {
                 // Synchronize terminal dimensions with the remote PTY
                 if (window.pywebview && window.pywebview.api) {
                     window.pywebview.api.resize_ssh_pty(term.cols, term.rows);
+                    window.pywebview.api.get_firmware_deployment_manifest()
+                        .then(manifest => restoreKaceDeploymentManifest(manifest))
+                        .catch(err => console.debug('No firmware deployment manifest available:', err));
                 }
             } else if (isHostKeyMismatch) {
                 term.write(`\r\n\x1b[1;33m[SECURITY ALERT] SSH Host Key Mismatch for ${currentDeviceIp}!\x1b[0m\r\n`);
@@ -1268,6 +1271,225 @@ function initTerminal() {
 
 let bootstrapBuffer = "";
 let bootstrapFailureHandled = false;
+
+// Read-only projection of KACE's state machine. Studio never advances these
+// states and never infers success from SSH/process/Moonraker reachability.
+const KACE_INSTALLATION_STEPS = [
+    'Firmware delivered',
+    'Waiting for controller transition',
+    'MCU disconnected',
+    'Waiting for MCU to return',
+    'MCU detected',
+    'Moonraker connected',
+    'Klipper ready',
+    'MCU registered',
+    'Firmware verified',
+    'Configuration installed',
+    'Installation completed',
+];
+
+const KACE_FIRMWARE_DEPLOYMENT_STEPS = [
+    'Deployment planned',
+    'Artifact prepared',
+    'User action',
+    'Automatic flash',
+    'Firmware delivered',
+];
+
+const KACE_TERMINAL_ERRORS = new Set([
+    'ABORTED', 'CANCELLED', 'FAILED_FLASH', 'FAILED_MONITOR', 'FAILED_UPLOAD',
+    'CONFIG_ERROR', 'FAILED_PRECONDITION',
+]);
+
+const kaceWorkflowViews = new Map();
+
+function kaceWorkflowDefinition(kind) {
+    if (kind === 'firmware_deployment') {
+        return {
+            steps: KACE_FIRMWARE_DEPLOYMENT_STEPS,
+            positions: {
+                DEPLOYMENT_PLANNED: [0, 1],
+                PREPARING_ARTIFACT: [0, 1],
+                ARTIFACT_READY: [1, 2],
+                AWAITING_USER_ACTION: [1, 2],
+                ACTION_REQUIRED: [2, -1],
+                FLASHING: [1, 3],
+                FLASHED: [4, -1],
+            },
+        };
+    }
+    return {
+        steps: KACE_INSTALLATION_STEPS,
+        positions: {
+        BACKUP: [-1, 0],
+        COPYING_FIRMWARE: [-1, 0],
+        FIRMWARE_COPIED: [0, 1],
+        MONITOR_ARMED: [0, 1],
+        AWAITING_DISCONNECT: [0, 1],
+        MCU_ABSENT: [2, 3],
+        AWAITING_RECONNECT: [2, 3],
+        MCU_PRESENT: [4, 5],
+        WAITING_MOONRAKER: [4, 5],
+        MOONRAKER_ONLINE: [5, 6],
+        WAITING_KLIPPER_READY: [5, 6],
+        KLIPPER_READY: [6, 7],
+        WAITING_MCU_REGISTRATION: [6, 7],
+        MCU_REGISTERED: [7, 8],
+        VERIFYING_FIRMWARE: [7, 8],
+        FIRMWARE_VERIFIED: [8, 9],
+        APPLYING_CONFIG: [8, 9],
+        VERIFYING_UPLOAD: [8, 9],
+        FIRMWARE_RESTART: [8, 9],
+        VERIFYING_CONFIG: [8, 9],
+        ROLLING_BACK: [8, 9],
+        VERIFYING_ROLLBACK: [8, 9],
+        DONE: [10, -1],
+        },
+    };
+}
+
+function kaceWorkflowPosition(view, state) {
+    const definition = kaceWorkflowDefinition(view.kind);
+    return definition.positions[state] || [-1, 0];
+}
+
+function renderKaceWorkflow(view) {
+    const tracker = document.getElementById('kace-workflow-tracker');
+    const title = document.getElementById('kace-workflow-title');
+    const status = document.getElementById('kace-workflow-status');
+    const steps = document.getElementById('kace-workflow-steps');
+    const detail = document.getElementById('kace-workflow-detail');
+    const downloadButton = document.getElementById('kace-firmware-download');
+    if (!tracker || !title || !status || !steps || !detail) return;
+
+    const isDone = view.state === 'DONE' ||
+        (view.kind === 'firmware_deployment' && view.state === 'FLASHED');
+    const isActionRequired = view.kind === 'firmware_deployment' && view.state === 'ACTION_REQUIRED';
+    const isError = KACE_TERMINAL_ERRORS.has(view.state);
+    const positionState = isError ? (view.progressState || view.state) : view.state;
+    const definition = kaceWorkflowDefinition(view.kind);
+    const [completedThrough, currentIndex] = kaceWorkflowPosition(view, positionState);
+
+    tracker.style.display = 'block';
+    tracker.classList.toggle('success', isDone || isActionRequired);
+    tracker.classList.toggle('error', isError);
+    const method = view.data && typeof view.data.method === 'string' ? view.data.method : '';
+    title.textContent = view.kind === 'firmware_deployment'
+        ? `Firmware deployment${method ? ` · ${method}` : ''}`
+        : `Installation ${view.workflowId.slice(0, 8)}`;
+    status.textContent = isDone ? 'Completed' :
+        (isActionRequired ? 'Action required' :
+            (isError ? view.state.replace(/_/g, ' ') : 'In progress'));
+
+    const detailLines = [view.detail || view.state.replace(/_/g, ' ')];
+    if (view.data) {
+        if (typeof view.data.final_filename === 'string') {
+            detailLines.push(`Final filename: ${view.data.final_filename}`);
+        }
+        if (typeof view.data.staged_path === 'string') {
+            detailLines.push(`Artifact: ${view.data.staged_path}`);
+        }
+        if (Array.isArray(view.data.instructions)) {
+            view.data.instructions.forEach((instruction, index) => {
+                if (instruction && typeof instruction.text === 'string') {
+                    detailLines.push(`${index + 1}. ${instruction.text}`);
+                }
+            });
+        }
+    }
+    detail.textContent = detailLines.join('\n');
+    const downloadablePath = view.kind === 'firmware_deployment' && view.data &&
+        typeof view.data.staged_path === 'string' ? view.data.staged_path : '';
+    if (downloadButton) {
+        downloadButton.style.display = downloadablePath ? 'inline-flex' : 'none';
+        downloadButton.dataset.remotePath = downloadablePath;
+    }
+
+    steps.replaceChildren();
+    definition.steps.forEach((label, index) => {
+        const item = document.createElement('li');
+        item.className = 'kace-workflow-step';
+        let icon = 'fa-regular fa-circle';
+        if (isDone || index <= completedThrough) {
+            item.classList.add('completed');
+            icon = 'fa-solid fa-circle-check';
+        } else if (index === currentIndex) {
+            item.classList.add(isError ? 'failed' : 'current');
+            icon = isError ? 'fa-solid fa-circle-xmark' : 'fa-solid fa-spinner fa-spin';
+        }
+        item.innerHTML = `<i class="${icon}"></i><span></span>`;
+        item.querySelector('span').textContent = label;
+        steps.appendChild(item);
+    });
+
+    // Tracker height changes the xterm viewport; keep the remote PTY aligned.
+    setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 0);
+}
+
+window.updateKaceWorkflowEvent = function (event) {
+    if (!event || typeof event !== 'object') return false;
+    const workflowId = event.workflow_id;
+    const sequence = event.sequence;
+    const state = event.state;
+    if (typeof workflowId !== 'string' || !workflowId ||
+        !Number.isInteger(sequence) || sequence < 1 ||
+        typeof state !== 'string' || !state) return false;
+
+    const previous = kaceWorkflowViews.get(workflowId);
+    if (previous && sequence <= previous.sequence) return false;
+    const view = {
+        workflowId,
+        sequence,
+        state,
+        kind: typeof event.workflow_kind === 'string'
+            ? event.workflow_kind
+            : (previous ? previous.kind : 'installation'),
+        data: Object.assign({}, previous ? previous.data : null,
+            event.data && typeof event.data === 'object' ? event.data : null),
+        detail: typeof event.detail === 'string' ? event.detail : '',
+        progressState: KACE_TERMINAL_ERRORS.has(state)
+            ? (previous ? previous.progressState || previous.state : '')
+            : state,
+    };
+    kaceWorkflowViews.set(workflowId, view);
+    renderKaceWorkflow(view);
+    return true;
+};
+
+function restoreKaceDeploymentManifest(manifest) {
+    if (!manifest || typeof manifest !== 'object' ||
+        manifest.workflow_kind !== 'firmware_deployment' ||
+        !manifest.deployment || typeof manifest.deployment !== 'object') return false;
+    const deployment = manifest.deployment;
+    return window.updateKaceWorkflowEvent({
+        workflow_kind: 'firmware_deployment',
+        workflow_id: manifest.workflow_id || deployment.deployment_id,
+        sequence: Number.isInteger(manifest.sequence) && manifest.sequence > 0
+            ? manifest.sequence : 1,
+        state: typeof manifest.state === 'string' ? manifest.state : 'ARTIFACT_READY',
+        detail: manifest.result && typeof manifest.result.detail === 'string'
+            ? manifest.result.detail
+            : `${deployment.final_filename || 'Firmware'} is ready`,
+        data: {
+            method: deployment.method,
+            final_filename: deployment.final_filename,
+            staged_path: deployment.staged_path,
+            instructions: deployment.instructions,
+            automation: deployment.automation,
+        },
+    });
+}
+
+window.downloadKaceFirmwareArtifact = function () {
+    const button = document.getElementById('kace-firmware-download');
+    const remotePath = button ? button.dataset.remotePath : '';
+    if (!remotePath || !window.pywebview || !window.pywebview.api) return false;
+    button.disabled = true;
+    window.pywebview.api.download_file(remotePath)
+        .catch(err => console.error('Firmware download failed:', err))
+        .finally(() => { button.disabled = false; });
+    return true;
+};
 
 // Stage definitions — ordered for the progress bar.
 // Each entry maps a STAGE_ID (emitted by bootstrap.sh as "=== STAGE: ID ===")

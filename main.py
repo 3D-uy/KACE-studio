@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from backend.imager import list_drives, flash_drive, inject_config, _normalize_disk_identity
 from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
+from backend.workflow_events import KaceWorkflowEventParser
 import mimetypes
 
 HTTP_TIMEOUT_SECONDS = 30
@@ -942,20 +943,13 @@ class Api:
             return {"status": "failed", "message": sanitized_msg}
 
         if success:
-            # Check if Moonraker port (7125) is open to distinguish SSH_READY vs BOOTSTRAPPED
-            from backend.discovery import probe_ip_ports
-            ports_status = probe_ip_ports(ip, [7125], timeout=0.5)
-            is_bootstrapped = ports_status.get(7125, False)
-            
             with self._ssh_lock:
-                # If a newer connection attempt started while probing, abort this connection
                 if current_gen != self._ssh_gen:
                     return {"status": "failed", "message": "Connection superseded by a newer attempt."}
 
-            if is_bootstrapped:
-                self.set_device_state("BOOTSTRAPPED", 100, f"Connected to bootstrapped node at {ip}.")
-            else:
-                self.set_device_state("SSH_READY", 100, f"Connected to raw node at {ip}. Ready for KACE bootstrap.")
+            # Reachability (including an open Moonraker port) is not evidence
+            # that a KACE installation workflow completed successfully.
+            self.set_device_state("SSH_READY", 100, f"SSH session connected to {ip}.")
                 
             # Write-coalescing buffer: collect rapid-fire SSH data chunks and flush
             # them as a single evaluate_js call every 15ms. This prevents interactive
@@ -964,6 +958,21 @@ class Api:
             write_buffer = []
             flush_timer = [None]  # mutable container for timer reference
             buffer_lock = threading.Lock()
+
+            def forward_workflow_event(event):
+                with self._ssh_lock:
+                    if current_gen != self._ssh_gen or self._window is None:
+                        return
+                try:
+                    self._window.evaluate_js(
+                        f"window.updateKaceWorkflowEvent({json.dumps(event)});"
+                    )
+                except Exception as exc:
+                    # Rendering progress is observational and must never interrupt
+                    # the SSH command that owns the installation workflow.
+                    print(f"[KACE] Could not forward workflow event: {exc}")
+
+            workflow_parser = KaceWorkflowEventParser(forward_workflow_event)
             
             def flush_write_buffer():
                 with buffer_lock:
@@ -981,6 +990,8 @@ class Api:
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen:
                         return
+
+                workflow_parser.feed(text)
                 
                 flush_now = False
                 with buffer_lock:
@@ -1072,6 +1083,22 @@ class Api:
                 return False
                 
         return self._ssh.download_file(remote_path, chosen_path)
+
+    def get_firmware_deployment_manifest(self):
+        """Return KACE's non-secret firmware manifest for reconnect recovery."""
+        raw = self._ssh.read_text_file("kace/deployment-manifest.json")
+        if not raw:
+            return None
+        try:
+            manifest = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(manifest, dict) or manifest.get("schema") != 1:
+            return None
+        deployment = manifest.get("deployment")
+        if not isinstance(deployment, dict):
+            return None
+        return manifest
 
     def get_preferences(self) -> dict:
         """

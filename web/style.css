@@ -709,6 +709,104 @@ body {
     position: relative;
 }
 
+.kace-workflow-tracker {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border-color);
+    padding: 14px 24px 16px;
+}
+
+.kace-workflow-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.kace-workflow-header > div:first-child {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.kace-workflow-actions {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+}
+
+.kace-workflow-eyebrow {
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+
+.kace-workflow-status {
+    border: 1px solid var(--primary-color);
+    border-radius: 999px;
+    color: var(--primary-color);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 4px 9px;
+}
+
+.kace-workflow-tracker.success .kace-workflow-status {
+    border-color: var(--success-color);
+    color: var(--success-color);
+}
+
+.kace-workflow-tracker.error .kace-workflow-status {
+    border-color: var(--danger-color);
+    color: var(--danger-color);
+}
+
+.kace-workflow-steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    gap: 7px 12px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.kace-workflow-step {
+    align-items: center;
+    color: var(--text-secondary);
+    display: flex;
+    font-size: 11px;
+    gap: 7px;
+    min-width: 0;
+}
+
+.kace-workflow-step i {
+    flex: 0 0 14px;
+    text-align: center;
+}
+
+.kace-workflow-step.completed {
+    color: var(--success-color);
+}
+
+.kace-workflow-step.current {
+    color: var(--primary-color);
+    font-weight: 700;
+}
+
+.kace-workflow-step.failed {
+    color: var(--danger-color);
+    font-weight: 700;
+}
+
+.kace-workflow-detail {
+    color: var(--text-secondary);
+    font-size: 11px;
+    margin-top: 10px;
+    min-height: 15px;
+    white-space: pre-wrap;
+}
+
 #terminal-container {
     width: 100%;
     height: 100%;

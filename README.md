@@ -58,6 +58,7 @@ The `main` branch and CI artifacts are development outputs, not a stable compati
 - Local network discovery for SSH and Moonraker endpoints.
 - Embedded SSH terminal and SFTP file management.
 - Bootstrap progress and failure reporting in the desktop UI.
+- Read-only MANUAL/USB firmware-deployment progress, instructions, native artifact download, and reconnect recovery from KACE's deployment manifest.
 
 ## Requirements
 
@@ -126,7 +127,7 @@ Before building, place the bootstrap file verified against the pinned KACE commi
 | `backend/imager.py` | Disk discovery, identity policy, elevated-writer invocation, and boot-partition injection |
 | `backend/kace_writer.py` | UAC-elevated physical-device revalidation and raw image writing |
 | `backend/discovery.py` | Local-network host and service discovery |
-| `backend/ssh_client.py` | SSH terminal and SFTP operations |
+| `backend/ssh_client.py` | SSH terminal, SFTP operations, and size-limited deployment-manifest recovery |
 | `backend/sha512_crypt.py` | Password-hash support for injected Linux account data |
 | `bootstrap.sh` | Build input copied from a pinned KACE revision |
 | `main.spec` | PyInstaller definition, including the verified bootstrap and web assets |

@@ -2,6 +2,7 @@ import os
 import threading
 import time
 import select
+import posixpath
 import paramiko
 from typing import Callable
 
@@ -294,3 +295,33 @@ class SSHSession:
                 except Exception as close_err:
                     # LOW-06 FIX: Log instead of silently swallowing to surface channel leaks.
                     print(f"Warning: SFTP download_file channel close error: {close_err}")
+
+    def read_text_file(self, relative_path: str, max_bytes: int = 256 * 1024):
+        """Read a small file below the remote user's home directory."""
+        if not isinstance(relative_path, str) or not relative_path or relative_path.startswith("/"):
+            return None
+        normalized = posixpath.normpath(relative_path.replace("\\", "/"))
+        if normalized == ".." or normalized.startswith("../"):
+            return None
+        sftp = self.get_sftp()
+        if not sftp:
+            return None
+        try:
+            home = sftp.normalize(".")
+            remote_path = posixpath.join(home, normalized)
+            attrs = sftp.stat(remote_path)
+            if attrs.st_size < 0 or attrs.st_size > max_bytes:
+                return None
+            with sftp.open(remote_path, "rb") as source:
+                payload = source.read(max_bytes + 1)
+            if len(payload) > max_bytes:
+                return None
+            return payload.decode("utf-8")
+        except Exception as exc:
+            print(f"SFTP read_text_file error for '{normalized}': {exc}")
+            return None
+        finally:
+            try:
+                sftp.close()
+            except Exception as close_err:
+                print(f"Warning: SFTP read_text_file channel close error: {close_err}")

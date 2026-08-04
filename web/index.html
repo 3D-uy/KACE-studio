@@ -534,6 +534,25 @@
                         <div class="bootstrap-stage-label" id="bootstrap-stage-label">Waiting to start...</div>
                     </div>
 
+                    <!-- Read-only representation of events emitted by KACE itself. -->
+                    <section id="kace-workflow-tracker" class="kace-workflow-tracker" style="display: none;" aria-live="polite">
+                        <div class="kace-workflow-header">
+                            <div>
+                                <span class="kace-workflow-eyebrow">KACE installation</span>
+                                <strong id="kace-workflow-title">Waiting for workflow events</strong>
+                            </div>
+                            <div class="kace-workflow-actions">
+                                <button id="kace-firmware-download" class="btn btn-secondary btn-sm" type="button"
+                                    style="display: none;" onclick="downloadKaceFirmwareArtifact()">
+                                    <i class="fa-solid fa-download"></i> Download firmware
+                                </button>
+                                <span id="kace-workflow-status" class="kace-workflow-status">In progress</span>
+                            </div>
+                        </div>
+                        <ol id="kace-workflow-steps" class="kace-workflow-steps"></ol>
+                        <div id="kace-workflow-detail" class="kace-workflow-detail"></div>
+                    </section>
+
                     <!-- Terminal Search Bar -->
                     <div class="terminal-search-bar" id="terminal-search-bar" style="display: none;">
                         <input type="text" id="terminal-search-input" placeholder="Search terminal output..." style="flex-grow: 1; font-size: 13px;">
