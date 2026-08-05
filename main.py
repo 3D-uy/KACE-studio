@@ -287,7 +287,7 @@ class Api:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False):
+    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "printer", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
         """
@@ -319,7 +319,7 @@ class Api:
         try:
             thread = threading.Thread(
                 target=self._flash_worker,
-                args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth, drive_identity),
+                args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth, drive_identity, power_relay, power_device, power_gpio, power_active_low, restart_klipper_when_powered),
                 daemon=True
             )
             thread.start()
@@ -834,7 +834,7 @@ class Api:
 
     # ── Flash Worker Orchestrator ─────────────────────────────────────────
 
-    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str, password_auth: bool, drive_identity: dict = None):
+    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str, password_auth: bool, drive_identity: dict = None, power_relay: bool = False, power_device: str = "printer", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
         try:
             self.set_device_state("FLASHING", 0, "Initializing physical block-writing...")
 
@@ -866,7 +866,12 @@ class Api:
             inject_success = inject_config(
                 drive_id, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui,
                 timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth,
-                is_prebaked=(image_path_original in ("default_prebaked", "prebaked"))
+                is_prebaked=(image_path_original in ("default_prebaked", "prebaked")),
+                power_relay=power_relay,
+                power_device=power_device,
+                power_gpio=power_gpio,
+                power_active_low=power_active_low,
+                restart_klipper_when_powered=restart_klipper_when_powered,
             )
 
             if inject_success:

@@ -42,4 +42,3 @@ env/
 # Prevent known_hosts data and checksum sidecars from being committed
 .kace/
 *.sha256
-bootstrap.sh

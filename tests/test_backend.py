@@ -344,6 +344,39 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    def test_bootstrap_config_injection_includes_gpio_relay(self):
+        import tempfile
+        import shutil
+        from pathlib import Path
+        from backend.imager import inject_config
+        from unittest.mock import patch
+
+        temp_boot = tempfile.mkdtemp()
+        try:
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace.local",
+                    wifi_ssid="",
+                    wifi_password="",
+                    ssh_password="pwd",
+                    dashboard_ui="mainsail",
+                    power_relay=True,
+                    power_device="printer",
+                    power_gpio=20,
+                    power_active_low=True,
+                    restart_klipper_when_powered=True,
+                )
+            self.assertTrue(success)
+            content = (Path(temp_boot) / "kace-bootstrap.txt").read_text(encoding="utf-8")
+            self.assertIn("POWER_RELAY=true", content)
+            self.assertIn("POWER_DEVICE=printer", content)
+            self.assertIn("POWER_GPIO=20", content)
+            self.assertIn("POWER_ACTIVE_LOW=true", content)
+            self.assertIn("POWER_RESTART_KLIPPER=true", content)
+        finally:
+            shutil.rmtree(temp_boot)
+
     def test_wifi_credentials_injection_escaping(self):
         r"""
         Test that wifi_ssid and wifi_password containing shell metacharacters (", ', \n, ;, $, \)
@@ -1572,4 +1605,3 @@ class TestKaceBackend(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

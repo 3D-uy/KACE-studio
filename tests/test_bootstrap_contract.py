@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "bootstrap.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+AUTHORITATIVE_BOOTSTRAP = ROOT.parent / "KACE" / "scripts" / "bootstrap.sh"
 
 
 def _workflow_value(name: str) -> str:
@@ -21,6 +27,9 @@ def _workflow_value(name: str) -> str:
 
 def test_packaged_bootstrap_matches_pinned_sha256():
     assert BOOTSTRAP.is_file(), "bootstrap.sh must be fetched before tests/build"
+    if AUTHORITATIVE_BOOTSTRAP.is_file():
+        assert BOOTSTRAP.read_bytes() == AUTHORITATIVE_BOOTSTRAP.read_bytes()
+        return
     actual = hashlib.sha256(BOOTSTRAP.read_bytes()).hexdigest()
     assert actual == _workflow_value("KACE_BOOTSTRAP_SHA256")
 
@@ -57,11 +66,63 @@ def test_bootstrap_enables_native_klipper_features_idempotently():
 
 def test_bootstrap_preserves_existing_moonraker_configuration():
     script = BOOTSTRAP.read_text(encoding="utf-8")
-    creation_guard = (
-        'if [ ! -f "$PRINTER_HOME/printer_data/config/moonraker.conf" ]; then'
-    )
-    assert creation_guard in script
+    assert "ensure_moonraker_config" in script
+    assert 'cat <<EOF > "$PRINTER_HOME/printer_data/config/moonraker.conf"' not in script
     assert '! grep -q "\\[authorization\\]"' not in script
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not available")
+def test_gpio_relay_is_final_before_moonraker_install_and_restart(tmp_path):
+    if os.name == "nt":
+        pytest.skip("The bootstrap integration shell test runs on POSIX CI")
+
+    config_dir = tmp_path / "printer_data" / "config"
+    config_dir.mkdir(parents=True)
+    moonraker_conf = config_dir / "moonraker.conf"
+    moonraker_conf.write_text(
+        "[server]\nport: 7125\n\n[authorization]\ntrusted_clients:\n    127.0.0.1\n"
+        "\n[file_manager]\ncustom_option: preserved\n",
+        encoding="utf-8",
+    )
+
+    command = """
+set -euo pipefail
+export KACE_BOOTSTRAP_LIB_ONLY=1
+source "$1"
+PRINTER_HOME="$2"
+POWER_RELAY=true
+POWER_DEVICE=printer
+POWER_GPIO=20
+POWER_ACTIVE_LOW=true
+POWER_RESTART_KLIPPER=true
+ensure_moonraker_config "$PRINTER_HOME/printer_data/config/moonraker.conf" "$PRINTER_HOME/printer_data/comms/klippy.sock"
+ensure_moonraker_config "$PRINTER_HOME/printer_data/config/moonraker.conf" "$PRINTER_HOME/printer_data/comms/klippy.sock"
+"""
+    result = subprocess.run(
+        ["bash", "-c", command, "bootstrap-test", str(BOOTSTRAP), str(tmp_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    final_content = moonraker_conf.read_text(encoding="utf-8")
+    assert "[power printer]" in final_content
+    assert "type: gpio" in final_content
+    assert "pin: !gpiochip0/gpio20" in final_content
+    assert "restart_klipper_when_powered: true" in final_content
+    assert "[authorization]" in final_content
+    assert "trusted_clients:" in final_content
+    assert "custom_option: preserved" in final_content
+    assert final_content.count("[power printer]") == 1
+    assert not list(config_dir.glob(".moonraker.conf.*.part"))
+
+    script = BOOTSTRAP.read_text(encoding="utf-8")
+    config_call = script.index(
+        '    "$PRINTER_HOME/printer_data/config/moonraker.conf"'
+    )
+    install_call = script.index('"$PRINTER_HOME/moonraker/scripts/install-moonraker.sh"')
+    restart_call = script.index("systemctl restart moonraker")
+    assert config_call < install_call < restart_call
 
 
 def test_pyinstaller_bundles_the_verified_bootstrap():

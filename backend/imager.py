@@ -515,7 +515,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
     finally:
         ctypes.windll.kernel32.CloseHandle(hProcess)
 
-def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, is_prebaked: bool = False) -> bool:
+def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, is_prebaked: bool = False, power_relay: bool = False, power_device: str = "printer", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True) -> bool:
     """
     Injects SSH enablement, User credentials, WiFi configuration (wpa_supplicant + NetworkManager),
     and hostname parameters directly to the FAT32 boot partition.
@@ -530,6 +530,16 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
             "Invalid username. Must start with a lowercase letter or underscore "
             "and contain only lowercase letters, numbers, hyphens, or underscores."
         )
+
+    if not isinstance(power_relay, bool):
+        raise TypeError("power_relay must be a boolean")
+    if power_relay:
+        if not isinstance(power_device, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", power_device):
+            raise ValueError("Invalid power device name.")
+        if isinstance(power_gpio, bool) or not isinstance(power_gpio, int) or not 0 <= power_gpio <= 999:
+            raise ValueError("GPIO must be an integer between 0 and 999.")
+        if not isinstance(power_active_low, bool) or not isinstance(restart_klipper_when_powered, bool):
+            raise TypeError("Power relay options must be booleans.")
 
     # Sanitize free-text fields: strip characters that could inject extra lines
     # into key=value config files or corrupt YAML structure.
@@ -741,12 +751,23 @@ addr-gen-mode=default-or-eui64
                     f.write(f"PI_MODEL={clean_pi_model}\n")
                 if clean_os_arch:
                     f.write(f"OS_ARCH={clean_os_arch}\n")
+                if power_relay:
+                    f.write("POWER_RELAY=true\n")
+                    f.write(f"POWER_DEVICE={power_device}\n")
+                    f.write(f"POWER_GPIO={power_gpio}\n")
+                    f.write(f"POWER_ACTIVE_LOW={'true' if power_active_low else 'false'}\n")
+                    f.write(
+                        "POWER_RESTART_KLIPPER="
+                        f"{'true' if restart_klipper_when_powered else 'false'}\n"
+                    )
             if not os.path.exists(bootstrap_cfg):
                 raise IOError(f"kace-bootstrap.txt not found at: {bootstrap_cfg}")
             with open(bootstrap_cfg, "r", encoding="utf-8") as f_check:
                 c = f_check.read()
             if f"DASHBOARD={dashboard_ui}" not in c:
                 raise ValueError("kace-bootstrap.txt verification failed.")
+            if power_relay and f"POWER_GPIO={power_gpio}" not in c:
+                raise ValueError("GPIO relay configuration verification failed.")
             _dbg(f"Successfully verified kace-bootstrap.txt write at {bootstrap_cfg}")
         except Exception as e:
             print(f"[ERROR] Failed writing or verifying kace-bootstrap.txt: {e}", file=sys.stderr)

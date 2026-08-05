@@ -525,6 +525,14 @@ function confirmAndFlash() {
     startFlashing();
 }
 
+function togglePowerRelaySettings() {
+    const relayEnabled = document.getElementById('power-relay-enable');
+    const relaySettings = document.getElementById('power-relay-settings');
+    if (relayEnabled && relaySettings) {
+        relaySettings.style.display = relayEnabled.checked ? 'block' : 'none';
+    }
+}
+
 function startFlashing() {
     const driveSelect = document.getElementById('drive-select');
     const driveId = driveSelect.value;
@@ -563,6 +571,23 @@ function startFlashing() {
     // Previously this checkbox was a dead UI control — the backend always wrote
     // password_authentication = true regardless of its state.
     const passwordAuth = document.getElementById('ssh-password-auth').checked;
+    const powerRelay = document.getElementById('power-relay-enable').checked;
+    const powerDevice = document.getElementById('power-device-name').value.trim() || 'printer';
+    const powerGpioInput = document.getElementById('power-gpio-number').value.trim();
+    const powerActiveLow = document.getElementById('power-active-low').checked;
+    const restartKlipperWhenPowered = document.getElementById('restart-klipper-when-powered').checked;
+    let powerGpio = null;
+    if (powerRelay) {
+        if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(powerDevice)) {
+            alert('The relay device name may only contain letters, numbers, hyphens, and underscores.');
+            return;
+        }
+        if (!/^\d{1,3}$/.test(powerGpioInput) || Number(powerGpioInput) > 999) {
+            alert('Enter a GPIO number between 0 and 999.');
+            return;
+        }
+        powerGpio = Number(powerGpioInput);
+    }
 
     // Image configuration
     const imageSource = document.getElementById('image-source-select').value;
@@ -605,7 +630,12 @@ function startFlashing() {
             sshUsername,
             passwordAuth,
             driveIdentity,
-            highRiskConfirmed
+            highRiskConfirmed,
+            powerRelay,
+            powerDevice,
+            powerGpio,
+            powerActiveLow,
+            restartKlipperWhenPowered
         ).then(res => {
             if (!res) {
                 window.updateDeviceState("ERROR", 0, "Flashing aborted or failed.");

@@ -355,9 +355,34 @@
                                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
                                     <input type="checkbox" id="ssh-password-auth" checked style="width: auto; height: auto; cursor: pointer;"> Enable Password Authentication
                                 </label>
-                                <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
-                                    <input type="checkbox" id="crowsnest-enable" style="width: auto; height: auto; cursor: pointer;"> Install Crowsnest (Webcam Streamer)
-                                </label>
+                                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
+                                     <input type="checkbox" id="crowsnest-enable" style="width: auto; height: auto; cursor: pointer;"> Install Crowsnest (Webcam Streamer)
+                                 </label>
+                                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
+                                     <input type="checkbox" id="power-relay-enable" onchange="togglePowerRelaySettings()" style="width: auto; height: auto; cursor: pointer;"> Raspberry Pi controls printer power through a GPIO relay
+                                 </label>
+                              </div>
+                          </div>
+
+                         <div class="form-group" id="power-relay-settings" style="display: none; margin-top: 16px;">
+                             <label><span class="brand-orange">GPIO RELAY:</span> POWER CONTROL</label>
+                             <div class="form-row" style="display: flex; gap: 12px; width: 100%;">
+                                 <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                                     <label for="power-device-name" style="text-transform: none; font-size: 12px;">Device name</label>
+                                     <input type="text" id="power-device-name" value="printer" placeholder="printer">
+                                 </div>
+                                 <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                                     <label for="power-gpio-number" style="text-transform: none; font-size: 12px;">GPIO number</label>
+                                     <input type="number" id="power-gpio-number" min="0" max="999" step="1" placeholder="20">
+                                 </div>
+                             </div>
+                             <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
+                                     <input type="checkbox" id="power-active-low" style="width: auto; height: auto; cursor: pointer;"> Signal is active low
+                                 </label>
+                                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
+                                     <input type="checkbox" id="restart-klipper-when-powered" checked style="width: auto; height: auto; cursor: pointer;"> Restart Klipper when power is enabled
+                                 </label>
                              </div>
                          </div>
 
