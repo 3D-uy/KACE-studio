@@ -55,6 +55,37 @@ def test_bootstrap_contains_immutable_installer_contract_and_terminal_failure():
     assert "exit 1" in failure_block
 
 
+def test_bootstrap_pins_every_critical_external_dependency():
+    script = BOOTSTRAP.read_text(encoding="utf-8")
+    pin_block = script.split("# BEGIN KACE_DEPENDENCY_PINS", 1)[1].split(
+        "# END KACE_DEPENDENCY_PINS", 1
+    )[0]
+    for name in (
+        "KLIPPER_REF",
+        "MOONRAKER_REF",
+        "CROWSNEST_REF",
+        "MAINSAIL_CONFIG_REF",
+        "FLUIDD_CONFIG_REF",
+        "KACE_INSTALL_REF",
+    ):
+        assert re.search(rf'^{name}="[0-9a-f]{{40}}"$', pin_block, re.MULTILINE)
+    for name in (
+        "MAINSAIL_SHA256",
+        "FLUIDD_SHA256",
+        "MAINSAIL_CONFIG_SHA256",
+        "FLUIDD_CONFIG_SHA256",
+        "KACE_INSTALL_SHA256",
+    ):
+        assert re.search(rf'^{name}="[0-9a-f]{{64}}"$', pin_block, re.MULTILINE)
+
+    assert "git pull" not in script
+    assert "releases/latest" not in script
+    assert "/master/client.cfg" not in script
+    assert "/main/client.cfg" not in script
+    assert 'git -C "$staging" rev-parse HEAD' in script
+    assert "download_verified_file" in script
+
+
 def test_bootstrap_enables_native_klipper_features_idempotently():
     script = BOOTSTRAP.read_text(encoding="utf-8")
     assert "# BEGIN KACE_CONFIG_DEFAULT_HELPER" in script

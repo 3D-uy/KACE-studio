@@ -36,6 +36,171 @@ log_err() {
     echo -e "${C_RED}✘  $1${C_RESET}" >&2
 }
 
+# BEGIN KACE_DEPENDENCY_PINS
+# Update these values only through an explicit, reviewed dependency update.
+KLIPPER_REPOSITORY="https://github.com/Klipper3d/klipper.git"
+KLIPPER_REF="9c1ae230eaebd5ec4df76d5a87537e2f35defab0"
+MOONRAKER_REPOSITORY="https://github.com/Arksine/moonraker.git"
+MOONRAKER_REF="d5ee17128bb88434aacdab90c2e9e990e2b64e4a"
+CROWSNEST_REPOSITORY="https://github.com/mainsail-crew/crowsnest.git"
+CROWSNEST_REF="cf936dabdcf6a3d1eb0138d8eea9044745b40db6"
+
+MAINSAIL_VERSION="v2.18.2"
+MAINSAIL_URL="https://github.com/mainsail-crew/mainsail/releases/download/${MAINSAIL_VERSION}/mainsail.zip"
+MAINSAIL_SHA256="df2ba7c301f7bfc8ac9f122741a6ba08356d679ecfa1f62f898d0337802d5de5"
+FLUIDD_VERSION="v1.37.3"
+FLUIDD_URL="https://github.com/fluidd-core/fluidd/releases/download/${FLUIDD_VERSION}/fluidd.zip"
+FLUIDD_SHA256="48e712e5f2cc59f7cfebd458174ddedff60e532ebcba3f9b844167fa27a22571"
+
+MAINSAIL_CONFIG_REF="ff3869a621db17ce3ef660adbbd3fa321995ac42"
+MAINSAIL_CONFIG_URL="https://raw.githubusercontent.com/mainsail-crew/mainsail-config/${MAINSAIL_CONFIG_REF}/client.cfg"
+MAINSAIL_CONFIG_SHA256="29d4c97b099e481c25c0a875b3f0696850a6aafa67775aee8d05e8682352ffb4"
+FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
+FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
+FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
+
+KACE_INSTALL_REF="5827bfedc3aa8bc25df140ec6b3174b0c91cafbe"
+KACE_INSTALL_SHA256="87da2d46d990482e3f72d2cee9a6a9f3aa2cc97afe49ef3b1638be0f3ecec77a"
+KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
+readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
+readonly CROWSNEST_REPOSITORY CROWSNEST_REF MAINSAIL_VERSION MAINSAIL_URL MAINSAIL_SHA256
+readonly FLUIDD_VERSION FLUIDD_URL FLUIDD_SHA256 MAINSAIL_CONFIG_REF MAINSAIL_CONFIG_URL
+readonly MAINSAIL_CONFIG_SHA256 FLUIDD_CONFIG_REF FLUIDD_CONFIG_URL FLUIDD_CONFIG_SHA256
+readonly KACE_INSTALL_REF KACE_INSTALL_SHA256 KACE_INSTALL_URL
+# END KACE_DEPENDENCY_PINS
+
+run_as_printer() {
+    if [ "$(id -un)" = "$PRINTER_USER" ]; then
+        "$@"
+    else
+        sudo -u "$PRINTER_USER" "$@"
+    fi
+}
+
+ensure_pinned_git_checkout() {
+    local label="$1"
+    local repository="$2"
+    local expected_ref="$3"
+    local target="$4"
+    local actual_ref=""
+    local staging=""
+
+    if [ -e "$target" ]; then
+        if [ ! -d "$target/.git" ]; then
+            log_err "$label exists but is not a Git checkout: $target"
+            return 1
+        fi
+        if ! actual_ref=$(run_as_printer git -C "$target" rev-parse HEAD); then
+            log_err "Could not determine the installed $label revision."
+            return 1
+        fi
+        if [ "$actual_ref" = "$expected_ref" ]; then
+            log_ok "$label already matches pinned revision $expected_ref."
+            return 0
+        fi
+        log_err "$label revision mismatch. Expected $expected_ref, got $actual_ref."
+        return 1
+    fi
+
+    if ! staging=$($SUDO mktemp -d "${target}.kace-staging.XXXXXX"); then
+        log_err "Could not create a staging directory for $label."
+        return 1
+    fi
+    $SUDO chown "$PRINTER_USER:$PRINTER_GROUP" "$staging"
+
+    if ! run_as_printer git init "$staging" || \
+       ! run_as_printer git -C "$staging" remote add origin "$repository" || \
+       ! run_as_printer git -C "$staging" fetch --depth=1 origin "$expected_ref" || \
+       ! run_as_printer git -C "$staging" checkout --detach "$expected_ref"; then
+        log_err "Failed to fetch pinned $label revision $expected_ref."
+        $SUDO rm -rf "$staging"
+        return 1
+    fi
+
+    if ! actual_ref=$(run_as_printer git -C "$staging" rev-parse HEAD) || \
+       [ "$actual_ref" != "$expected_ref" ]; then
+        log_err "$label checkout verification failed. Expected $expected_ref, got ${actual_ref:-unknown}."
+        $SUDO rm -rf "$staging"
+        return 1
+    fi
+
+    if [ -e "$target" ]; then
+        log_err "$label target appeared during installation: $target"
+        $SUDO rm -rf "$staging"
+        return 1
+    fi
+    $SUDO mv "$staging" "$target"
+    log_ok "$label pinned revision $expected_ref installed."
+}
+
+download_verified_file() {
+    local label="$1"
+    local url="$2"
+    local destination="$3"
+    local expected_sha256="$4"
+    local temporary=""
+    local actual_sha256=""
+
+    if ! temporary=$($SUDO mktemp "${destination}.kace-download.XXXXXX"); then
+        log_err "Could not create a temporary download for $label."
+        return 1
+    fi
+    if ! curl --fail --silent --show-error --location --retry 3 --retry-delay 5 \
+        "$url" -o "$temporary"; then
+        log_err "Failed to download $label."
+        $SUDO rm -f "$temporary"
+        return 1
+    fi
+    actual_sha256=$(sha256sum "$temporary" | cut -d" " -f1)
+    if [ "$actual_sha256" != "$expected_sha256" ]; then
+        log_err "$label integrity check failed. Expected $expected_sha256, got $actual_sha256."
+        $SUDO rm -f "$temporary"
+        return 1
+    fi
+    $SUDO mv -f "$temporary" "$destination"
+}
+
+install_verified_dashboard() {
+    local label="$1"
+    local url="$2"
+    local expected_sha256="$3"
+    local archive="$4"
+    local target="$5"
+    local identity="${url}#${expected_sha256}"
+    local staging=""
+
+    if [ -e "$target" ]; then
+        if [ -f "$target/.kace-bootstrap-release" ] && \
+           [ -f "$target/index.html" ] && \
+           [ "$(cat "$target/.kace-bootstrap-release")" = "$identity" ]; then
+            log_ok "$label already matches its verified release."
+            return 0
+        fi
+        log_err "$label target exists without a verified release marker: $target"
+        return 1
+    fi
+
+    download_verified_file "$label release archive" "$url" "$archive" "$expected_sha256" || return 1
+    if ! staging=$($SUDO mktemp -d "$(dirname "$target")/.${label,,}.kace-staging.XXXXXX"); then
+        log_err "Could not create a staging directory for $label."
+        return 1
+    fi
+    if ! $SUDO unzip -q "$archive" -d "$staging" || [ ! -f "$staging/index.html" ]; then
+        log_err "$label extraction failed before publication."
+        $SUDO rm -rf "$staging"
+        return 1
+    fi
+    printf '%s\n' "$identity" | $SUDO tee "$staging/.kace-bootstrap-release" > /dev/null
+    $SUDO chown -R www-data:www-data "$staging"
+    $SUDO chmod -R 755 "$staging"
+    if [ -e "$target" ]; then
+        log_err "$label target appeared during installation: $target"
+        $SUDO rm -rf "$staging"
+        return 1
+    fi
+    $SUDO mv "$staging" "$target"
+}
+
 # BEGIN KACE_CONFIG_DEFAULT_HELPER
 # Add a missing INI-style section or option without changing existing values.
 # Writes are atomic and repeated calls are no-ops once the entry exists.
@@ -512,13 +677,8 @@ if [ "$PREBAKED" = "true" ]; then
     log_stage "KLIPPER_FIX" "Patching Klipper service paths"
     log_ok "Klipper service paths already configured (skipped)."
 else
-    if [ ! -d "$PRINTER_HOME/klipper" ]; then
-        echo "Cloning Klipper repository..."
-        sudo -u "$PRINTER_USER" git clone https://github.com/Klipper3d/klipper.git "$PRINTER_HOME/klipper"
-    else
-        echo "Klipper repository already exists. Updating..."
-        (cd "$PRINTER_HOME/klipper" && sudo -u "$PRINTER_USER" git pull)
-    fi
+    ensure_pinned_git_checkout \
+        "Klipper" "$KLIPPER_REPOSITORY" "$KLIPPER_REF" "$PRINTER_HOME/klipper"
 
     if [ ! -f "$PRINTER_HOME/klipper/scripts/install-debian.sh" ]; then
         log_err "Klipper Debian install script not found."
@@ -560,13 +720,8 @@ log_stage "MOONRAKER" "Installing Moonraker"
 if [ "$PREBAKED" = "true" ]; then
     log_ok "Moonraker already pre-installed (skipped)."
 else
-    if [ ! -d "$PRINTER_HOME/moonraker" ]; then
-        echo "Cloning Moonraker repository..."
-        sudo -u "$PRINTER_USER" git clone https://github.com/Arksine/moonraker.git "$PRINTER_HOME/moonraker"
-    else
-        echo "Moonraker repository already exists. Updating..."
-        (cd "$PRINTER_HOME/moonraker" && sudo -u "$PRINTER_USER" git pull)
-    fi
+    ensure_pinned_git_checkout \
+        "Moonraker" "$MOONRAKER_REPOSITORY" "$MOONRAKER_REF" "$PRINTER_HOME/moonraker"
 
     if [ ! -f "$PRINTER_HOME/moonraker/scripts/install-moonraker.sh" ]; then
         log_err "Moonraker install script not found."
@@ -685,51 +840,17 @@ $SUDO mkdir -p /var/www
 
 setup_mainsail() {
     log_stage "MAINSAIL" "Installing Mainsail"
-    $SUDO mkdir -p /var/www/mainsail
-    if ! curl -fsSL --retry 3 --retry-delay 5 \
-        "https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip" \
-        -o /tmp/mainsail.zip; then
-        log_err "Failed to download Mainsail release archive."
-        exit 1
-    fi
-    if ! file /tmp/mainsail.zip 2>/dev/null | grep -q 'Zip archive'; then
-        log_err "Downloaded Mainsail archive is not a valid ZIP file."
-        rm -f /tmp/mainsail.zip
-        exit 1
-    fi
-    $SUDO unzip -o /tmp/mainsail.zip -d /var/www/mainsail
-    rm -f /tmp/mainsail.zip
-    if [ ! -f "/var/www/mainsail/index.html" ]; then
-        log_err "Mainsail extraction failed — index.html not found."
-        exit 1
-    fi
-    $SUDO chown -R www-data:www-data /var/www/mainsail
-    $SUDO chmod -R 755 /var/www/mainsail
+    install_verified_dashboard \
+        "Mainsail" "$MAINSAIL_URL" "$MAINSAIL_SHA256" \
+        "/tmp/mainsail.zip" "/var/www/mainsail"
     log_ok "Mainsail installed."
 }
 
 setup_fluidd() {
     log_stage "FLUIDD" "Installing Fluidd"
-    $SUDO mkdir -p /var/www/fluidd
-    if ! curl -fsSL --retry 3 --retry-delay 5 \
-        "https://github.com/fluidd-core/fluidd/releases/latest/download/fluidd.zip" \
-        -o /tmp/fluidd.zip; then
-        log_err "Failed to download Fluidd release archive."
-        exit 1
-    fi
-    if ! file /tmp/fluidd.zip 2>/dev/null | grep -q 'Zip archive'; then
-        log_err "Downloaded Fluidd archive is not a valid ZIP file."
-        rm -f /tmp/fluidd.zip
-        exit 1
-    fi
-    $SUDO unzip -o /tmp/fluidd.zip -d /var/www/fluidd
-    rm -f /tmp/fluidd.zip
-    if [ ! -f "/var/www/fluidd/index.html" ]; then
-        log_err "Fluidd extraction failed — index.html not found."
-        exit 1
-    fi
-    $SUDO chown -R www-data:www-data /var/www/fluidd
-    $SUDO chmod -R 755 /var/www/fluidd
+    install_verified_dashboard \
+        "Fluidd" "$FLUIDD_URL" "$FLUIDD_SHA256" \
+        "/tmp/fluidd.zip" "/var/www/fluidd"
     log_ok "Fluidd installed."
 }
 
@@ -774,40 +895,36 @@ setup_client_config() {
     local dashboard="$1"
     local config_dir="$PRINTER_HOME/printer_data/config"
 
-    # Helper: copy a client cfg file as a real file (no symlinks).
-    # Tries local git checkout first (dereferencing any symlinks), then falls
-    # back to curl download, then writes a minimal placeholder.
+    # Helper: publish a verified client cfg file as a real file (no symlinks).
     _install_client_cfg() {
         local dest="$1"          # full destination path, e.g. .../config/mainsail.cfg
         local local_src="$2"     # preferred local source (may be a symlink)
-        local curl_url="$3"      # fallback download URL
-        local placeholder="$4"   # fallback inline content label for log
-
-        # Remove any existing symlink so we always end up with a regular file.
-        if [ -L "$dest" ]; then
-            echo "Removing existing symlink at $dest to replace with regular file..."
-            rm -f "$dest"
-        fi
+        local url="$3"           # pinned download URL
+        local expected_sha256="$4"
+        local temporary=""
+        local actual_sha256=""
 
         if [ -e "$local_src" ]; then
-            echo "Copying $(basename "$dest") from local checkout (dereferencing symlinks)..."
-            cp --dereference "$local_src" "$dest"
-        elif ! curl -fsSL --retry 3 --retry-delay 5 "$curl_url" -o "$dest"; then
-            log_warn "Could not download $(basename "$dest"). Writing minimal placeholder."
-            cat > "$dest" <<PLACEHOLDER
-# $(basename "$dest") placeholder — replace with the official file from:
-# $curl_url
-[virtual_sdcard]
-path: ~/printer_data/gcodes
-on_error_gcode: CANCEL_PRINT
-
-[pause_resume]
-
-[display_status]
-
-[respond]
-PLACEHOLDER
+            if ! temporary=$(mktemp "${dest}.kace-config.XXXXXX"); then
+                log_err "Could not create a temporary client config for $(basename "$dest")."
+                return 1
+            fi
+            if ! cp --dereference "$local_src" "$temporary"; then
+                log_err "Could not copy local $(basename "$dest") for verification."
+                rm -f "$temporary"
+                return 1
+            fi
+            actual_sha256=$(sha256sum "$temporary" | cut -d" " -f1)
+            if [ "$actual_sha256" = "$expected_sha256" ]; then
+                mv -f "$temporary" "$dest"
+                $SUDO chown "${PRINTER_USER}:${PRINTER_GROUP}" "$dest"
+                return 0
+            fi
+            log_warn "Local $(basename "$dest") does not match the pinned hash; downloading the verified version."
+            rm -f "$temporary"
         fi
+
+        download_verified_file "$(basename "$dest")" "$url" "$dest" "$expected_sha256" || return 1
         $SUDO chown "${PRINTER_USER}:${PRINTER_GROUP}" "$dest"
     }
 
@@ -817,8 +934,8 @@ PLACEHOLDER
             _install_client_cfg \
                 "$config_dir/mainsail.cfg" \
                 "$PRINTER_HOME/mainsail-config/client.cfg" \
-                "https://raw.githubusercontent.com/mainsail-crew/mainsail-config/master/client.cfg" \
-                "mainsail.cfg"
+                "$MAINSAIL_CONFIG_URL" \
+                "$MAINSAIL_CONFIG_SHA256"
         else
             echo "mainsail.cfg already present as a regular file. Skipping."
         fi
@@ -829,8 +946,8 @@ PLACEHOLDER
             _install_client_cfg \
                 "$config_dir/fluidd.cfg" \
                 "$PRINTER_HOME/fluidd-config/client.cfg" \
-                "https://raw.githubusercontent.com/fluidd-core/fluidd-config/master/client.cfg" \
-                "fluidd.cfg"
+                "$FLUIDD_CONFIG_URL" \
+                "$FLUIDD_CONFIG_SHA256"
         else
             echo "fluidd.cfg already present as a regular file. Skipping."
         fi
@@ -1109,11 +1226,8 @@ EOF
         log_ok "Crowsnest configured."
     else
         log_stage "CROWSNEST" "Installing Crowsnest Webcam Streamer"
-        if [ ! -d "$PRINTER_HOME/crowsnest" ]; then
-            sudo -u "$PRINTER_USER" git clone https://github.com/mainsail-crew/crowsnest.git "$PRINTER_HOME/crowsnest"
-        else
-            (cd "$PRINTER_HOME/crowsnest" && sudo -u "$PRINTER_USER" git pull)
-        fi
+        ensure_pinned_git_checkout \
+            "Crowsnest" "$CROWSNEST_REPOSITORY" "$CROWSNEST_REF" "$PRINTER_HOME/crowsnest"
         if [ ! -f "$PRINTER_HOME/crowsnest/tools/install.sh" ]; then
             log_err "Crowsnest install script not found."
             exit 1
@@ -1179,10 +1293,6 @@ fi
 # ── 11. KACE Agent ────────────────────────────────────────────────────────────
 log_stage "KACE" "Installing KACE Agent"
 INSTALL_OK=0
-KACE_INSTALL_REF="5827bfedc3aa8bc25df140ec6b3174b0c91cafbe"
-KACE_INSTALL_SHA256="87da2d46d990482e3f72d2cee9a6a9f3aa2cc97afe49ef3b1638be0f3ecec77a"
-KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
-readonly KACE_INSTALL_REF KACE_INSTALL_SHA256 KACE_INSTALL_URL
 
 if [ "$(id -un)" != "$PRINTER_USER" ]; then
     # Running as a different user (e.g. root), switch to printer user context
