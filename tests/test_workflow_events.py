@@ -84,6 +84,7 @@ def test_done_is_delivered_as_the_only_success_state():
     assert parser.feed(line) == [event]
     app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
     assert "const isDone = view.state === 'DONE'" in app_js
+    assert "view.state === 'FLASHED'" not in app_js
 
 
 @pytest.mark.parametrize("state", [

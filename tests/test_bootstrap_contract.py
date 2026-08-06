@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,16 @@ ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "bootstrap.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 AUTHORITATIVE_BOOTSTRAP = ROOT.parent / "KACE" / "scripts" / "bootstrap.sh"
+
+
+def _find_bash() -> str | None:
+    if os.name == "nt":
+        program_files = os.environ.get("ProgramFiles")
+        if program_files:
+            git_bash = Path(program_files) / "Git" / "bin" / "bash.exe"
+            if git_bash.is_file():
+                return str(git_bash)
+    return shutil.which("bash")
 
 
 def _workflow_value(name: str) -> str:
@@ -49,7 +60,7 @@ def test_bootstrap_contains_immutable_installer_contract_and_terminal_failure():
     assert 'KACE/${KACE_INSTALL_REF}/install.sh' in script
     assert "/main/install.sh" not in script
     assert 'KACE_SOURCE_REF="$KACE_INSTALL_REF"' in script
-    assert "KACE_NO_LAUNCH=1" in script
+    assert "KACE_NO_LAUNCH=1" not in script
     assert "=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ===" in script
     failure_block = script.split('if [ "$INSTALL_OK" -ne 1 ]; then', 1)[1].split("fi", 1)[0]
     assert "exit 1" in failure_block
@@ -102,11 +113,8 @@ def test_bootstrap_preserves_existing_moonraker_configuration():
     assert '! grep -q "\\[authorization\\]"' not in script
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not available")
+@pytest.mark.skipif(_find_bash() is None, reason="bash is not available")
 def test_gpio_relay_is_final_before_moonraker_install_and_restart(tmp_path):
-    if os.name == "nt":
-        pytest.skip("The bootstrap integration shell test runs on POSIX CI")
-
     config_dir = tmp_path / "printer_data" / "config"
     config_dir.mkdir(parents=True)
     moonraker_conf = config_dir / "moonraker.conf"
@@ -118,6 +126,7 @@ def test_gpio_relay_is_final_before_moonraker_install_and_restart(tmp_path):
 
     command = """
 set -euo pipefail
+python3() { "$KACE_TEST_PYTHON" "$@"; }
 export KACE_BOOTSTRAP_LIB_ONLY=1
 source "$1"
 PRINTER_HOME="$2"
@@ -126,13 +135,17 @@ POWER_DEVICE=printer
 POWER_GPIO=20
 POWER_ACTIVE_LOW=true
 POWER_RESTART_KLIPPER=true
+POWER_INITIAL_STATE=on
+POWER_OFF_WHEN_SHUTDOWN=false
 ensure_moonraker_config "$PRINTER_HOME/printer_data/config/moonraker.conf" "$PRINTER_HOME/printer_data/comms/klippy.sock"
 ensure_moonraker_config "$PRINTER_HOME/printer_data/config/moonraker.conf" "$PRINTER_HOME/printer_data/comms/klippy.sock"
+verify_requested_power_relay "$PRINTER_HOME/printer_data/config/moonraker.conf"
 """
     result = subprocess.run(
-        ["bash", "-c", command, "bootstrap-test", str(BOOTSTRAP), str(tmp_path)],
+        [_find_bash(), "-c", command, "bootstrap-test", BOOTSTRAP.as_posix(), tmp_path.as_posix()],
         capture_output=True,
         text=True,
+        env={**os.environ, "KACE_TEST_PYTHON": Path(sys.executable).as_posix()},
     )
     assert result.returncode == 0, result.stderr
 
@@ -141,6 +154,8 @@ ensure_moonraker_config "$PRINTER_HOME/printer_data/config/moonraker.conf" "$PRI
     assert "type: gpio" in final_content
     assert "pin: !gpiochip0/gpio20" in final_content
     assert "restart_klipper_when_powered: true" in final_content
+    assert "initial_state: on" in final_content
+    assert "off_when_shutdown: false" in final_content
     assert "[authorization]" in final_content
     assert "trusted_clients:" in final_content
     assert "custom_option: preserved" in final_content
@@ -166,3 +181,19 @@ def test_frontend_rejects_bootstrap_error_marker():
     assert "KACE_BOOTSTRAP_ERROR" in app_js
     assert "!bootstrapFailureHandled" in app_js
     assert "finishBtn.disabled = true" in app_js
+
+
+def test_frontend_waits_for_wizard_completion_marker_before_enabling_finish():
+    app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    completion_marker = "Bootstrap complete! KACE wizard finished successfully."
+    marker_index = app_js.index(completion_marker)
+    enabled_index = app_js.index("finishBtn.disabled = false", marker_index)
+    assert marker_index < enabled_index
+    assert "Bootstrap complete! KACE Node is fully ready." not in app_js
+
+    script = BOOTSTRAP.read_text(encoding="utf-8")
+    installer_index = script.index('bash "$tmp_script"')
+    finalization_index = script.index(
+        'finalize_bootstrap_success "$MOONRAKER_CONFIG" "$BOOT_CFG"'
+    )
+    assert installer_index < finalization_index

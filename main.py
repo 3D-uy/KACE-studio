@@ -9,6 +9,7 @@ import webview
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from backend.imager import list_drives, flash_drive, inject_config, _normalize_disk_identity
+from backend.ejector import request_safe_eject
 from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
 from backend.workflow_events import KaceWorkflowEventParser
@@ -214,78 +215,23 @@ class Api:
         return True
 
     def eject_drive(self, disk_number: int) -> dict:
-        """
-        Dismounts and ejects the specified disk number under Windows.
-        """
-        if not isinstance(disk_number, int):
-            try:
-                disk_number = int(disk_number)
-            except ValueError:
-                return {"success": False, "error": "Invalid disk number"}
-                
-        if sys.platform != "win32":
-            return {"success": False, "error": "Eject is only supported on Windows"}
-            
-        import subprocess
-        from backend.imager import SUBPROCESS_FLAGS
-        
-        # Get all partitions of DiskNumber that have a DriveLetter, and run Shell.Application Eject verb.
-        # Fallback to standard InvokeVerb if localized name is not resolved.
-        # Also nested try-catch block for Set-Disk so that permission errors for standard users are ignored.
-        ps_cmd = f"""
-        $ErrorActionPreference = 'Stop'
-        try {{
-            $parts = Get-Partition -DiskNumber {disk_number} -ErrorAction SilentlyContinue
-            if ($parts) {{
-                $ejected = $false
-                foreach ($part in $parts) {{
-                    $letter = $part.DriveLetter
-                    if ($letter -and $letter -ne [char]0 -and $letter -ne "") {{
-                        $drive = "$($letter):"
-                        $shell = New-Object -ComObject Shell.Application
-                        $folder = $shell.Namespace(17)
-                        if ($folder) {{
-                            $item = $folder.ParseName($drive)
-                            if ($item) {{
-                                # Regex-match common localized verbs for eject: Eject (EN), Expulsar (ES), Ejetar (PT), Éjecter (FR), Auswerfen (DE), etc.
-                                $verb = $item.Verbs() | Where-Object {{ $_.Name.Replace('&', '') -match '(?i)^(eject|expulsar|ejetar|éjecter|auswerfen|espelli|извлечь|uitwerpen)' }} | Select-Object -First 1
-                                if ($verb) {{
-                                    $verb.DoIt()
-                                    $ejected = $true
-                                }} else {{
-                                    # Safe fallbacks using standard verb calls
-                                    $item.InvokeVerb("Eject")
-                                    $item.InvokeVerb("Expulsar")
-                                    $ejected = $true
-                                }}
-                            }}
-                        }}
-                    }}
-                }}
-                if ($ejected) {{
-                    return "SUCCESS"
-                }}
-            }}
-            # Fallback to Set-Disk offline/online if no letters found to trigger cache flush.
-            # Wrapped in a nested try-catch so permission errors for standard users are ignored.
-            try {{
-                Set-Disk -Number {disk_number} -IsOffline $true -ErrorAction Stop
-                Set-Disk -Number {disk_number} -IsOffline $false -ErrorAction Stop
-            }} catch {{}}
-            return "SUCCESS"
-        }} catch {{
-            return $_.Exception.Message
-        }}
-        """
+        """Safely removes a previously selected disk after revalidating its identity."""
+        if isinstance(disk_number, bool):
+            return {"success": False, "error": "Invalid disk number."}
         try:
-            res = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True, encoding="utf-8", errors="replace", **SUBPROCESS_FLAGS)
-            if res.returncode == 0 and "SUCCESS" in res.stdout:
-                return {"success": True}
-            else:
-                err_msg = res.stdout.strip() or res.stderr.strip()
-                return {"success": False, "error": err_msg or "Failed to eject disk"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+            disk_number = int(disk_number)
+            expected_identity = _normalize_disk_identity(self._drive_snapshots[disk_number])
+        except (KeyError, TypeError, ValueError):
+            return {
+                "success": False,
+                "error": "Target disk identity is unavailable. Refresh the drive list and try again.",
+            }
+        result = request_safe_eject(disk_number, expected_identity)
+        if result.get("success") is not True:
+            result["error"] = self._sanitize_error(
+                result.get("error") or "Windows could not safely remove the disk."
+            )
+        return result
 
     def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "printer", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
         """
@@ -1216,6 +1162,11 @@ if __name__ == "__main__":
         # Shift args to remove program name and the write-disk trigger
         sys.argv = sys.argv[1:]
         writer_main()
+        sys.exit(0)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--eject-disk":
+        from backend.ejector import main as ejector_main
+        sys.argv = sys.argv[1:]
+        ejector_main()
         sys.exit(0)
     else:
         main()

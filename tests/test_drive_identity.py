@@ -90,6 +90,12 @@ def test_list_drives_rejects_incomplete_identity(monkeypatch, missing):
     assert imager.list_drives() == []
 
 
+def test_list_drives_excludes_offline_disks(monkeypatch):
+    disk = powershell_disk(IsOffline=True)
+    monkeypatch.setattr(imager.subprocess, "run", lambda *_a, **_k: subprocess_result(disk))
+    assert imager.list_drives() == []
+
+
 @pytest.mark.parametrize("bus", ["SATA", "NVME", "ATA", "RAID"])
 def test_internal_bus_types_are_rejected(monkeypatch, bus):
     monkeypatch.setattr(

@@ -14,16 +14,41 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "bootstrap.sh"
-BASH = shutil.which("bash")
 
-pytestmark = pytest.mark.skipif(
-    os.name == "nt" or BASH is None,
-    reason="The bootstrap dependency harness runs on POSIX CI",
-)
+
+def _find_bash() -> str | None:
+    if os.name == "nt":
+        program_files = os.environ.get("ProgramFiles")
+        if program_files:
+            git_bash = Path(program_files) / "Git" / "bin" / "bash.exe"
+            if git_bash.is_file():
+                return str(git_bash)
+    return shutil.which("bash")
+
+
+def _shell_path(path: Path) -> str:
+    resolved = path.resolve()
+    if os.name == "nt":
+        drive = resolved.drive.rstrip(":").lower()
+        relative = resolved.as_posix().split(":", 1)[1].lstrip("/")
+        return f"/{drive}/{relative}"
+    return resolved.as_posix()
+
+
+def _shell_argument(value: str) -> str:
+    path = Path(value)
+    if os.name == "nt" and path.is_absolute():
+        return _shell_path(path)
+    return value
+
+
+BASH = _find_bash()
+pytestmark = pytest.mark.skipif(BASH is None, reason="bash is not available")
 
 
 def _write_executable(path: Path, content: str) -> None:
-    path.write_text(content, encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="\n") as output:
+        output.write(content)
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
@@ -121,11 +146,19 @@ PRINTER_GROUP="$PRINTER_USER"
 PATH="$2:$PATH"
 """ + command
     env = os.environ.copy()
-    env["FAKE_GIT_LOG"] = str(harness["git_log"])
+    env["FAKE_GIT_LOG"] = _shell_path(harness["git_log"])
     if environment:
         env.update(environment)
     return subprocess.run(
-        [BASH, "-c", shell, "bootstrap-test", str(BOOTSTRAP), str(harness["bin_dir"]), *arguments],
+        [
+            BASH,
+            "-c",
+            shell,
+            "bootstrap-test",
+            _shell_path(BOOTSTRAP),
+            _shell_path(harness["bin_dir"]),
+            *(_shell_argument(argument) for argument in arguments),
+        ],
         capture_output=True,
         text=True,
         env=env,

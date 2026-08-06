@@ -312,12 +312,11 @@
                 
                 <div class="card">
                     <div class="form-section">
-                        <h3>Credentials & Services</h3>
                         
                         <!-- Steps 7 & 8: Credentials & WiFi side-by-side -->
-                        <div class="form-row" style="display: flex; gap: 16px; width: 100%;">
+                        <div class="credentials-fields">
                             <!-- Step 7: Credentials -->
-                            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                            <div class="form-group" style="margin-bottom: 0;">
                                 <label for="ssh-username"><span class="brand-orange">STEP 7:</span> ACCOUNT USERNAME</label>
                                 <input type="text" id="ssh-username" value="kace" placeholder="Username" style="margin-bottom: 8px;">
                                 <div class="password-wrapper" style="margin-bottom: 8px;">
@@ -331,7 +330,7 @@
                             </div>
 
                             <!-- Step 8: WiFi Setup -->
-                            <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                            <div class="form-group" style="margin-bottom: 0;">
                                 <label for="wifi-ssid"><span class="brand-orange">STEP 8:</span> WI-FI NETWORK</label>
                                 <input type="text" id="wifi-ssid" placeholder="Network Name / SSID" style="margin-bottom: 8px;">
                                 <div class="password-wrapper" style="margin-bottom: 8px;">
@@ -345,44 +344,80 @@
                             </div>
                         </div>
 
-                        <!-- Step 9: Enable SSH -->
+                        <!-- Step 9: System services -->
                         <div class="form-group" style="margin-top: 24px;">
                             <label><span class="brand-orange">STEP 9:</span> SYSTEM SERVICES</label>
-                            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 4px;">
-                                <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
-                                    <input type="checkbox" id="ssh-enable" checked style="width: auto; height: auto; cursor: pointer;"> Enable SSH
-                                </label>
-                                <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
-                                    <input type="checkbox" id="ssh-password-auth" checked style="width: auto; height: auto; cursor: pointer;"> Enable Password Authentication
-                                </label>
-                                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
-                                     <input type="checkbox" id="crowsnest-enable" style="width: auto; height: auto; cursor: pointer;"> Install Crowsnest (Webcam Streamer)
-                                 </label>
-                                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
-                                     <input type="checkbox" id="power-relay-enable" onchange="togglePowerRelaySettings()" style="width: auto; height: auto; cursor: pointer;"> Raspberry Pi controls printer power through a GPIO relay
-                                 </label>
-                              </div>
-                          </div>
+                            <div class="service-options-grid">
+                                <div class="service-option">
+                                    <label for="ssh-enable" class="service-option-label">
+                                        <input type="checkbox" id="ssh-enable" checked> Enable SSH
+                                    </label>
+                                    <button type="button" class="service-info" aria-label="About Enable SSH">
+                                        <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                    </button>
+                                    <div class="service-tooltip" role="tooltip">Allows KACE Studio to connect to the Pi after it boots and opens the SSH Workspace.</div>
+                                </div>
+                                <div class="service-option">
+                                    <label for="crowsnest-enable" class="service-option-label">
+                                        <input type="checkbox" id="crowsnest-enable"> Install Crowsnest (Webcam Streamer)
+                                    </label>
+                                    <button type="button" class="service-info" aria-label="About Crowsnest">
+                                        <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                    </button>
+                                    <div class="service-tooltip" role="tooltip">Installs the webcam streaming service. Leave it disabled when the printer has no camera.</div>
+                                </div>
+                                <div class="service-option">
+                                    <label for="ssh-password-auth" class="service-option-label">
+                                        <input type="checkbox" id="ssh-password-auth" checked> Enable Password Authentication
+                                    </label>
+                                    <button type="button" class="service-info" aria-label="About password authentication">
+                                        <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                    </button>
+                                    <div class="service-tooltip" role="tooltip">Lets you sign in using the password above. Disable it only when SSH keys are already configured.</div>
+                                </div>
+                                <div class="service-option">
+                                    <label for="power-relay-enable" class="service-option-label">
+                                        <input type="checkbox" id="power-relay-enable" onchange="togglePowerRelaySettings()"> Pi controls printer power through a GPIO relay
+                                    </label>
+                                    <button type="button" class="service-info" aria-label="About GPIO relay power control">
+                                        <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                    </button>
+                                    <div class="service-tooltip" role="tooltip">Use only when a relay wired to the Pi physically switches printer power. It enables Moonraker power control.</div>
+                                </div>
+                            </div>
+                        </div>
 
-                         <div class="form-group" id="power-relay-settings" style="display: none; margin-top: 16px;">
+                         <div class="form-group" id="power-relay-settings" style="margin-top: 16px;">
                              <label><span class="brand-orange">GPIO RELAY:</span> POWER CONTROL</label>
-                             <div class="form-row" style="display: flex; gap: 12px; width: 100%;">
-                                 <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                             <div class="relay-fields">
+                                 <div class="form-group" style="margin-bottom: 0;">
                                      <label for="power-device-name" style="text-transform: none; font-size: 12px;">Device name</label>
                                      <input type="text" id="power-device-name" value="printer" placeholder="printer">
                                  </div>
-                                 <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                                 <div class="form-group" style="margin-bottom: 0;">
                                      <label for="power-gpio-number" style="text-transform: none; font-size: 12px;">GPIO number</label>
                                      <input type="number" id="power-gpio-number" min="0" max="999" step="1" placeholder="20">
                                  </div>
                              </div>
-                             <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
-                                     <input type="checkbox" id="power-active-low" style="width: auto; height: auto; cursor: pointer;"> Signal is active low
-                                 </label>
-                                 <label style="display: flex; align-items: center; gap: 8px; text-transform: none; font-size: 13px; color: var(--text-primary); cursor: pointer;">
-                                     <input type="checkbox" id="restart-klipper-when-powered" checked style="width: auto; height: auto; cursor: pointer;"> Restart Klipper when power is enabled
-                                 </label>
+                             <div class="relay-options-grid">
+                                 <div class="service-option">
+                                     <label for="power-active-low" class="service-option-label">
+                                         <input type="checkbox" id="power-active-low"> Signal is active low
+                                     </label>
+                                     <button type="button" class="service-info" aria-label="About active low relay signals">
+                                         <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                     </button>
+                                     <div class="service-tooltip" role="tooltip">Enable this when the relay turns on when the GPIO signal is low. Check the relay board documentation first.</div>
+                                 </div>
+                                 <div class="service-option">
+                                     <label for="restart-klipper-when-powered" class="service-option-label">
+                                         <input type="checkbox" id="restart-klipper-when-powered" checked> Restart Klipper when power is enabled
+                                     </label>
+                                     <button type="button" class="service-info" aria-label="About restarting Klipper after power is enabled">
+                                         <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                     </button>
+                                     <div class="service-tooltip" role="tooltip">Restarts Klipper after the printer powers on so it can reconnect to the controller.</div>
+                                 </div>
                              </div>
                          </div>
 
@@ -434,19 +469,33 @@
                 </div>
 
                 <div class="card">
-                    <div class="discovery-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
-                        <h3 style="margin-bottom: 0; font-size: 18px; font-weight: 600;">Discovered Nodes</h3>
+                    <div class="discovery-header" style="display: flex; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
                         <div style="display: flex; align-items: center; gap: 16px;">
-                            <span id="scan-status-text" style="font-size: 13px; color: var(--text-secondary); font-weight: 500;"></span>
                             <button class="btn btn-primary" onclick="triggerScan()" style="padding: 8px 20px;">
                                 <i class="fa-solid fa-magnifying-glass"></i> Scan Subnet Now
                             </button>
+                            <span id="scan-status-text" style="font-size: 13px; color: var(--text-secondary); font-weight: 500;"></span>
                         </div>
                     </div>
 
                     <div class="device-list" id="discovered-device-list">
-                        <div class="list-empty">
-                            <i class="fa-solid fa-hourglass-start"></i> No active nodes located yet. Click Scan Subnet above to scan.
+                        <div class="discovery-waiting discovery-empty">
+                            <div class="discovery-radar" aria-hidden="true">
+                                <span class="discovery-radar-ring ring-one"></span>
+                                <span class="discovery-radar-ring ring-two"></span>
+                                <i class="fa-solid fa-satellite-dish"></i>
+                            </div>
+                            <div class="discovery-waiting-copy">
+                                <p class="discovery-eyebrow">DEVICE DISCOVERY</p>
+                                <h4>Looking for your KACE device</h4>
+                                <p>Your first boot can take a few minutes before the device is ready to answer on the network.</p>
+                            </div>
+                            <div class="discovery-tips" aria-label="Connection tips">
+                                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> Wait a few minutes during the first boot.</p>
+                                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> Verify the device is connected to the same network.</p>
+                                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> You can also connect using the IP address manually.</p>
+                                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> If you know the hostname, try <strong>kace.local</strong>.</p>
+                            </div>
                         </div>
                     </div>
                     

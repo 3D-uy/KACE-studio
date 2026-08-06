@@ -479,6 +479,7 @@ function ejectFlashedDrive() {
     const ejectBtn = document.getElementById('eject-btn');
     if (ejectBtn) {
         ejectBtn.disabled = true;
+        ejectBtn.removeAttribute('title');
         ejectBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Ejecting...';
     }
 
@@ -488,7 +489,8 @@ function ejectFlashedDrive() {
                 if (res && res.success) {
                     if (ejectBtn) {
                         ejectBtn.className = "btn btn-success";
-                        ejectBtn.innerHTML = '<i class="fa-solid fa-check"></i> Ejected Successfully';
+                        ejectBtn.innerHTML = '<i class="fa-solid fa-check"></i> Safe to Remove';
+                        ejectBtn.title = res.message || "The SD card is safe to remove.";
                     }
                     refreshDrives();
                 } else {
@@ -712,6 +714,7 @@ window.updateDeviceState = function (state, progress, message) {
             const ejectBtn = document.getElementById('eject-btn');
             if (ejectBtn) {
                 ejectBtn.disabled = false;
+                ejectBtn.removeAttribute('title');
                 ejectBtn.className = "btn btn-secondary";
                 ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
             }
@@ -839,6 +842,33 @@ function updateProgress(percent, message) {
 
 
 // Network Discovery & Scanning (Stage B)
+let discoveryScanStartedAt = null;
+let discoveryScanTimer = null;
+
+function startDiscoveryScanTimer() {
+    discoveryScanStartedAt = Date.now();
+    if (discoveryScanTimer) window.clearInterval(discoveryScanTimer);
+
+    const updateElapsed = () => {
+        const elapsed = document.getElementById('discovery-scan-elapsed');
+        if (!elapsed || !discoveryScanStartedAt) return;
+        const seconds = Math.floor((Date.now() - discoveryScanStartedAt) / 1000);
+        const minutes = Math.floor(seconds / 60);
+        elapsed.textContent = minutes > 0
+            ? `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`
+            : `${seconds}s`;
+    };
+
+    updateElapsed();
+    discoveryScanTimer = window.setInterval(updateElapsed, 1000);
+}
+
+function stopDiscoveryScanTimer() {
+    if (discoveryScanTimer) window.clearInterval(discoveryScanTimer);
+    discoveryScanTimer = null;
+    discoveryScanStartedAt = null;
+}
+
 function triggerScan() {
     const visual = document.getElementById('scanner-visual');
     const text = document.getElementById('scan-status-text');
@@ -847,13 +877,35 @@ function triggerScan() {
     if (visual) visual.classList.add('scanning');
     text.textContent = "Probing local network subnet...";
     list.innerHTML = `
-        <div class="list-empty">
-            <i class="fa-solid fa-spinner fa-spin"></i> Subnet port scanning active...
+        <div class="discovery-waiting is-scanning" id="scanner-visual">
+            <div class="discovery-radar" aria-hidden="true">
+                <span class="discovery-radar-ring ring-one"></span>
+                <span class="discovery-radar-ring ring-two"></span>
+                <i class="fa-solid fa-satellite-dish"></i>
+            </div>
+            <div class="discovery-waiting-copy">
+                <p class="discovery-eyebrow">LOCAL NETWORK SCAN</p>
+                <h4>Scanning local network...</h4>
+                <p>KACE Studio is checking for devices as they become available.</p>
+            </div>
+            <div class="discovery-scan-time" aria-label="Scan elapsed time">
+                <i class="fa-regular fa-clock" aria-hidden="true"></i>
+                <span>Elapsed time</span>
+                <strong id="discovery-scan-elapsed">0s</strong>
+            </div>
+            <div class="discovery-tips" aria-label="Connection tips">
+                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> Wait a few minutes during the first boot.</p>
+                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> Verify the device is connected to the same network.</p>
+                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> You can also connect using the IP address manually.</p>
+                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> If you know the hostname, try <strong>kace.local</strong>.</p>
+            </div>
         </div>
     `;
+    startDiscoveryScanTimer();
 
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.scan_network().then(devices => {
+            stopDiscoveryScanTimer();
             if (visual) visual.classList.remove('scanning');
             // Handle rate-limit signal returned by the backend
             if (devices && !Array.isArray(devices) && devices.status === 'rate_limited') {
@@ -864,6 +916,7 @@ function triggerScan() {
             text.textContent = "Scan completed.";
             populateDevices(devices);
         }).catch(err => {
+            stopDiscoveryScanTimer();
             console.error(err);
             if (visual) visual.classList.remove('scanning');
             text.textContent = "Scan failed.";
@@ -876,6 +929,7 @@ function triggerScan() {
     } else {
         // Mock nodes found
         setTimeout(() => {
+            stopDiscoveryScanTimer();
             if (visual) visual.classList.remove('scanning');
             text.textContent = "Scan complete (Debug Mock Mode).";
             populateDevices([
@@ -892,8 +946,25 @@ function populateDevices(devices) {
 
     if (devices.length === 0) {
         const emptyDiv = document.createElement('div');
-        emptyDiv.className = 'list-empty';
-        emptyDiv.innerHTML = '<i class="fa-solid fa-circle-question"></i> No responsive KACE/SBC nodes found.';
+        emptyDiv.className = 'discovery-waiting discovery-empty';
+        emptyDiv.innerHTML = `
+            <div class="discovery-radar" aria-hidden="true">
+                <span class="discovery-radar-ring ring-one"></span>
+                <span class="discovery-radar-ring ring-two"></span>
+                <i class="fa-solid fa-magnifying-glass"></i>
+            </div>
+            <div class="discovery-waiting-copy">
+                <p class="discovery-eyebrow">NO DEVICE RESPONSE YET</p>
+                <h4>Your KACE device may still be starting</h4>
+                <p>Wait a few minutes, verify the network connection, then scan again or use a manual address below.</p>
+            </div>
+            <div class="discovery-tips" aria-label="Connection tips">
+                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> Wait a few minutes during the first boot.</p>
+                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> Verify the device is connected to the same network.</p>
+                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> You can also connect using the IP address manually.</p>
+                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> If you know the hostname, try <strong>kace.local</strong>.</p>
+            </div>
+        `;
         list.appendChild(emptyDiv);
         return;
     }
@@ -1392,8 +1463,7 @@ function renderKaceWorkflow(view) {
     const downloadButton = document.getElementById('kace-firmware-download');
     if (!tracker || !title || !status || !steps || !detail) return;
 
-    const isDone = view.state === 'DONE' ||
-        (view.kind === 'firmware_deployment' && view.state === 'FLASHED');
+    const isDone = view.state === 'DONE';
     const isActionRequired = view.kind === 'firmware_deployment' && view.state === 'ACTION_REQUIRED';
     const isError = KACE_TERMINAL_ERRORS.has(view.state);
     const positionState = isError ? (view.progressState || view.state) : view.state;
@@ -1605,7 +1675,7 @@ function parseBootstrapProgress(data) {
     }
 
     // Detect completion banner
-    if (!bootstrapFailureHandled && bootstrapBuffer.includes('Bootstrap complete! KACE Node is fully ready.')) {
+    if (!bootstrapFailureHandled && bootstrapBuffer.includes('Bootstrap complete! KACE wizard finished successfully.')) {
         // Mark all stages done
         BOOTSTRAP_STAGES.forEach(stage => {
             const el = document.getElementById('bstage-' + stage.id);
@@ -1615,7 +1685,7 @@ function parseBootstrapProgress(data) {
         if (label) label.textContent = '✔ Bootstrap complete!';
         const connSubtitle = document.getElementById('connection-subtitle');
         if (connSubtitle) {
-            connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap complete! KACE Node is fully ready.</span>';
+            connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap and KACE wizard completed successfully.</span>';
         }
         updateTrackerBar('BOOTSTRAPPED');
 
@@ -1749,7 +1819,7 @@ function startBootstrap() {
             '=== STAGE: SERVICES ===',
             ...(selectedUi === 'both' || Math.random() > 0.5 ? ['=== STAGE: CROWSNEST ==='] : []),
             '=== STAGE: KACE ===',
-            'Bootstrap complete! KACE Node is fully ready.',
+            'Bootstrap complete! KACE wizard finished successfully.',
         ];
 
         term.write(`$ ${bootstrapCmd}`);

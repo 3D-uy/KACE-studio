@@ -293,6 +293,235 @@ PY
 }
 # END KACE_CONFIG_DEFAULT_HELPER
 
+validate_power_relay_settings() {
+    if [ "$POWER_RELAY" = "false" ] || [ -z "$POWER_RELAY" ]; then
+        POWER_RELAY="false"
+        return 0
+    fi
+
+    if [ "$POWER_RELAY" != "true" ]; then
+        log_err "Invalid POWER_RELAY value '$POWER_RELAY'. Expected true or false."
+        return 1
+    fi
+    if [[ ! "$POWER_DEVICE" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+        log_err "GPIO relay device name is missing or invalid."
+        return 1
+    fi
+    if [[ ! "$POWER_GPIO" =~ ^[0-9]{1,3}$ ]]; then
+        log_err "GPIO relay pin is missing or invalid."
+        return 1
+    fi
+    if [[ ! "$POWER_ACTIVE_LOW" =~ ^(true|false)$ ]]; then
+        log_err "GPIO relay active-low setting is missing or invalid."
+        return 1
+    fi
+    if [[ ! "$POWER_RESTART_KLIPPER" =~ ^(true|false)$ ]]; then
+        log_err "GPIO relay restart_klipper_when_powered setting is missing or invalid."
+        return 1
+    fi
+    if [[ ! "$POWER_INITIAL_STATE" =~ ^(on|off)$ ]]; then
+        log_err "GPIO relay initial_state setting is missing or invalid."
+        return 1
+    fi
+    if [[ ! "$POWER_OFF_WHEN_SHUTDOWN" =~ ^(true|false)$ ]]; then
+        log_err "GPIO relay off_when_shutdown setting is missing or invalid."
+        return 1
+    fi
+}
+
+upsert_power_relay_section() {
+    local config_path="$1"
+    local section_name="power $POWER_DEVICE"
+    local power_pin="gpiochip0/gpio${POWER_GPIO}"
+    if [ "$POWER_ACTIVE_LOW" = "true" ]; then
+        power_pin="!${power_pin}"
+    fi
+
+    python3 - "$config_path" "$section_name" "$power_pin" \
+        "$POWER_RESTART_KLIPPER" "$POWER_INITIAL_STATE" "$POWER_OFF_WHEN_SHUTDOWN" <<'PY'
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import tempfile
+
+path = Path(sys.argv[1])
+section_name = sys.argv[2]
+expected = {
+    "type": "gpio",
+    "pin": sys.argv[3],
+    "restart_klipper_when_powered": sys.argv[4],
+    "initial_state": sys.argv[5],
+    "off_when_shutdown": sys.argv[6],
+}
+
+content = path.read_text(encoding="utf-8")
+newline = "\r\n" if "\r\n" in content else "\n"
+lines = content.splitlines()
+section_re = re.compile(r"^\s*\[\s*([^\]]+?)\s*\]\s*(?:[#;].*)?$", re.IGNORECASE)
+section_indexes = [
+    index
+    for index, line in enumerate(lines)
+    if (match := section_re.match(line))
+    and match.group(1).strip().casefold() == section_name.casefold()
+]
+if len(section_indexes) > 1:
+    raise RuntimeError(f"duplicate [{section_name}] sections")
+
+managed_re = re.compile(
+    r"^\s*(type|pin|restart_klipper_when_powered|initial_state|off_when_shutdown)\s*[:=]",
+    re.IGNORECASE,
+)
+managed_lines = [f"{key}: {value}" for key, value in expected.items()]
+
+if section_indexes:
+    section_start = section_indexes[0]
+    section_end = len(lines)
+    for index in range(section_start + 1, len(lines)):
+        if section_re.match(lines[index]):
+            section_end = index
+            break
+    preserved_body = [
+        line for line in lines[section_start + 1:section_end]
+        if not managed_re.match(line)
+    ]
+    while preserved_body and not preserved_body[-1].strip():
+        preserved_body.pop()
+    replacement = [f"[{section_name}]", *preserved_body]
+    if preserved_body and preserved_body[-1].strip():
+        replacement.append("")
+    replacement.extend(managed_lines)
+    lines[section_start:section_end] = replacement
+else:
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.extend([f"[{section_name}]", *managed_lines])
+
+new_content = newline.join(lines) + newline
+if new_content == content:
+    raise SystemExit(0)
+
+mode = stat.S_IMODE(path.stat().st_mode)
+fd, temporary_name = tempfile.mkstemp(
+    prefix=f".{path.name}.", suffix=".part", dir=str(path.parent)
+)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as temporary:
+        temporary.write(new_content)
+        temporary.flush()
+        os.fsync(temporary.fileno())
+    os.chmod(temporary_name, mode)
+    os.replace(temporary_name, path)
+except BaseException:
+    try:
+        os.unlink(temporary_name)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+}
+
+verify_power_relay_section() {
+    local config_path="$1"
+    local section_name="power $POWER_DEVICE"
+    local power_pin="gpiochip0/gpio${POWER_GPIO}"
+    if [ "$POWER_ACTIVE_LOW" = "true" ]; then
+        power_pin="!${power_pin}"
+    fi
+
+    python3 - "$config_path" "$section_name" "$power_pin" \
+        "$POWER_RESTART_KLIPPER" "$POWER_INITIAL_STATE" "$POWER_OFF_WHEN_SHUTDOWN" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+section_name = sys.argv[2]
+expected = {
+    "type": "gpio",
+    "pin": sys.argv[3],
+    "restart_klipper_when_powered": sys.argv[4],
+    "initial_state": sys.argv[5],
+    "off_when_shutdown": sys.argv[6],
+}
+
+content = path.read_text(encoding="utf-8")
+lines = content.splitlines()
+section_re = re.compile(r"^\s*\[\s*([^\]]+?)\s*\]\s*(?:[#;].*)?$", re.IGNORECASE)
+section_indexes = [
+    index
+    for index, line in enumerate(lines)
+    if (match := section_re.match(line))
+    and match.group(1).strip().casefold() == section_name.casefold()
+]
+if len(section_indexes) != 1:
+    raise RuntimeError(f"expected exactly one [{section_name}] section")
+
+section_start = section_indexes[0]
+section_end = len(lines)
+for index in range(section_start + 1, len(lines)):
+    if section_re.match(lines[index]):
+        section_end = index
+        break
+
+actual = {}
+option_re = re.compile(r"^\s*([A-Za-z0-9_]+)\s*[:=]\s*(.*?)\s*$")
+for line in lines[section_start + 1:section_end]:
+    match = option_re.match(line)
+    if not match:
+        continue
+    key = match.group(1).casefold()
+    if key in expected:
+        if key in actual:
+            raise RuntimeError(f"duplicate option '{key}' in [{section_name}]")
+        actual[key] = match.group(2)
+
+for key, expected_value in expected.items():
+    actual_value = actual.get(key)
+    if actual_value is None or actual_value.casefold() != expected_value.casefold():
+        raise RuntimeError(
+            f"[{section_name}] {key} mismatch: expected {expected_value!r}, got {actual_value!r}"
+        )
+PY
+}
+
+verify_requested_power_relay() {
+    local config_path="$1"
+    if [ "$POWER_RELAY" != "true" ]; then
+        return 0
+    fi
+    if ! verify_power_relay_section "$config_path"; then
+        echo "=== KACE_BOOTSTRAP_ERROR: GPIO_RELAY_VERIFY ==="
+        log_err "GPIO relay verification failed; preserving bootstrap configuration for diagnosis."
+        return 1
+    fi
+}
+
+cleanup_bootstrap_config() {
+    local boot_config="$1"
+    [ -n "$boot_config" ] && [ -f "$boot_config" ] || return 0
+    if [ -n "$SUDO" ]; then
+        if ! $SUDO rm -f "$boot_config"; then
+            log_warn "Could not remove $boot_config after successful verification."
+        fi
+    elif ! rm -f "$boot_config"; then
+        log_warn "Could not remove $boot_config after successful verification."
+    fi
+}
+
+finalize_bootstrap_success() {
+    local config_path="$1"
+    local boot_config="$2"
+    verify_requested_power_relay "$config_path" || return 1
+    cleanup_bootstrap_config "$boot_config"
+    echo -e "\n${C_GREEN}${C_BOLD}"
+    echo "========================================================"
+    echo " Bootstrap complete! KACE wizard finished successfully. "
+    echo "========================================================"
+    echo -e "${C_RESET}"
+}
+
 ensure_moonraker_config() {
     local config_path="$1"
     local socket_path="$2"
@@ -309,6 +538,8 @@ ensure_moonraker_config() {
 type: gpio
 pin: ${power_pin}
 restart_klipper_when_powered: ${POWER_RESTART_KLIPPER}
+initial_state: ${POWER_INITIAL_STATE}
+off_when_shutdown: ${POWER_OFF_WHEN_SHUTDOWN}
 "
     fi
 
@@ -348,13 +579,12 @@ EOF
         mv -f "$temporary_config" "$config_path"
     fi
 
-    ensure_config_entry "$config_path" "file_manager" "enable_object_processing" "True"
-
     if [ "$POWER_RELAY" = "true" ]; then
-        ensure_config_entry "$config_path" "power ${POWER_DEVICE}" "type" "gpio"
-        ensure_config_entry "$config_path" "power ${POWER_DEVICE}" "pin" "$power_pin"
-        ensure_config_entry "$config_path" "power ${POWER_DEVICE}" "restart_klipper_when_powered" "$POWER_RESTART_KLIPPER"
+        upsert_power_relay_section "$config_path"
+        verify_requested_power_relay "$config_path"
     fi
+
+    ensure_config_entry "$config_path" "file_manager" "enable_object_processing" "True"
 }
 
 if [ "${KACE_BOOTSTRAP_LIB_ONLY:-}" = "1" ]; then
@@ -495,6 +725,8 @@ POWER_DEVICE=""
 POWER_GPIO=""
 POWER_ACTIVE_LOW=""
 POWER_RESTART_KLIPPER=""
+POWER_INITIAL_STATE=""
+POWER_OFF_WHEN_SHUTDOWN=""
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -521,6 +753,7 @@ if [ -n "$BOOT_CFG" ]; then
     FILE_DASHBOARD="" FILE_CROWSNEST="" FILE_TIMEZONE="" FILE_PREBAKED=""
     FILE_POWER_RELAY="" FILE_POWER_DEVICE="" FILE_POWER_GPIO=""
     FILE_POWER_ACTIVE_LOW="" FILE_POWER_RESTART_KLIPPER=""
+    FILE_POWER_INITIAL_STATE="" FILE_POWER_OFF_WHEN_SHUTDOWN=""
     while IFS='=' read -r key value; do
         case "$key" in
             DASHBOARD) FILE_DASHBOARD="$value" ;;
@@ -532,6 +765,8 @@ if [ -n "$BOOT_CFG" ]; then
             POWER_GPIO) FILE_POWER_GPIO="$value" ;;
             POWER_ACTIVE_LOW) FILE_POWER_ACTIVE_LOW="$value" ;;
             POWER_RESTART_KLIPPER) FILE_POWER_RESTART_KLIPPER="$value" ;;
+            POWER_INITIAL_STATE) FILE_POWER_INITIAL_STATE="$value" ;;
+            POWER_OFF_WHEN_SHUTDOWN) FILE_POWER_OFF_WHEN_SHUTDOWN="$value" ;;
         esac
     done < "$BOOT_CFG"
 
@@ -544,6 +779,8 @@ if [ -n "$BOOT_CFG" ]; then
     POWER_GPIO="${POWER_GPIO:-$FILE_POWER_GPIO}"
     POWER_ACTIVE_LOW="${POWER_ACTIVE_LOW:-$FILE_POWER_ACTIVE_LOW}"
     POWER_RESTART_KLIPPER="${POWER_RESTART_KLIPPER:-$FILE_POWER_RESTART_KLIPPER}"
+    POWER_INITIAL_STATE="${POWER_INITIAL_STATE:-$FILE_POWER_INITIAL_STATE}"
+    POWER_OFF_WHEN_SHUTDOWN="${POWER_OFF_WHEN_SHUTDOWN:-$FILE_POWER_OFF_WHEN_SHUTDOWN}"
 fi
 
 # ── Input Sanitization & Allowlist Validation ────────────────────────────────
@@ -580,16 +817,10 @@ else
     PREBAKED="false"
 fi
 
-if [ "$POWER_RELAY" = "true" ]; then
-    if [[ ! "$POWER_DEVICE" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || \
-       [[ ! "$POWER_GPIO" =~ ^[0-9]{1,3}$ ]] || \
-       [[ ! "$POWER_ACTIVE_LOW" =~ ^(true|false)$ ]] || \
-       [[ ! "$POWER_RESTART_KLIPPER" =~ ^(true|false)$ ]]; then
-        log_warn "Invalid GPIO relay configuration. Relay setup will be skipped."
-        POWER_RELAY="false"
-    fi
-else
-    POWER_RELAY="false"
+if ! validate_power_relay_settings; then
+    echo "=== KACE_BOOTSTRAP_ERROR: GPIO_RELAY_CONFIG ==="
+    log_err "GPIO relay configuration is incomplete or invalid; bootstrap aborted."
+    exit 1
 fi
 
 echo -e "${C_BOLD}"
@@ -641,6 +872,7 @@ mkdir -p "$PRINTER_HOME/printer_data/comms"
 ensure_moonraker_config \
     "$PRINTER_HOME/printer_data/config/moonraker.conf" \
     "$PRINTER_HOME/printer_data/comms/klippy.sock"
+MOONRAKER_CONFIG="$PRINTER_HOME/printer_data/config/moonraker.conf"
 
 # ── 1. Timezone Configuration ────────────────────────────────────────────────
 if [ -n "$TIMEZONE" ]; then
@@ -1184,6 +1416,7 @@ patch_systemd_services
 log_stage "SERVICES" "Starting Klipper & Moonraker Services"
 # Single daemon-reload for all preceding drop-in and unit file changes
 # (Klipper override, Moonraker boot-order, systemd path patches).
+verify_requested_power_relay "$MOONRAKER_CONFIG"
 $SUDO systemctl daemon-reload
 $SUDO systemctl restart klipper
 $SUDO systemctl restart moonraker
@@ -1300,7 +1533,7 @@ if [ "$(id -un)" != "$PRINTER_USER" ]; then
         KACE_INSTALL_URL="$KACE_INSTALL_URL" \
         KACE_INSTALL_SHA256="$KACE_INSTALL_SHA256" \
         KACE_SOURCE_REF="$KACE_INSTALL_REF" \
-        KACE_NO_LAUNCH=1 sh -c '
+        sh -c '
         tmp_script="/tmp/kace-install.sh"
         rm -f "$tmp_script"
         if curl --fail --silent --show-error --location "$KACE_INSTALL_URL" -o "$tmp_script"; then
@@ -1330,7 +1563,7 @@ else
     if curl --fail --silent --show-error --location "$KACE_INSTALL_URL" -o "$tmp_script"; then
         actual_hash=$(sha256sum "$tmp_script" | cut -d" " -f1)
         if [ "$actual_hash" = "$KACE_INSTALL_SHA256" ]; then
-            if KACE_SOURCE_REF="$KACE_INSTALL_REF" KACE_NO_LAUNCH=1 bash "$tmp_script"; then
+            if KACE_SOURCE_REF="$KACE_INSTALL_REF" bash "$tmp_script"; then
                 log_ok "KACE agent installed."
                 INSTALL_OK=1
             fi
@@ -1367,19 +1600,6 @@ done
 log_ok "cloud-init disabled — will not re-provision on reboot."
 
 # ── Done ──────────────────────────────────────────────────────────────────────
-echo -e "\n${C_GREEN}${C_BOLD}"
-echo "========================================================"
-echo "      Bootstrap complete! KACE Node is fully ready.     "
-echo "========================================================"
-echo -e "${C_RESET}"
-
-# ── Clean up bootstrap config ────────────────────────────────────────────────
-if [ -n "$BOOT_CFG" ] && [ -f "$BOOT_CFG" ]; then
-    if [ -n "$SUDO" ]; then
-        echo "CLEARED" | $SUDO tee "$BOOT_CFG" >/dev/null 2>/dev/null || true
-        $SUDO rm -f "$BOOT_CFG" 2>/dev/null || true
-    else
-        echo "CLEARED" > "$BOOT_CFG" 2>/dev/null || true
-        rm -f "$BOOT_CFG" 2>/dev/null || true
-    fi
-fi
+# The success marker is emitted only after the KACE installer returns from the
+# interactive wizard and the requested relay configuration verifies exactly.
+finalize_bootstrap_success "$MOONRAKER_CONFIG" "$BOOT_CFG"

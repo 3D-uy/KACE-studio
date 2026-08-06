@@ -1,6 +1,8 @@
 import unittest
 import sys
 import os
+import tempfile
+from unittest.mock import patch
 
 # Include project root in PATH
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -44,9 +46,30 @@ if not os.path.exists(bootstrap_dest):
 
 from backend.sha512_crypt import hash_password
 from backend.discovery import get_local_subnet_ips, probe_ip_ports
-from backend.imager import DEFAULT_USERNAME, TIMEZONE_TO_COUNTRY, _get_country_from_timezone
+from backend.imager import (
+    DEFAULT_USERNAME,
+    TIMEZONE_TO_COUNTRY,
+    _get_country_from_timezone,
+    _write_text_atomically,
+)
 
 class TestKaceBackend(unittest.TestCase):
+
+    def test_atomic_boot_config_write_preserves_previous_content_on_failure(self):
+        with tempfile.TemporaryDirectory() as boot_dir:
+            config_path = os.path.join(boot_dir, "kace-bootstrap.txt")
+            with open(config_path, "w", encoding="utf-8") as existing:
+                existing.write("POWER_RELAY=true\n")
+
+            with patch("backend.imager.os.replace", side_effect=OSError("publish failed")):
+                with self.assertRaises(OSError):
+                    _write_text_atomically(config_path, "POWER_RELAY=false\n")
+
+            with open(config_path, "r", encoding="utf-8") as existing:
+                self.assertEqual(existing.read(), "POWER_RELAY=true\n")
+            self.assertFalse(
+                any(name.endswith(".part") for name in os.listdir(boot_dir))
+            )
     
     def test_sha512_crypt(self):
         """
@@ -374,8 +397,42 @@ class TestKaceBackend(unittest.TestCase):
             self.assertIn("POWER_GPIO=20", content)
             self.assertIn("POWER_ACTIVE_LOW=true", content)
             self.assertIn("POWER_RESTART_KLIPPER=true", content)
+            self.assertIn("POWER_INITIAL_STATE=on", content)
+            self.assertIn("POWER_OFF_WHEN_SHUTDOWN=false", content)
         finally:
             shutil.rmtree(temp_boot)
+
+    def test_bootstrap_config_rejects_requested_relay_without_gpio(self):
+        from backend.imager import inject_config
+
+        with self.assertRaisesRegex(ValueError, "GPIO must be an integer"):
+            inject_config(
+                1,
+                hostname="kace.local",
+                wifi_ssid="",
+                wifi_password="",
+                ssh_password="pwd",
+                dashboard_ui="mainsail",
+                power_relay=True,
+                power_device="printer",
+                power_gpio=None,
+            )
+
+    def test_bootstrap_config_rejects_invalid_requested_relay_device(self):
+        from backend.imager import inject_config
+
+        with self.assertRaisesRegex(ValueError, "Invalid power device name"):
+            inject_config(
+                1,
+                hostname="kace.local",
+                wifi_ssid="",
+                wifi_password="",
+                ssh_password="pwd",
+                dashboard_ui="mainsail",
+                power_relay=True,
+                power_device="printer power",
+                power_gpio=20,
+            )
 
     def test_wifi_credentials_injection_escaping(self):
         r"""

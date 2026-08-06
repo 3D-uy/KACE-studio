@@ -3,6 +3,7 @@ import sys
 import json
 import time
 import subprocess
+import tempfile
 import uuid
 import re
 from backend.sha512_crypt import hash_password
@@ -24,6 +25,52 @@ def _yaml_quote(value: str) -> str:
     here avoids hand-built quoting for user-controlled Wi-Fi credentials.
     """
     return json.dumps(value, ensure_ascii=False)
+
+
+def _write_text_atomically(path: str, content: str) -> None:
+    """Publish a complete boot-partition text file without a partial final path."""
+    directory = os.path.dirname(path) or "."
+    fd, temporary_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".part", dir=directory
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _copy_bootstrap_atomically(source_path: str, destination_path: str, version_line: str) -> None:
+    """Copy the bootstrap to the boot partition without exposing a partial script."""
+    directory = os.path.dirname(destination_path) or "."
+    fd, temporary_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(destination_path)}.", suffix=".part", dir=directory
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output, \
+             open(source_path, "r", encoding="utf-8", errors="ignore") as source:
+            output.write(version_line)
+            while True:
+                chunk = source.read(65536)
+                if not chunk:
+                    break
+                output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, destination_path)
+    except BaseException:
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 # Subprocess flags to run silent processes on Windows (CREATE_NO_WINDOW)
 SUBPROCESS_FLAGS = {}
@@ -59,6 +106,7 @@ def _disk_query_command(disk_number=None) -> str:
             BusType = [string]$disk.BusType
             IsSystem = $disk.IsSystem
             IsBoot = $disk.IsBoot
+            IsOffline = $disk.IsOffline
             SerialNumber = $disk.SerialNumber
             UniqueId = $disk.UniqueId
             Path = $disk.Path
@@ -185,6 +233,8 @@ def list_drives() -> list:
                     data = [data]
                 
                 for disk in data:
+                    if bool(disk.get("IsOffline", False)):
+                        continue
                     try:
                         identity = _normalize_disk_identity(disk)
                     except (TypeError, ValueError) as identity_error:
@@ -741,33 +791,53 @@ addr-gen-mode=default-or-eui64
         # G. Bootstrap Config injection
         bootstrap_cfg = os.path.join(boot_path, "kace-bootstrap.txt")
         try:
-            with open(bootstrap_cfg, "w", newline="\n") as f:
-                f.write(f"DASHBOARD={dashboard_ui}\n")
-                f.write(f"CROWSNEST={'true' if crowsnest else 'false'}\n")
-                f.write(f"PREBAKED={'true' if is_prebaked else 'false'}\n")
-                if clean_timezone:
-                    f.write(f"TIMEZONE={clean_timezone}\n")
-                if clean_pi_model:
-                    f.write(f"PI_MODEL={clean_pi_model}\n")
-                if clean_os_arch:
-                    f.write(f"OS_ARCH={clean_os_arch}\n")
-                if power_relay:
-                    f.write("POWER_RELAY=true\n")
-                    f.write(f"POWER_DEVICE={power_device}\n")
-                    f.write(f"POWER_GPIO={power_gpio}\n")
-                    f.write(f"POWER_ACTIVE_LOW={'true' if power_active_low else 'false'}\n")
-                    f.write(
-                        "POWER_RESTART_KLIPPER="
-                        f"{'true' if restart_klipper_when_powered else 'false'}\n"
-                    )
+            bootstrap_lines = [
+                f"DASHBOARD={dashboard_ui}\n",
+                f"CROWSNEST={'true' if crowsnest else 'false'}\n",
+                f"PREBAKED={'true' if is_prebaked else 'false'}\n",
+            ]
+            if clean_timezone:
+                bootstrap_lines.append(f"TIMEZONE={clean_timezone}\n")
+            if clean_pi_model:
+                bootstrap_lines.append(f"PI_MODEL={clean_pi_model}\n")
+            if clean_os_arch:
+                bootstrap_lines.append(f"OS_ARCH={clean_os_arch}\n")
+            if power_relay:
+                bootstrap_lines.extend((
+                    "POWER_RELAY=true\n",
+                    f"POWER_DEVICE={power_device}\n",
+                    f"POWER_GPIO={power_gpio}\n",
+                    f"POWER_ACTIVE_LOW={'true' if power_active_low else 'false'}\n",
+                    "POWER_RESTART_KLIPPER="
+                    f"{'true' if restart_klipper_when_powered else 'false'}\n",
+                    "POWER_INITIAL_STATE=on\n",
+                    "POWER_OFF_WHEN_SHUTDOWN=false\n",
+                ))
+            _write_text_atomically(bootstrap_cfg, "".join(bootstrap_lines))
             if not os.path.exists(bootstrap_cfg):
                 raise IOError(f"kace-bootstrap.txt not found at: {bootstrap_cfg}")
             with open(bootstrap_cfg, "r", encoding="utf-8") as f_check:
                 c = f_check.read()
             if f"DASHBOARD={dashboard_ui}" not in c:
                 raise ValueError("kace-bootstrap.txt verification failed.")
-            if power_relay and f"POWER_GPIO={power_gpio}" not in c:
-                raise ValueError("GPIO relay configuration verification failed.")
+            if power_relay:
+                expected_relay_lines = {
+                    "POWER_RELAY=true",
+                    f"POWER_DEVICE={power_device}",
+                    f"POWER_GPIO={power_gpio}",
+                    f"POWER_ACTIVE_LOW={'true' if power_active_low else 'false'}",
+                    "POWER_RESTART_KLIPPER="
+                    f"{'true' if restart_klipper_when_powered else 'false'}",
+                    "POWER_INITIAL_STATE=on",
+                    "POWER_OFF_WHEN_SHUTDOWN=false",
+                }
+                actual_lines = set(c.splitlines())
+                missing_lines = sorted(expected_relay_lines - actual_lines)
+                if missing_lines:
+                    raise ValueError(
+                        "GPIO relay configuration verification failed; missing: "
+                        + ", ".join(missing_lines)
+                    )
             _dbg(f"Successfully verified kace-bootstrap.txt write at {bootstrap_cfg}")
         except Exception as e:
             print(f"[ERROR] Failed writing or verifying kace-bootstrap.txt: {e}", file=sys.stderr)
@@ -1335,14 +1405,9 @@ fi
                 version_line = f"# KACE Bootstrap Version: {git_hash}\n"
                 dest_bootstrap_path = os.path.join(boot_path, "bootstrap.sh")
 
-                with open(local_bootstrap_src, 'r', encoding='utf-8', errors='ignore') as f_in, \
-                     open(dest_bootstrap_path, 'w', encoding='utf-8', newline='\n') as f_out:
-                    f_out.write(version_line)
-                    while True:
-                        chunk = f_in.read(65536)
-                        if not chunk:
-                            break
-                        f_out.write(chunk)
+                _copy_bootstrap_atomically(
+                    local_bootstrap_src, dest_bootstrap_path, version_line
+                )
                 
                 if not os.path.exists(dest_bootstrap_path):
                     raise IOError(f"bootstrap.sh not found at: {dest_bootstrap_path}")

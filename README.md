@@ -32,8 +32,8 @@ The two projects are independent repositories with a deliberately narrow integra
 2. Studio injects network, credentials, first-boot settings, and `bootstrap.sh` onto the boot partition.
 3. After the Pi boots, Studio discovers it and connects over SSH.
 4. The Studio UI launches the bootstrap and follows its machine-readable stage and error markers.
-5. The bootstrap installs Klipper, Moonraker, the selected web interface, optional Crowsnest support, and KACE.
-6. KACE generates and deploys the printer-specific configuration and firmware artifacts.
+5. The bootstrap installs Klipper, Moonraker, the selected web interface, optional Crowsnest support, and KACE, then launches the KACE wizard in the same SSH terminal.
+6. Studio reports success only after the wizard exits successfully and the bootstrap verifies the final requested relay configuration.
 
 Studio CI fetches `scripts/bootstrap.sh` from an immutable KACE commit, verifies its SHA-256, and supplies that exact file to the PyInstaller build. Source mode prefers the sibling `KACE/scripts/bootstrap.sh` checkout when both repositories share this workspace; packaged mode uses the bundled copy.
 
@@ -115,8 +115,8 @@ Before building, place the bootstrap file verified against the pinned KACE commi
 6. Studio injects first-boot configuration and the verified bootstrap onto the new boot partition.
 7. Boot the Raspberry Pi, wait for it to join the network, and discover or enter its address in Studio.
 8. Connect through the embedded SSH workspace and start provisioning.
-9. Studio reports completion only after the bootstrap's KACE stage succeeds; a missing KACE installation is a provisioning failure.
-10. Launch KACE on the Pi, generate and deploy `printer.cfg` and any required MCU firmware, then follow Klipper's official commissioning checks before operating the printer.
+9. The bootstrap launches the interactive KACE wizard in Studio's SSH terminal after installing KACE.
+10. Studio enables Finish only after the wizard exits successfully, the final relay configuration is verified, and the bootstrap reports completion. Then follow Klipper's official commissioning checks before operating the printer.
 
 ## Architecture
 

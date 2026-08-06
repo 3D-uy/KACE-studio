@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 env:
-  KACE_BOOTSTRAP_REF: 44c3de2fa21761b5dd0ae7f0cb15a4cae41bfccb
-  KACE_BOOTSTRAP_SHA256: bd0b15e09698ece758d8eb91089767c09cdb743cdec02757f8657818ea052bcc
+  KACE_BOOTSTRAP_REF: 10e994d830aeb54fe7516f78aafbb7948477435f
+  KACE_BOOTSTRAP_SHA256: 908e29c21cead7e0efcef28d92ced786c6825154d4ddb4ba57614d70e24f7a0c
 
 jobs:
   test:
@@ -46,6 +46,9 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
+
+    - name: Reject developer-local paths
+      run: python scripts/check_portability.py
 
     - name: Fetch and verify pinned KACE bootstrap
       run: |
