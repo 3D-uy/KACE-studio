@@ -207,26 +207,6 @@ class SSHSession:
             except Exception as e:
                 print(f"Error sending SSH input: {e}")
 
-    def run_command(self, command: str, timeout: float = 40.0) -> dict:
-        """Run a bounded non-interactive command on the existing SSH transport."""
-        if not self.client:
-            return {"exit_status": -1, "stdout": "", "stderr": "Not connected"}
-        transport = self.client.get_transport()
-        if transport is None or not transport.is_active():
-            return {"exit_status": -1, "stdout": "", "stderr": "Not connected"}
-        channel = transport.open_session(timeout=timeout)
-        try:
-            channel.settimeout(timeout)
-            channel.exec_command(command)
-            stdout = channel.makefile("rb", -1).read().decode("utf-8", errors="replace")
-            stderr = channel.makefile_stderr("rb", -1).read().decode("utf-8", errors="replace")
-            exit_status = channel.recv_exit_status()
-            return {"exit_status": exit_status, "stdout": stdout, "stderr": stderr}
-        except Exception as exc:
-            return {"exit_status": -1, "stdout": "", "stderr": str(exc)}
-        finally:
-            channel.close()
-
     def resize_pty(self, cols: int, rows: int):
         """
         Resizes the remote pseudo-terminal (PTY) window size.

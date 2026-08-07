@@ -1221,6 +1221,7 @@ function performSshLogin(username, password) {
 function connectToDevice(ip, name) {
     currentDeviceIp = ip;
     currentDeviceName = name;
+    startPowerPolling();
 
     const terminalNav = document.getElementById('terminal-nav-btn');
     terminalNav.click(); // Switch to terminal workspace tab
@@ -1725,12 +1726,6 @@ window.writeTerminalData = function (data) {
 
 function updateConnectionStatus(connected) {
     sshConnected = connected;
-    if (connected) {
-        startPowerPolling();
-    } else {
-        stopPowerPolling();
-        renderPrinterPower({ available: false, status: 'init', detail: 'Connect by SSH to read printer power' });
-    }
     const bootstrapBtn = document.getElementById('bootstrap-btn');
     const disconnectBtn = document.getElementById('disconnect-btn');
     const connTitle = document.getElementById('connection-title');
@@ -1773,16 +1768,27 @@ function renderPrinterPower(result) {
     button.classList.remove('state-on', 'state-off', 'state-init', 'state-error');
     button.classList.add(`state-${status}`);
     stateLabel.textContent = status;
-    button.disabled = !sshConnected || printerPowerRequestActive ||
+    button.disabled = !currentDeviceIp || printerPowerRequestActive ||
         !printerPowerAvailable || !['on', 'off'].includes(status);
     button.title = (result && result.detail) ||
         (result && result.device ? `${result.device}: ${status}` : `Power: ${status}`);
 }
 
 async function refreshPrinterPower() {
-    if (!sshConnected || printerPowerRequestActive || !window.pywebview || !window.pywebview.api) return;
+    if (printerPowerRequestActive || !window.pywebview || !window.pywebview.api) return;
+    const powerDevice = document.getElementById('power-device-name').value.trim();
+    if (!currentDeviceIp || !powerDevice) {
+        renderPrinterPower({
+            available: false,
+            status: 'init',
+            detail: !currentDeviceIp ? 'Select a Moonraker device first' : 'POWER_DEVICE is required',
+        });
+        return;
+    }
     try {
-        renderPrinterPower(await window.pywebview.api.get_power_status());
+        renderPrinterPower(
+            await window.pywebview.api.get_power_status(currentDeviceIp, powerDevice)
+        );
     } catch (error) {
         renderPrinterPower({ available: false, status: 'error', detail: String(error) });
     }
@@ -1790,6 +1796,10 @@ async function refreshPrinterPower() {
 
 function startPowerPolling() {
     stopPowerPolling();
+    if (!currentDeviceIp) {
+        renderPrinterPower({ available: false, status: 'init', detail: 'Select a Moonraker device first' });
+        return;
+    }
     renderPrinterPower({ available: true, status: 'init', detail: 'Reading Moonraker power state…' });
     refreshPrinterPower();
     printerPowerPollTimer = window.setInterval(refreshPrinterPower, 3000);
@@ -1803,13 +1813,14 @@ function stopPowerPolling() {
 }
 
 async function togglePrinterPower() {
-    if (!sshConnected || printerPowerRequestActive || !printerPowerAvailable ||
+    const powerDevice = document.getElementById('power-device-name').value.trim();
+    if (!currentDeviceIp || !powerDevice || printerPowerRequestActive || !printerPowerAvailable ||
         !['on', 'off'].includes(printerPowerStatus)) return;
     printerPowerRequestActive = true;
     const action = printerPowerStatus === 'on' ? 'power_off' : 'power_on';
     renderPrinterPower({ available: true, status: 'init', detail: 'Waiting for Moonraker confirmation…' });
     try {
-        renderPrinterPower(await window.pywebview.api[action]());
+        renderPrinterPower(await window.pywebview.api[action](currentDeviceIp, powerDevice));
     } catch (error) {
         renderPrinterPower({ available: true, status: 'error', detail: String(error) });
     } finally {

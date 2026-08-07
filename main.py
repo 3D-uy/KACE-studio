@@ -12,7 +12,7 @@ from backend.imager import list_drives, flash_drive, inject_config, _normalize_d
 from backend.ejector import request_safe_eject
 from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
-from backend.power_controller import KacePowerClient
+from backend.power_controller import MoonrakerPowerController, PowerControllerError
 from backend.workflow_events import KaceWorkflowEventParser
 import mimetypes
 
@@ -130,7 +130,9 @@ class KaceWsgiApp:
 class Api:
     def __init__(self):
         self._ssh = SSHSession()
-        self._power = KacePowerClient(self._ssh)
+        self._power_controller = None
+        self._power_target = None
+        self._power_lock = threading.Lock()
         self._ssh_lock = threading.Lock()
         self._ssh_gen = 0
         self._window = None
@@ -1053,18 +1055,52 @@ class Api:
             return None
         return manifest
 
-    def get_power_status(self) -> dict:
-        """Return the real state reported by KACE's Moonraker power client."""
-        return self._power.get_status()
+    def _run_power_action(self, host: str, device: str, action: str) -> dict:
+        """Run one Moonraker-only power action without depending on SSH/KACE."""
+        try:
+            with self._power_lock:
+                target = (host.strip() if isinstance(host, str) else host, device)
+                if self._power_controller is None or self._power_target != target:
+                    self._power_controller = MoonrakerPowerController(host, device)
+                    self._power_target = target
+                controller = self._power_controller
+                if action == "status":
+                    status = controller.get_status()
+                elif action == "on":
+                    status = controller.power_on()
+                elif action == "off":
+                    status = controller.power_off()
+                elif action == "wait":
+                    status = controller.wait_until_ready()
+                else:
+                    raise ValueError("invalid power action")
+            return {
+                "ok": status != "error",
+                "available": True,
+                "device": controller.device,
+                "status": status,
+                "detail": "" if status != "error" else "Moonraker reported an error state",
+            }
+        except (PowerControllerError, TypeError, ValueError) as exc:
+            return {
+                "ok": False,
+                "available": False,
+                "device": device if isinstance(device, str) else None,
+                "status": "error",
+                "detail": str(exc),
+            }
 
-    def power_on(self) -> dict:
-        return self._power.power_on()
+    def get_power_status(self, host: str, device: str) -> dict:
+        return self._run_power_action(host, device, "status")
 
-    def power_off(self) -> dict:
-        return self._power.power_off()
+    def power_on(self, host: str, device: str) -> dict:
+        return self._run_power_action(host, device, "on")
 
-    def wait_power_ready(self) -> dict:
-        return self._power.wait_until_ready()
+    def power_off(self, host: str, device: str) -> dict:
+        return self._run_power_action(host, device, "off")
+
+    def wait_power_ready(self, host: str, device: str) -> dict:
+        return self._run_power_action(host, device, "wait")
 
     def get_preferences(self) -> dict:
         """

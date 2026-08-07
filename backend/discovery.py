@@ -1,9 +1,9 @@
 import socket
 import concurrent.futures
 import threading
-import urllib.request
-import json
 from typing import List, Dict
+
+from backend.moonraker_client import MoonrakerHttpClient, MoonrakerHttpError
 
 
 def _reverse_dns(ip: str, timeout: float = 0.5, default: str = "unknown") -> str:
@@ -123,14 +123,10 @@ def check_klipper(ip: str) -> bool:
     Checks if Klipper is running/configured on the device by querying Moonraker's /printer/info endpoint.
     """
     try:
-        url = f"http://{ip}:7125/printer/info"
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=0.5) as response:
-            if response.status == 200:
-                data = json.loads(response.read().decode('utf-8'))
-                if "result" in data and "state" in data["result"]:
-                    return True
-    except Exception:
+        data = MoonrakerHttpClient(ip, timeout=0.5).get("/printer/info")
+        if "result" in data and "state" in data["result"]:
+            return True
+    except (MoonrakerHttpError, ValueError):
         pass
     return False
 

@@ -1,56 +1,101 @@
-"""Thin Studio bridge to KACE's MoonrakerPowerController.
+"""Moonraker-only printer power control for KACE Studio.
 
-Studio never talks to GPIO and does not duplicate the firmware workflow. Each
-operation is delegated over the already-authenticated SSH connection to KACE's
-single Power API implementation on the Pi.
+This controller is deliberately independent of SSH and the KACE installation:
+it must remain usable before bootstrap completes or after bootstrap fails.
 """
 
-import json
-import threading
+import re
+import time
+
+from backend.moonraker_client import MoonrakerHttpClient, MoonrakerHttpError
 
 
-class KacePowerClient:
-    _COMMANDS = frozenset(("status", "on", "off", "wait"))
-    _KACE_COMMAND = "~/kace/venv/bin/python ~/kace/kace.py --power {}"
+VALID_STATES = frozenset(("on", "off", "init", "error"))
+_DEVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
-    def __init__(self, ssh_session):
-        self._ssh = ssh_session
-        self._lock = threading.Lock()
 
-    def _run(self, action: str) -> dict:
-        if action not in self._COMMANDS:
-            raise ValueError("invalid power action")
-        with self._lock:
-            result = self._ssh.run_command(self._KACE_COMMAND.format(action))
-        stdout = result.get("stdout", "")
-        payload = None
-        for line in reversed(stdout.splitlines()):
-            try:
-                candidate = json.loads(line)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
-            if isinstance(candidate, dict):
-                payload = candidate
-                break
-        if payload is None:
-            detail = result.get("stderr", "").strip() or "KACE power command returned no JSON"
-            return {
-                "ok": False,
-                "available": False,
-                "device": None,
-                "status": "error",
-                "detail": detail,
-            }
-        return payload
+class PowerControllerError(RuntimeError):
+    """Raised when Moonraker cannot provide a verified power result."""
 
-    def get_status(self) -> dict:
-        return self._run("status")
 
-    def power_on(self) -> dict:
-        return self._run("on")
+class MoonrakerPowerController:
+    """Single Studio API for one configured Moonraker power device."""
 
-    def power_off(self) -> dict:
-        return self._run("off")
+    def __init__(
+        self,
+        host: str,
+        device: str,
+        *,
+        http_client=None,
+        poll_interval: float = 0.5,
+    ):
+        if not isinstance(device, str) or not _DEVICE_RE.fullmatch(device):
+            raise ValueError("POWER_DEVICE is missing or invalid")
+        self.device = device
+        self._http = http_client or MoonrakerHttpClient(host)
+        self.poll_interval = float(poll_interval)
 
-    def wait_until_ready(self) -> dict:
-        return self._run("wait")
+    def get_status(self) -> str:
+        """Return the real Moonraker state: on, off, init, or error."""
+        try:
+            body = self._http.get("/machine/device_power/devices")
+        except MoonrakerHttpError as exc:
+            raise PowerControllerError(str(exc)) from exc
+        result = body.get("result")
+        devices = result.get("devices", []) if isinstance(result, dict) else None
+        if not isinstance(devices, list):
+            raise PowerControllerError("Moonraker returned an invalid power device list")
+        for item in devices:
+            if isinstance(item, dict) and item.get("device") == self.device:
+                status = str(item.get("status", "error")).lower()
+                return status if status in VALID_STATES else "error"
+        raise PowerControllerError(
+            f"POWER_DEVICE '{self.device}' is not configured in Moonraker"
+        )
+
+    def wait_until_ready(self, timeout: float = 30.0) -> str:
+        """Wait until the configured device leaves init; fail on error."""
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self.get_status()
+            if status == "error":
+                raise PowerControllerError(
+                    f"Moonraker power device '{self.device}' entered error state"
+                )
+            if status != "init":
+                return status
+            if time.monotonic() >= deadline:
+                raise PowerControllerError(
+                    f"timed out waiting for power device '{self.device}' to leave init"
+                )
+            time.sleep(self.poll_interval)
+
+    def _set_and_confirm(self, action: str, timeout: float) -> str:
+        self.wait_until_ready(timeout=timeout)
+        try:
+            self._http.post(
+                "/machine/device_power/device",
+                {"device": self.device, "action": action},
+            )
+        except MoonrakerHttpError as exc:
+            raise PowerControllerError(str(exc)) from exc
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self.get_status()
+            if status == action:
+                return status
+            if status == "error":
+                raise PowerControllerError(
+                    f"Moonraker power device '{self.device}' entered error state"
+                )
+            if time.monotonic() >= deadline:
+                raise PowerControllerError(
+                    f"power device '{self.device}' did not reach {action}"
+                )
+            time.sleep(self.poll_interval)
+
+    def power_on(self, timeout: float = 30.0) -> str:
+        return self._set_and_confirm("on", timeout)
+
+    def power_off(self, timeout: float = 30.0) -> str:
+        return self._set_and_confirm("off", timeout)
