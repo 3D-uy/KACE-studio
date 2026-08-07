@@ -59,7 +59,7 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="5827bfedc3aa8bc25df140ec6b3174b0c91cafbe"
+KACE_INSTALL_REF="725a58b3f7f4f435a242328d24d801b409fffd10"
 KACE_INSTALL_SHA256="87da2d46d990482e3f72d2cee9a6a9f3aa2cc97afe49ef3b1638be0f3ecec77a"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
@@ -329,6 +329,35 @@ validate_power_relay_settings() {
     fi
 }
 
+persist_power_controller_config() {
+    local config_path="$PRINTER_HOME/.config/kace/power.json"
+    python3 - "$config_path" "$POWER_RELAY" "$POWER_DEVICE" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+path = Path(sys.argv[1])
+enabled = sys.argv[2] == "true"
+device = sys.argv[3] if enabled else None
+path.parent.mkdir(parents=True, exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix=".power.", suffix=".tmp", dir=str(path.parent))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as target:
+        json.dump({"schema": 1, "enabled": enabled, "device": device}, target)
+        target.write("\n")
+        target.flush()
+        os.fsync(target.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+    $SUDO chown -R "$PRINTER_USER:$PRINTER_GROUP" "$PRINTER_HOME/.config/kace"
+}
+
 upsert_power_relay_section() {
     local config_path="$1"
     local section_name="power $POWER_DEVICE"
@@ -585,6 +614,242 @@ EOF
     fi
 
     ensure_config_entry "$config_path" "file_manager" "enable_object_processing" "True"
+}
+
+_positive_timeout_or_default() {
+    local value="$1"
+    local default_value="$2"
+    if [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+        printf '%s\n' "$value"
+    else
+        printf '%s\n' "$default_value"
+    fi
+}
+
+wait_for_moonraker_api() {
+    local base_url="$1"
+    local timeout_seconds="$2"
+    local deadline=$((SECONDS + timeout_seconds))
+
+    while (( SECONDS <= deadline )); do
+        if curl --fail --silent --max-time 5 "$base_url/server/info" > /dev/null; then
+            log_ok "Moonraker API is ready."
+            return 0
+        fi
+        sleep 1
+    done
+
+    log_err "Moonraker API did not become ready within ${timeout_seconds}s."
+    return 1
+}
+
+read_power_device_state() {
+    local base_url="$1"
+    local device_name="$2"
+    local response=""
+
+    if ! response=$(curl --fail --silent --max-time 5 \
+        "$base_url/machine/device_power/devices"); then
+        return 2
+    fi
+
+    MOONRAKER_POWER_RESPONSE="$response" python3 - "$device_name" <<'PY'
+import json
+import os
+import sys
+
+device_name = sys.argv[1]
+try:
+    payload = json.loads(os.environ["MOONRAKER_POWER_RESPONSE"])
+    result = payload.get("result", payload)
+    devices = result["devices"]
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(4)
+
+if not isinstance(devices, list):
+    raise SystemExit(4)
+
+for device in devices:
+    if isinstance(device, dict) and device.get("device") == device_name:
+        state = str(device.get("status", "")).strip().lower()
+        if not state:
+            raise SystemExit(4)
+        print(state)
+        raise SystemExit(0)
+
+raise SystemExit(3)
+PY
+}
+
+wait_for_power_device_ready() {
+    local base_url="$1"
+    local device_name="$2"
+    local timeout_seconds="$3"
+    local deadline=$((SECONDS + timeout_seconds))
+    local state=""
+    local status=0
+
+    while (( SECONDS <= deadline )); do
+        if state=$(read_power_device_state "$base_url" "$device_name"); then
+            case "$state" in
+                on|off)
+                    log_ok "Moonraker power device '$device_name' is ready (state: $state)."
+                    return 0
+                    ;;
+                init)
+                    sleep 1
+                    continue
+                    ;;
+                error)
+                    log_err "Moonraker power device '$device_name' entered the error state."
+                    return 1
+                    ;;
+                *)
+                    log_err "Moonraker power device '$device_name' reported an unknown state: $state"
+                    return 1
+                    ;;
+            esac
+        else
+            status=$?
+            case "$status" in
+                2)
+                    sleep 1
+                    continue
+                    ;;
+                3)
+                    log_err "Moonraker power device '$device_name' was not found in /machine/device_power/devices."
+                    return 1
+                    ;;
+                *)
+                    log_err "Moonraker returned an invalid power-device response."
+                    return 1
+                    ;;
+            esac
+        fi
+    done
+
+    log_err "Moonraker power device '$device_name' remained in init for more than ${timeout_seconds}s."
+    return 1
+}
+
+request_power_device_on() {
+    local base_url="$1"
+    local device_name="$2"
+    local payload="{\"device\":\"${device_name}\",\"action\":\"on\"}"
+
+    if ! curl --fail --silent --show-error --max-time 10 \
+        -X POST \
+        -H "Content-Type: application/json" \
+        --data "$payload" \
+        "$base_url/machine/device_power/device" > /dev/null; then
+        log_err "Moonraker failed to power on device '$device_name'."
+        return 1
+    fi
+
+    log_ok "Moonraker accepted the explicit ON command for '$device_name'."
+}
+
+wait_for_power_device_on() {
+    local base_url="$1"
+    local device_name="$2"
+    local timeout_seconds="$3"
+    local deadline=$((SECONDS + timeout_seconds))
+    local state=""
+    local status=0
+
+    while (( SECONDS <= deadline )); do
+        if state=$(read_power_device_state "$base_url" "$device_name"); then
+            case "$state" in
+                on)
+                    log_ok "Moonraker power device '$device_name' is confirmed ON."
+                    return 0
+                    ;;
+                off|init)
+                    sleep 1
+                    continue
+                    ;;
+                error)
+                    log_err "Moonraker power device '$device_name' entered the error state after the ON command."
+                    return 1
+                    ;;
+                *)
+                    log_err "Moonraker power device '$device_name' reported an unknown state: $state"
+                    return 1
+                    ;;
+            esac
+        else
+            status=$?
+            if [ "$status" -eq 2 ]; then
+                sleep 1
+                continue
+            fi
+            if [ "$status" -eq 3 ]; then
+                log_err "Moonraker power device '$device_name' disappeared after the ON command."
+            else
+                log_err "Moonraker returned an invalid power-device response after the ON command."
+            fi
+            return 1
+        fi
+    done
+
+    log_err "Moonraker power device '$device_name' did not reach ON within ${timeout_seconds}s."
+    return 1
+}
+
+find_connected_mcu_path() {
+    local device_root="${KACE_MCU_DEVICE_ROOT:-/dev}"
+    local candidate=""
+
+    for candidate in \
+        "$device_root"/serial/by-id/* \
+        "$device_root"/serial/by-path/* \
+        "$device_root"/ttyUSB* \
+        "$device_root"/ttyACM*; do
+        if [ -e "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+wait_for_powered_mcu() {
+    local timeout_seconds="$1"
+    local deadline=$((SECONDS + timeout_seconds))
+    local mcu_path=""
+
+    while (( SECONDS <= deadline )); do
+        if mcu_path=$(find_connected_mcu_path); then
+            log_ok "MCU detected after printer power-on: $mcu_path"
+            return 0
+        fi
+        sleep 1
+    done
+
+    log_err "No MCU appeared in /dev/serial/by-id, /dev/serial/by-path, /dev/ttyUSB*, or /dev/ttyACM* within ${timeout_seconds}s after power-on."
+    return 1
+}
+
+prepare_power_relay_for_kace() {
+    if [ "$POWER_RELAY" != "true" ]; then
+        return 0
+    fi
+
+    local base_url="http://127.0.0.1:7125"
+    local api_timeout
+    local device_timeout
+    local power_on_timeout
+    local mcu_timeout
+    api_timeout=$(_positive_timeout_or_default "${KACE_POWER_API_TIMEOUT:-}" 90)
+    device_timeout=$(_positive_timeout_or_default "${KACE_POWER_DEVICE_TIMEOUT:-}" 30)
+    power_on_timeout=$(_positive_timeout_or_default "${KACE_POWER_ON_TIMEOUT:-}" 30)
+    mcu_timeout=$(_positive_timeout_or_default "${KACE_POWER_MCU_TIMEOUT:-}" 120)
+
+    wait_for_moonraker_api "$base_url" "$api_timeout" || return 1
+    wait_for_power_device_ready "$base_url" "$POWER_DEVICE" "$device_timeout" || return 1
+    request_power_device_on "$base_url" "$POWER_DEVICE" || return 1
+    wait_for_power_device_on "$base_url" "$POWER_DEVICE" "$power_on_timeout" || return 1
+    wait_for_powered_mcu "$mcu_timeout" || return 1
 }
 
 if [ "${KACE_BOOTSTRAP_LIB_ONLY:-}" = "1" ]; then
@@ -865,6 +1130,8 @@ echo "Resolved printer home directory: $PRINTER_HOME"
 # Get the owner and group of the printer user home directory
 PRINTER_USER=$(stat -c '%U' "$PRINTER_HOME" 2>/dev/null || echo "$USER")
 PRINTER_GROUP=$(stat -c '%G' "$PRINTER_HOME" 2>/dev/null || echo "$USER")
+
+persist_power_controller_config
 
 mkdir -p "$PRINTER_HOME/printer_data/config"
 mkdir -p "$PRINTER_HOME/printer_data/gcodes"
@@ -1432,6 +1699,14 @@ if [ "$PREBAKED" = "false" ] || [ "$DASHBOARD" = "both" ]; then
     $SUDO systemctl restart nginx || true
 fi
 log_ok "Services restarted."
+
+if [ "$POWER_RELAY" = "true" ]; then
+    if ! prepare_power_relay_for_kace; then
+        echo "=== KACE_BOOTSTRAP_ERROR: POWER_ON ==="
+        log_err "Printer power-on verification failed; KACE will not start until the relay and MCU are ready."
+        exit 1
+    fi
+fi
 
 # ── 10. Crowsnest (Optional) ──────────────────────────────────────────────────
 if [ "$CROWSNEST" = "true" ]; then

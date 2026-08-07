@@ -565,7 +565,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
     finally:
         ctypes.windll.kernel32.CloseHandle(hProcess)
 
-def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, is_prebaked: bool = False, power_relay: bool = False, power_device: str = "printer", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True) -> bool:
+def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, is_prebaked: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True) -> bool:
     """
     Injects SSH enablement, User credentials, WiFi configuration (wpa_supplicant + NetworkManager),
     and hostname parameters directly to the FAT32 boot partition.

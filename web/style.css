@@ -144,6 +144,47 @@ body {
     border-top: 1px solid var(--border-color);
 }
 
+.power-control-container {
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.power-control {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 18px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+.power-control:disabled {
+    cursor: not-allowed;
+    opacity: 0.65;
+}
+
+.power-control-state {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+}
+
+.power-control.state-on { border-color: var(--success-color); }
+.power-control.state-on i, .power-control.state-on .power-control-state { color: var(--success-color); }
+.power-control.state-off { border-color: var(--text-secondary); }
+.power-control.state-off i, .power-control.state-off .power-control-state { color: var(--text-secondary); }
+.power-control.state-init { border-color: var(--primary-color); }
+.power-control.state-init i, .power-control.state-init .power-control-state { color: var(--primary-color); }
+.power-control.state-error { border-color: var(--danger-color); }
+.power-control.state-error i, .power-control.state-error .power-control-state { color: var(--danger-color); }
+
 
 /* Content Area */
 .content-area {

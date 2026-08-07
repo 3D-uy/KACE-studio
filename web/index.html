@@ -67,6 +67,15 @@
                 </div>
             </nav>
 
+            <div class="power-control-container">
+                <button id="printer-power-btn" class="power-control state-init" type="button"
+                        onclick="togglePrinterPower()" disabled title="Connect by SSH to read printer power">
+                    <i class="fa-solid fa-power-off" aria-hidden="true"></i>
+                    <span class="power-control-label">Power</span>
+                    <span id="printer-power-state" class="power-control-state">init</span>
+                </button>
+            </div>
+
         </aside>
 
         <!-- Vertical Progress Status Tracker Column -->

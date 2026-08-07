@@ -12,6 +12,7 @@ from backend.imager import list_drives, flash_drive, inject_config, _normalize_d
 from backend.ejector import request_safe_eject
 from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
+from backend.power_controller import KacePowerClient
 from backend.workflow_events import KaceWorkflowEventParser
 import mimetypes
 
@@ -129,6 +130,7 @@ class KaceWsgiApp:
 class Api:
     def __init__(self):
         self._ssh = SSHSession()
+        self._power = KacePowerClient(self._ssh)
         self._ssh_lock = threading.Lock()
         self._ssh_gen = 0
         self._window = None
@@ -233,7 +235,7 @@ class Api:
             )
         return result
 
-    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "printer", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
+    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
         """
@@ -780,7 +782,7 @@ class Api:
 
     # ── Flash Worker Orchestrator ─────────────────────────────────────────
 
-    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str, password_auth: bool, drive_identity: dict = None, power_relay: bool = False, power_device: str = "printer", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
+    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str, password_auth: bool, drive_identity: dict = None, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
         try:
             self.set_device_state("FLASHING", 0, "Initializing physical block-writing...")
 
@@ -1051,6 +1053,19 @@ class Api:
             return None
         return manifest
 
+    def get_power_status(self) -> dict:
+        """Return the real state reported by KACE's Moonraker power client."""
+        return self._power.get_status()
+
+    def power_on(self) -> dict:
+        return self._power.power_on()
+
+    def power_off(self) -> dict:
+        return self._power.power_off()
+
+    def wait_power_ready(self) -> dict:
+        return self._power.wait_until_ready()
+
     def get_preferences(self) -> dict:
         """
         Reads user preferences from a local file, falling back to defaults.
@@ -1083,6 +1098,7 @@ class Api:
             "image-source-select", "pi-model-select",
             "bootstrap-ui-select-imager", "ssh-enable",
             "crowsnest-enable", "ssh-username",
+            "power-relay-enable", "power-device-name",
         }
         if not isinstance(prefs, dict):
             return False

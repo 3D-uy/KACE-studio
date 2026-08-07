@@ -14,6 +14,10 @@ let loginUsername = '';
 let loginPassword = '';
 let connectedUsername = 'kace';
 let currentLoginInput = '';
+let printerPowerStatus = 'init';
+let printerPowerAvailable = false;
+let printerPowerRequestActive = false;
+let printerPowerPollTimer = null;
 
 let userPreferences = { theme: 'dark', kace_auto_scan: true, form_state: {} };
 
@@ -574,7 +578,7 @@ function startFlashing() {
     // password_authentication = true regardless of its state.
     const passwordAuth = document.getElementById('ssh-password-auth').checked;
     const powerRelay = document.getElementById('power-relay-enable').checked;
-    const powerDevice = document.getElementById('power-device-name').value.trim() || 'printer';
+    const powerDevice = document.getElementById('power-device-name').value.trim();
     const powerGpioInput = document.getElementById('power-gpio-number').value.trim();
     const powerActiveLow = document.getElementById('power-active-low').checked;
     const restartKlipperWhenPowered = document.getElementById('restart-klipper-when-powered').checked;
@@ -1721,6 +1725,12 @@ window.writeTerminalData = function (data) {
 
 function updateConnectionStatus(connected) {
     sshConnected = connected;
+    if (connected) {
+        startPowerPolling();
+    } else {
+        stopPowerPolling();
+        renderPrinterPower({ available: false, status: 'init', detail: 'Connect by SSH to read printer power' });
+    }
     const bootstrapBtn = document.getElementById('bootstrap-btn');
     const disconnectBtn = document.getElementById('disconnect-btn');
     const connTitle = document.getElementById('connection-title');
@@ -1749,6 +1759,63 @@ function updateConnectionStatus(connected) {
 
     // Refresh SFTP Panel status
     refreshSftpBrowser();
+}
+
+function renderPrinterPower(result) {
+    const button = document.getElementById('printer-power-btn');
+    const stateLabel = document.getElementById('printer-power-state');
+    if (!button || !stateLabel) return;
+
+    const validStates = ['on', 'off', 'init', 'error'];
+    const status = validStates.includes(result && result.status) ? result.status : 'error';
+    printerPowerStatus = status;
+    printerPowerAvailable = Boolean(result && result.available);
+    button.classList.remove('state-on', 'state-off', 'state-init', 'state-error');
+    button.classList.add(`state-${status}`);
+    stateLabel.textContent = status;
+    button.disabled = !sshConnected || printerPowerRequestActive ||
+        !printerPowerAvailable || !['on', 'off'].includes(status);
+    button.title = (result && result.detail) ||
+        (result && result.device ? `${result.device}: ${status}` : `Power: ${status}`);
+}
+
+async function refreshPrinterPower() {
+    if (!sshConnected || printerPowerRequestActive || !window.pywebview || !window.pywebview.api) return;
+    try {
+        renderPrinterPower(await window.pywebview.api.get_power_status());
+    } catch (error) {
+        renderPrinterPower({ available: false, status: 'error', detail: String(error) });
+    }
+}
+
+function startPowerPolling() {
+    stopPowerPolling();
+    renderPrinterPower({ available: true, status: 'init', detail: 'Reading Moonraker power state…' });
+    refreshPrinterPower();
+    printerPowerPollTimer = window.setInterval(refreshPrinterPower, 3000);
+}
+
+function stopPowerPolling() {
+    if (printerPowerPollTimer !== null) {
+        window.clearInterval(printerPowerPollTimer);
+        printerPowerPollTimer = null;
+    }
+}
+
+async function togglePrinterPower() {
+    if (!sshConnected || printerPowerRequestActive || !printerPowerAvailable ||
+        !['on', 'off'].includes(printerPowerStatus)) return;
+    printerPowerRequestActive = true;
+    const action = printerPowerStatus === 'on' ? 'power_off' : 'power_on';
+    renderPrinterPower({ available: true, status: 'init', detail: 'Waiting for Moonraker confirmation…' });
+    try {
+        renderPrinterPower(await window.pywebview.api[action]());
+    } catch (error) {
+        renderPrinterPower({ available: true, status: 'error', detail: String(error) });
+    } finally {
+        printerPowerRequestActive = false;
+        await refreshPrinterPower();
+    }
 }
 
 function disconnectSSH() {
@@ -1984,6 +2051,8 @@ const PERSISTED_FIELDS = [
     { id: 'ssh-enable', type: 'checked' },
     { id: 'crowsnest-enable', type: 'checked' },
     { id: 'ssh-username', type: 'value' },
+    { id: 'power-relay-enable', type: 'checked' },
+    { id: 'power-device-name', type: 'value' },
 ];
 
 function saveFormState() {
