@@ -204,8 +204,10 @@ class SSHSession:
         if self.channel and not self.channel.closed:
             try:
                 self.channel.send(data)
+                return True
             except Exception as e:
                 print(f"Error sending SSH input: {e}")
+        return False
 
     def resize_pty(self, cols: int, rows: int):
         """

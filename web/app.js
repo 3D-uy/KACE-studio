@@ -744,9 +744,20 @@ window.updateDeviceState = function (state, progress, message) {
             updateConnectionStatus(true);
             if (term) term.write(`\x1b[1;32m[Status] ${message}\x1b[0m\r\n`);
             break;
-        case 'BOOTSTRAPPED':
+        case 'BOOTSTRAPPING':
             updateConnectionStatus(true);
+            if (term) term.write(`\x1b[1;36m[Status] ${message}\x1b[0m\r\n`);
+            break;
+        case 'BOOTSTRAPPED':
             if (term) term.write(`\x1b[1;32m[Status] ${message}\x1b[0m\r\n`);
+            break;
+        case 'BOOTSTRAP_FAILED':
+        case 'BOOTSTRAP_CANCELLED':
+            if (term) term.write(`\x1b[1;31m[Bootstrap] ${message}\x1b[0m\r\n`);
+            break;
+        case 'BOOTSTRAP_INTERRUPTED':
+            updateConnectionStatus(false);
+            if (term) term.write(`\x1b[1;31m[Bootstrap] ${message}\x1b[0m\r\n`);
             break;
         case 'ERROR':
             flashBtn.disabled = false;
@@ -787,7 +798,7 @@ function updateTrackerBar(state) {
         { id: 'step-flashing', states: ['FLASHING'] },
         { id: 'step-booting', states: ['FLASHED', 'BOOTING'] },
         { id: 'step-discovered', states: ['DISCOVERED', 'CONNECTING'] },
-        { id: 'step-ssh', states: ['SSH_READY'] },
+        { id: 'step-ssh', states: ['SSH_READY', 'BOOTSTRAPPING', 'BOOTSTRAP_FAILED', 'BOOTSTRAP_CANCELLED'] },
         { id: 'step-bootstrapped', states: ['BOOTSTRAPPED'] }
     ];
 
@@ -1377,6 +1388,9 @@ function initTerminal() {
 
 let bootstrapBuffer = "";
 let bootstrapFailureHandled = false;
+let bootstrapActive = false;
+let bootstrapAuthoritativeSeen = false;
+const bootstrapEventCursors = new Map();
 
 // Read-only projection of KACE's state machine. Studio never advances these
 // states and never infers success from SSH/process/Moonraker reachability.
@@ -1645,6 +1659,107 @@ function setBootstrapStage(stageId) {
     }
 }
 
+function completeBootstrapSuccess(message) {
+    bootstrapActive = false;
+    BOOTSTRAP_STAGES.forEach(stage => {
+        const el = document.getElementById('bstage-' + stage.id);
+        if (el) { el.classList.remove('active'); el.classList.add('done'); }
+    });
+    const label = document.getElementById('bootstrap-stage-label');
+    if (label) label.textContent = '✔ Bootstrap complete!';
+    const connSubtitle = document.getElementById('connection-subtitle');
+    if (connSubtitle) {
+        connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap and KACE wizard completed successfully.</span>';
+    }
+    const finishBtn = document.getElementById('finish-btn');
+    if (finishBtn) {
+        finishBtn.disabled = false;
+        finishBtn.classList.add('active');
+    }
+    window.updateDeviceState('BOOTSTRAPPED', 100, message || 'Bootstrap completed successfully.');
+    setTimeout(() => {
+        const tracker = document.getElementById('bootstrap-progress-tracker');
+        if (tracker && tracker.style.display !== 'none') {
+            tracker.style.display = 'none';
+            setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 50);
+        }
+    }, 1500);
+}
+
+function completeBootstrapTerminal(state, message) {
+    bootstrapActive = false;
+    bootstrapFailureHandled = true;
+    const label = document.getElementById('bootstrap-stage-label');
+    if (label) label.textContent = `✖ ${message}`;
+    const connSubtitle = document.getElementById('connection-subtitle');
+    if (connSubtitle) {
+        connSubtitle.textContent = message;
+        connSubtitle.style.color = 'var(--danger-color)';
+    }
+    const finishBtn = document.getElementById('finish-btn');
+    if (finishBtn) {
+        finishBtn.disabled = true;
+        finishBtn.classList.remove('active');
+    }
+    const bootstrapBtn = document.getElementById('bootstrap-btn');
+    if (bootstrapBtn) bootstrapBtn.disabled = !sshConnected || state === 'BOOTSTRAP_INTERRUPTED';
+    window.updateDeviceState(state, 0, message);
+}
+
+window.updateBootstrapEvent = function (event) {
+    if (!event || event.protocol !== 'kace-bootstrap/v1') return false;
+    const workflowId = event.workflow_id;
+    const sequence = event.sequence;
+    const eventName = event.event;
+    if (typeof workflowId !== 'string' || !workflowId ||
+        !Number.isInteger(sequence) || sequence < 1 ||
+        typeof eventName !== 'string') return false;
+    const previousSequence = bootstrapEventCursors.get(workflowId) || 0;
+    if (sequence <= previousSequence) return false;
+    bootstrapEventCursors.set(workflowId, sequence);
+    bootstrapAuthoritativeSeen = true;
+
+    if (eventName === 'workflow_started') {
+        bootstrapActive = true;
+        const bootstrapBtn = document.getElementById('bootstrap-btn');
+        if (bootstrapBtn) bootstrapBtn.disabled = true;
+        return true;
+    }
+    if (eventName === 'stage_started') {
+        bootstrapActive = true;
+        setBootstrapStage(event.stage);
+        return true;
+    }
+    if (eventName === 'workflow_succeeded') {
+        completeBootstrapSuccess('Bootstrap and KACE wizard completed successfully.');
+        return true;
+    }
+    if (eventName === 'workflow_cancelled') {
+        completeBootstrapTerminal(
+            'BOOTSTRAP_CANCELLED',
+            `Bootstrap cancelled${event.code ? ` (${event.code})` : ''}.`,
+        );
+        return true;
+    }
+    if (eventName === 'workflow_failed') {
+        completeBootstrapTerminal(
+            'BOOTSTRAP_FAILED',
+            `Bootstrap failed${event.code ? ` at ${event.code}` : ''}.`,
+        );
+        return true;
+    }
+    return false;
+};
+
+window.updateBootstrapInterrupted = function (workflowId, reason) {
+    bootstrapAuthoritativeSeen = true;
+    completeBootstrapTerminal(
+        'BOOTSTRAP_INTERRUPTED',
+        reason || `Bootstrap ${workflowId || ''} was interrupted.`,
+    );
+    return true;
+};
+
 function parseBootstrapProgress(data) {
     bootstrapBuffer += data;
     if (bootstrapBuffer.length > 8000) {
@@ -1654,65 +1769,24 @@ function parseBootstrapProgress(data) {
     // Scan for === STAGE: ID === markers emitted by bootstrap.sh
     const markerRe = /=== STAGE: ([A-Z_]+) ===/g;
     let match;
-    while ((match = markerRe.exec(bootstrapBuffer)) !== null) {
-        setBootstrapStage(match[1]);
+    if (!bootstrapAuthoritativeSeen) {
+        while ((match = markerRe.exec(bootstrapBuffer)) !== null) {
+            setBootstrapStage(match[1]);
+        }
     }
 
     const failureMatch = bootstrapBuffer.match(/=== KACE_BOOTSTRAP_ERROR: ([A-Z_]+) ===/);
-    if (failureMatch && !bootstrapFailureHandled) {
-        bootstrapFailureHandled = true;
+    if (!bootstrapAuthoritativeSeen && failureMatch && !bootstrapFailureHandled) {
         const message = failureMatch[1] === 'KACE_INSTALL'
             ? 'Bootstrap failed: KACE could not be installed.'
             : `Bootstrap failed at ${failureMatch[1]}.`;
-        const label = document.getElementById('bootstrap-stage-label');
-        if (label) label.textContent = `✖ ${message}`;
-        const connSubtitle = document.getElementById('connection-subtitle');
-        if (connSubtitle) {
-            connSubtitle.textContent = message;
-            connSubtitle.style.color = 'var(--danger-color)';
-        }
-        const finishBtn = document.getElementById('finish-btn');
-        if (finishBtn) {
-            finishBtn.disabled = true;
-            finishBtn.classList.remove('active');
-        }
-        window.updateDeviceState('ERROR', 0, message);
+        completeBootstrapTerminal('BOOTSTRAP_FAILED', message);
     }
 
     // Detect completion banner
-    if (!bootstrapFailureHandled && bootstrapBuffer.includes('Bootstrap complete! KACE wizard finished successfully.')) {
-        // Mark all stages done
-        BOOTSTRAP_STAGES.forEach(stage => {
-            const el = document.getElementById('bstage-' + stage.id);
-            if (el) { el.classList.remove('active'); el.classList.add('done'); }
-        });
-        const label = document.getElementById('bootstrap-stage-label');
-        if (label) label.textContent = '✔ Bootstrap complete!';
-        const connSubtitle = document.getElementById('connection-subtitle');
-        if (connSubtitle) {
-            connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap and KACE wizard completed successfully.</span>';
-        }
-        updateTrackerBar('BOOTSTRAPPED');
-
-        const finishBtn = document.getElementById('finish-btn');
-        if (finishBtn) {
-            finishBtn.disabled = false;
-            finishBtn.classList.add('active');
-        }
-
-        // Hide the progress tracker and resize terminal to the full height
-        // This ensures the remote interactive TUI (like KACE logo/menus) sees a correct, standard-sized PTY
-        setTimeout(() => {
-            const tracker = document.getElementById('bootstrap-progress-tracker');
-            if (tracker && tracker.style.display !== 'none') {
-                tracker.style.display = 'none';
-                setTimeout(() => {
-                    if (fitAddon) {
-                        fitAddon.fit();
-                    }
-                }, 50);
-            }
-        }, 1500);
+    if (!bootstrapAuthoritativeSeen && !bootstrapFailureHandled &&
+        bootstrapBuffer.includes('Bootstrap complete! KACE wizard finished successfully.')) {
+        completeBootstrapSuccess('Bootstrap completed through the legacy compatibility marker.');
     }
 }
 
@@ -1732,7 +1806,7 @@ function updateConnectionStatus(connected) {
     const connSubtitle = document.getElementById('connection-subtitle');
 
     if (connected) {
-        bootstrapBtn.disabled = false;
+        bootstrapBtn.disabled = bootstrapActive;
         disconnectBtn.style.display = 'block';
         connTitle.textContent = `SSH Workspace — Connected`;
         connSubtitle.textContent = `Active session: ${connectedUsername}@${currentDeviceName} (${currentDeviceIp})`;
@@ -1843,7 +1917,7 @@ function disconnectSSH() {
 }
 
 function startBootstrap() {
-    if (!sshConnected) return;
+    if (!sshConnected || bootstrapActive) return;
 
     const selectedUi = document.getElementById('bootstrap-ui-select-imager').value || 'mainsail';
 
@@ -1853,6 +1927,12 @@ function startBootstrap() {
         term.write(`\r\n\x1b[1;31m[Error] Invalid dashboard UI selection: ${selectedUi}\x1b[0m\r\n`);
         return;
     }
+
+    bootstrapActive = true;
+    bootstrapAuthoritativeSeen = false;
+    bootstrapEventCursors.clear();
+    const bootstrapBtn = document.getElementById('bootstrap-btn');
+    if (bootstrapBtn) bootstrapBtn.disabled = true;
 
     // Show the stage progress tracker and reset state
     const tracker = document.getElementById('bootstrap-progress-tracker');
@@ -1871,42 +1951,44 @@ function startBootstrap() {
     if (stageLabel) stageLabel.textContent = 'Starting bootstrap...';
 
     term.write(`\r\n\x1b[1;36m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
-    const bootstrapCmd = `if [ -f /boot/firmware/bootstrap.sh ]; then bash /boot/firmware/bootstrap.sh --dashboard ${selectedUi}; elif [ -f /boot/bootstrap.sh ]; then bash /boot/bootstrap.sh --dashboard ${selectedUi}; else echo "ERROR: bootstrap.sh not found on boot partition. Please re-flash the SD card."; exit 1; fi\n`;
-    // H3 FIX: The previous fallback included 'curl | bash' from a remote GitHub URL.
-    // This has been removed: if the bootstrap script is not found on the SD card,
-    // the command now exits with an error instead of silently fetching and executing
-    // arbitrary code from the internet over the authenticated SSH session.
 
     // Reset buffer at start
     bootstrapBuffer = "";
     bootstrapFailureHandled = false;
 
     if (window.pywebview && window.pywebview.api) {
-        // Send the shell command to execute the bootstrap
-        window.pywebview.api.send_ssh_input(bootstrapCmd);
+        window.pywebview.api.start_bootstrap(selectedUi).then(result => {
+            if (!result || !['started', 'busy'].includes(result.status)) {
+                completeBootstrapTerminal(
+                    'BOOTSTRAP_FAILED',
+                    result && result.message ? result.message : 'Bootstrap could not be started.',
+                );
+            }
+        }).catch(error => {
+            completeBootstrapTerminal('BOOTSTRAP_FAILED', `Bootstrap start failed: ${error}`);
+        });
     } else {
-        // Mock terminal output — stage markers match bootstrap.sh log_stage() output
-        const mockSteps = [
-            '=== STAGE: PACKAGES ===',
-            '=== STAGE: KLIPPER ===',
-            '=== STAGE: MOONRAKER ===',
-            '=== STAGE: CONFIGS ===',
-            `=== STAGE: ${selectedUi === 'fluidd' ? 'FLUIDD' : 'MAINSAIL'} ===`,
-            '=== STAGE: CLIENT_CFG ===',
-            '=== STAGE: NGINX ===',
-            '=== STAGE: SERVICES ===',
-            ...(selectedUi === 'both' || Math.random() > 0.5 ? ['=== STAGE: CROWSNEST ==='] : []),
-            '=== STAGE: KACE ===',
-            'Bootstrap complete! KACE wizard finished successfully.',
+        const workflowId = 'mock-bootstrap';
+        const mockStages = [
+            'PACKAGES', 'KLIPPER', 'MOONRAKER', 'CONFIGS',
+            selectedUi === 'fluidd' ? 'FLUIDD' : 'MAINSAIL',
+            'CLIENT_CFG', 'NGINX', 'SERVICES', 'KACE',
         ];
-
-        term.write(`$ ${bootstrapCmd}`);
+        const mockEvents = [
+            { event: 'workflow_started', stage: 'INIT' },
+            ...mockStages.map(stage => ({ event: 'stage_started', stage })),
+            { event: 'workflow_succeeded', stage: 'KACE', code: 'SUCCESS', exit_code: 0 },
+        ].map((event, index) => Object.assign({
+            protocol: 'kace-bootstrap/v1',
+            workflow_id: workflowId,
+            sequence: index + 1,
+            code: '',
+            exit_code: 0,
+        }, event));
         let idx = 0;
         const interval = setInterval(() => {
-            if (idx < mockSteps.length) {
-                const stepText = mockSteps[idx];
-                term.write(`\r\n${stepText}\r\n`);
-                parseBootstrapProgress(stepText);
+            if (idx < mockEvents.length) {
+                window.updateBootstrapEvent(mockEvents[idx]);
                 idx++;
             } else {
                 clearInterval(interval);

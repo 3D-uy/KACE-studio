@@ -3,6 +3,7 @@ import sys
 import json
 import re
 import threading
+import uuid
 import webview
 
 # Adjust path to allow absolute imports
@@ -14,6 +15,7 @@ from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
 from backend.power_controller import MoonrakerPowerController, PowerControllerError
 from backend.workflow_events import KaceWorkflowEventParser
+from backend.bootstrap_events import BootstrapEventParser
 import mimetypes
 
 HTTP_TIMEOUT_SECONDS = 30
@@ -135,6 +137,9 @@ class Api:
         self._power_lock = threading.Lock()
         self._ssh_lock = threading.Lock()
         self._ssh_gen = 0
+        self._bootstrap_lock = threading.Lock()
+        self._bootstrap_active = False
+        self._bootstrap_workflow_id = None
         self._window = None
         # L8 FIX: Use threading.Event for cross-thread cancel signalling.
         self._flash_cancel_event = threading.Event()
@@ -148,6 +153,52 @@ class Api:
 
     def set_window(self, window):
         self._window = window
+
+    def _forward_bootstrap_event(self, event: dict, ssh_generation: int) -> None:
+        """Project an authoritative bootstrap event and update the run guard."""
+        with self._ssh_lock:
+            if ssh_generation != self._ssh_gen:
+                return
+
+        workflow_id = event["workflow_id"]
+        event_name = event["event"]
+        with self._bootstrap_lock:
+            expected = self._bootstrap_workflow_id
+            if expected is not None and workflow_id != expected:
+                return
+            if event_name in ("workflow_started", "stage_started"):
+                self._bootstrap_active = True
+                self._bootstrap_workflow_id = workflow_id
+            elif BootstrapEventParser.is_terminal(event):
+                self._bootstrap_active = False
+                self._bootstrap_workflow_id = None
+
+        if self._window is not None:
+            try:
+                self._window.evaluate_js(
+                    f"window.updateBootstrapEvent({json.dumps(event)});"
+                )
+            except Exception as exc:
+                print(f"[KACE] Could not forward bootstrap event: {exc}")
+
+    def _interrupt_bootstrap(self, reason: str) -> bool:
+        """Close an active local projection when SSH ends without a terminal event."""
+        with self._bootstrap_lock:
+            if not self._bootstrap_active:
+                return False
+            workflow_id = self._bootstrap_workflow_id or "pending-bootstrap"
+            self._bootstrap_active = False
+            self._bootstrap_workflow_id = None
+
+        if self._window is not None:
+            try:
+                self._window.evaluate_js(
+                    "window.updateBootstrapInterrupted("
+                    f"{json.dumps(workflow_id)}, {json.dumps(reason)});"
+                )
+            except Exception as exc:
+                print(f"[KACE] Could not forward bootstrap interruption: {exc}")
+        return True
 
     def _sanitize_error(self, e: Exception) -> str:
         """
@@ -875,6 +926,7 @@ class Api:
         if not ip or not _IP_HOST_RE.match(ip.strip()):
             return {"status": "failed", "message": "Invalid IP address or hostname format."}
 
+        self._interrupt_bootstrap("SSH session was replaced before bootstrap completed.")
         with self._ssh_lock:
             self._ssh.close()
             self._ssh_gen += 1
@@ -928,6 +980,9 @@ class Api:
                     print(f"[KACE] Could not forward workflow event: {exc}")
 
             workflow_parser = KaceWorkflowEventParser(forward_workflow_event)
+            bootstrap_parser = BootstrapEventParser(
+                lambda event: self._forward_bootstrap_event(event, current_gen)
+            )
             
             def flush_write_buffer():
                 with buffer_lock:
@@ -947,6 +1002,7 @@ class Api:
                         return
 
                 workflow_parser.feed(text)
+                bootstrap_parser.feed(text)
                 
                 flush_now = False
                 with buffer_lock:
@@ -974,6 +1030,16 @@ class Api:
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen:
                         return
+                interrupted = self._interrupt_bootstrap(
+                    "SSH disconnected before bootstrap emitted a terminal event."
+                )
+                if interrupted:
+                    self.set_device_state(
+                        "BOOTSTRAP_INTERRUPTED",
+                        0,
+                        "SSH disconnected before bootstrap completed.",
+                    )
+                else:
                     # Stale callbacks should not clear the status
                     self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
                 
@@ -985,11 +1051,57 @@ class Api:
                     self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
             return {"status": "failed", "message": "Verify user password or network path."}
 
+    def start_bootstrap(self, dashboard_ui: str) -> dict:
+        """Start exactly one guarded bootstrap command on the active SSH PTY."""
+        if dashboard_ui not in {"mainsail", "fluidd", "both"}:
+            return {"status": "failed", "message": "Invalid dashboard selection."}
+
+        workflow_id = f"bootstrap-{uuid.uuid4().hex}"
+        with self._bootstrap_lock:
+            if self._bootstrap_active:
+                return {
+                    "status": "busy",
+                    "message": "A bootstrap workflow is already active.",
+                    "workflow_id": self._bootstrap_workflow_id,
+                }
+            self._bootstrap_active = True
+            self._bootstrap_workflow_id = workflow_id
+
+        missing_event = {
+            "protocol": "kace-bootstrap/v1",
+            "event": "workflow_failed",
+            "workflow_id": workflow_id,
+            "sequence": 1,
+            "stage": "INIT",
+            "code": "BOOTSTRAP_NOT_FOUND",
+            "exit_code": 1,
+        }
+        missing_marker = (
+            "=== KACE_BOOTSTRAP_EVENT: "
+            f"{json.dumps(missing_event, separators=(',', ':'))} ==="
+        )
+        command = (
+            f"if [ -f /boot/firmware/bootstrap.sh ]; then "
+            f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' bash /boot/firmware/bootstrap.sh --dashboard {dashboard_ui}; "
+            f"elif [ -f /boot/bootstrap.sh ]; then "
+            f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' bash /boot/bootstrap.sh --dashboard {dashboard_ui}; "
+            f"else printf '%s\\n' '{missing_marker}'; fi\n"
+        )
+
+        self.set_device_state("BOOTSTRAPPING", 0, "Starting KACE bootstrap.")
+        if not self._ssh.send_input(command):
+            with self._bootstrap_lock:
+                self._bootstrap_active = False
+                self._bootstrap_workflow_id = None
+            self.set_device_state("SSH_READY", 100, "Bootstrap could not be sent to SSH.")
+            return {"status": "failed", "message": "SSH terminal is not ready."}
+        return {"status": "started", "workflow_id": workflow_id}
+
     def send_ssh_input(self, data: str):
         """
         Channels keystrokes/data from frontend terminal to paramiko SSH channel.
         """
-        self._ssh.send_input(data)
+        return self._ssh.send_input(data)
 
     def resize_ssh_pty(self, cols: int, rows: int):
         """
@@ -1001,6 +1113,7 @@ class Api:
         """
         Closes current SSH session.
         """
+        self._interrupt_bootstrap("SSH session was closed before bootstrap completed.")
         with self._ssh_lock:
             self._ssh.close()
             self._ssh_gen += 1

@@ -16,12 +16,45 @@ C_YELLOW="\033[1;33m"
 C_RED="\033[1;31m"
 C_BOLD="\033[1m"
 
+BOOTSTRAP_PROTOCOL="kace-bootstrap/v1"
+BOOTSTRAP_WORKFLOW_ID="${KACE_BOOTSTRAP_WORKFLOW_ID:-bootstrap-$(date +%s)-$$}"
+case "$BOOTSTRAP_WORKFLOW_ID" in
+    *[!A-Za-z0-9._-]*|'') BOOTSTRAP_WORKFLOW_ID="bootstrap-$(date +%s)-$$" ;;
+esac
+BOOTSTRAP_SEQUENCE=0
+BOOTSTRAP_TERMINAL_EMITTED=0
+CURRENT_BOOTSTRAP_STAGE="INIT"
+
+emit_bootstrap_event() {
+    local event="$1"
+    local stage="${2:-$CURRENT_BOOTSTRAP_STAGE}"
+    local code="${3:-}"
+    local exit_code="${4:-0}"
+    BOOTSTRAP_SEQUENCE=$((BOOTSTRAP_SEQUENCE + 1))
+    printf '=== KACE_BOOTSTRAP_EVENT: {"protocol":"%s","event":"%s","workflow_id":"%s","sequence":%d,"stage":"%s","code":"%s","exit_code":%d} ===\n' \
+        "$BOOTSTRAP_PROTOCOL" "$event" "$BOOTSTRAP_WORKFLOW_ID" \
+        "$BOOTSTRAP_SEQUENCE" "$stage" "$code" "$exit_code"
+}
+
+emit_bootstrap_terminal() {
+    local event="$1"
+    local code="${2:-}"
+    local exit_code="${3:-0}"
+    if [ "$BOOTSTRAP_TERMINAL_EMITTED" -eq 1 ]; then
+        return 0
+    fi
+    BOOTSTRAP_TERMINAL_EMITTED=1
+    emit_bootstrap_event "$event" "$CURRENT_BOOTSTRAP_STAGE" "$code" "$exit_code"
+}
+
 log_stage() {
     # Usage: log_stage "STAGE_ID" "Human readable label"
     local id="$1"
     local label="$2"
+    CURRENT_BOOTSTRAP_STAGE="$id"
     echo -e "\n${C_CYAN}=== ${label} ===${C_RESET}"
     echo -e "=== STAGE: ${id} ==="   # Machine-parseable marker (no color codes)
+    emit_bootstrap_event "stage_started" "$id"
 }
 
 log_ok() {
@@ -59,8 +92,8 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="725a58b3f7f4f435a242328d24d801b409fffd10"
-KACE_INSTALL_SHA256="87da2d46d990482e3f72d2cee9a6a9f3aa2cc97afe49ef3b1638be0f3ecec77a"
+KACE_INSTALL_REF="5d07ec4ada156df552e45e81128cb2555b4a3045"
+KACE_INSTALL_SHA256="2b805f348e429e3f35183f9b9989bf3ea4d56f5af95aefac9807447dbd256805"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
 readonly CROWSNEST_REPOSITORY CROWSNEST_REF MAINSAIL_VERSION MAINSAIL_URL MAINSAIL_SHA256
@@ -549,6 +582,7 @@ finalize_bootstrap_success() {
     echo " Bootstrap complete! KACE wizard finished successfully. "
     echo "========================================================"
     echo -e "${C_RESET}"
+    emit_bootstrap_terminal "workflow_succeeded" "SUCCESS" 0
 }
 
 ensure_moonraker_config() {
@@ -965,11 +999,24 @@ echo "Logging execution output to: $LOG_FILE"
 cleanup() {
     rm -f /tmp/mainsail.zip /tmp/fluidd.zip /tmp/kace-install.sh
 }
-trap cleanup EXIT
+
+exit_handler() {
+    local exit_status=$?
+    if [ "$BOOTSTRAP_TERMINAL_EMITTED" -ne 1 ]; then
+        if [ "$exit_status" -eq 2 ]; then
+            emit_bootstrap_terminal "workflow_cancelled" "CANCELLED" "$exit_status"
+        else
+            emit_bootstrap_terminal "workflow_failed" "MISSING_TERMINAL" "$exit_status"
+        fi
+    fi
+    cleanup
+}
+trap exit_handler EXIT
 
 failure_handler() {
     local exit_status=$?
     local line_num=$1
+    emit_bootstrap_terminal "workflow_failed" "BOOTSTRAP_ERROR" "$exit_status"
     echo -e "\n${C_RED}"
     echo "========================================================"
     echo " ERROR: KACE Bootstrap failed at line $line_num (Exit code: $exit_status)."
@@ -979,6 +1026,16 @@ failure_handler() {
     exit $exit_status
 }
 trap 'failure_handler $LINENO' ERR
+
+cancel_handler() {
+    local signal_name="$1"
+    emit_bootstrap_terminal "workflow_cancelled" "SIGNAL_${signal_name}" 2
+    exit 2
+}
+trap 'cancel_handler INT' INT
+trap 'cancel_handler TERM' TERM
+
+emit_bootstrap_event "workflow_started" "INIT"
 
 # ── Parse Arguments ──────────────────────────────────────────────────────────
 DASHBOARD=""
@@ -1801,6 +1858,7 @@ fi
 # ── 11. KACE Agent ────────────────────────────────────────────────────────────
 log_stage "KACE" "Installing KACE Agent"
 INSTALL_OK=0
+INSTALL_EXIT=1
 
 if [ "$(id -un)" != "$PRINTER_USER" ]; then
     # Running as a different user (e.g. root), switch to printer user context
@@ -1830,6 +1888,9 @@ if [ "$(id -un)" != "$PRINTER_USER" ]; then
     '; then
         log_ok "KACE agent installed."
         INSTALL_OK=1
+        INSTALL_EXIT=0
+    else
+        INSTALL_EXIT=$?
     fi
 else
     # Already running as printer user, run directly without sudo
@@ -1841,6 +1902,9 @@ else
             if KACE_SOURCE_REF="$KACE_INSTALL_REF" bash "$tmp_script"; then
                 log_ok "KACE agent installed."
                 INSTALL_OK=1
+                INSTALL_EXIT=0
+            else
+                INSTALL_EXIT=$?
             fi
             rm -f "$tmp_script"
         else
@@ -1856,7 +1920,28 @@ if [ "$INSTALL_OK" -ne 1 ]; then
     echo "=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ==="
     log_err "KACE agent installation failed; the node is not fully provisioned."
     log_err "Pinned installer: $KACE_INSTALL_URL"
-    exit 1
+    case "$INSTALL_EXIT" in
+        2)
+            emit_bootstrap_terminal "workflow_cancelled" "CANCELLED" "$INSTALL_EXIT"
+            ;;
+        10)
+            emit_bootstrap_terminal "workflow_failed" "PRECONDITION_FAILED" "$INSTALL_EXIT"
+            ;;
+        20)
+            emit_bootstrap_terminal "workflow_failed" "GENERATION_FAILED" "$INSTALL_EXIT"
+            ;;
+        30)
+            emit_bootstrap_terminal "workflow_failed" "FIRMWARE_FAILED" "$INSTALL_EXIT"
+            ;;
+        40)
+            emit_bootstrap_terminal "workflow_failed" "DEPLOYMENT_FAILED" "$INSTALL_EXIT"
+            ;;
+        *)
+            INSTALL_EXIT=1
+            emit_bootstrap_terminal "workflow_failed" "KACE_INSTALL" "$INSTALL_EXIT"
+            ;;
+    esac
+    exit "$INSTALL_EXIT"
 fi
 
 # ── 12. Disable cloud-init ────────────────────────────────────────────────────

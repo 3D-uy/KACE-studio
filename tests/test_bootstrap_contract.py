@@ -38,10 +38,9 @@ def _workflow_value(name: str) -> str:
 
 def test_packaged_bootstrap_matches_pinned_sha256():
     assert BOOTSTRAP.is_file(), "bootstrap.sh must be fetched before tests/build"
+    actual = hashlib.sha256(BOOTSTRAP.read_bytes()).hexdigest()
     if AUTHORITATIVE_BOOTSTRAP.is_file():
         assert BOOTSTRAP.read_bytes() == AUTHORITATIVE_BOOTSTRAP.read_bytes()
-        return
-    actual = hashlib.sha256(BOOTSTRAP.read_bytes()).hexdigest()
     assert actual == _workflow_value("KACE_BOOTSTRAP_SHA256")
 
 
@@ -63,7 +62,20 @@ def test_bootstrap_contains_immutable_installer_contract_and_terminal_failure():
     assert "KACE_NO_LAUNCH=1" not in script
     assert "=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ===" in script
     failure_block = script.split('if [ "$INSTALL_OK" -ne 1 ]; then', 1)[1].split("fi", 1)[0]
-    assert "exit 1" in failure_block
+    assert 'exit "$INSTALL_EXIT"' in failure_block
+    for exit_code in (2, 10, 20, 30, 40):
+        assert re.search(rf"(?m)^\s*{exit_code}\)\s*$", failure_block)
+
+
+def test_bootstrap_emits_versioned_guarded_terminal_events():
+    script = BOOTSTRAP.read_text(encoding="utf-8")
+    assert 'BOOTSTRAP_PROTOCOL="kace-bootstrap/v1"' in script
+    assert "BOOTSTRAP_TERMINAL_EMITTED" in script
+    assert 'emit_bootstrap_event "workflow_started" "INIT"' in script
+    assert 'emit_bootstrap_event "stage_started" "$id"' in script
+    assert 'emit_bootstrap_terminal "workflow_succeeded" "SUCCESS" 0' in script
+    assert 'emit_bootstrap_terminal "workflow_failed" "BOOTSTRAP_ERROR" "$exit_status"' in script
+    assert 'emit_bootstrap_terminal "workflow_cancelled" "SIGNAL_${signal_name}" 2' in script
 
 
 def test_bootstrap_pins_every_critical_external_dependency():
@@ -183,12 +195,14 @@ def test_frontend_rejects_bootstrap_error_marker():
     assert "finishBtn.disabled = true" in app_js
 
 
-def test_frontend_waits_for_wizard_completion_marker_before_enabling_finish():
+def test_frontend_uses_versioned_terminal_event_and_keeps_legacy_fallback():
     app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
-    completion_marker = "Bootstrap complete! KACE wizard finished successfully."
-    marker_index = app_js.index(completion_marker)
-    enabled_index = app_js.index("finishBtn.disabled = false", marker_index)
-    assert marker_index < enabled_index
+    assert "window.updateBootstrapEvent" in app_js
+    assert "eventName === 'workflow_succeeded'" in app_js
+    assert "!bootstrapAuthoritativeSeen" in app_js
+    assert "Bootstrap complete! KACE wizard finished successfully." in app_js
+    assert "window.pywebview.api.start_bootstrap(selectedUi)" in app_js
+    assert "window.pywebview.api.send_ssh_input(bootstrapCmd)" not in app_js
     assert "Bootstrap complete! KACE Node is fully ready." not in app_js
 
     script = BOOTSTRAP.read_text(encoding="utf-8")
