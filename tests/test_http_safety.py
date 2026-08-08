@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from main import Api, HTTP_TIMEOUT_SECONDS, KaceWsgiApp
 
 
@@ -92,3 +94,25 @@ def test_github_release_query_uses_bounded_http_timeout(monkeypatch):
     assert calls
     assert calls[0][1]["timeout"] == HTTP_TIMEOUT_SECONDS
     assert HTTP_TIMEOUT_SECONDS > 0
+
+
+def test_github_release_query_never_falls_back_to_wrong_architecture(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "assets": [{
+                    "name": "image-rpi-armhf.img.xz",
+                    "browser_download_url": "https://example.invalid/image.img.xz",
+                }]
+            }).encode()
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(ValueError, match="No 64bit Raspberry Pi image"):
+        Api()._get_latest_github_release_asset("owner/repo", "64bit")

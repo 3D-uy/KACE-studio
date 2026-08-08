@@ -296,11 +296,11 @@ def test_api_rejects_concurrent_flash_operations(monkeypatch):
 
     monkeypatch.setattr(main.threading, "Thread", InertThread)
     first = api.start_flash(
-        3, "image.img", "host", "", "", "pw", "mainsail",
+        3, "default_lite", "host", "", "", "validpass123", "mainsail",
         drive_identity=selected,
     )
     second = api.start_flash(
-        3, "image.img", "host", "", "", "pw", "mainsail",
+        3, "default_lite", "host", "", "", "validpass123", "mainsail",
         drive_identity=selected,
     )
     assert first is True

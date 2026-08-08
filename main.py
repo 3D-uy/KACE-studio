@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import re
+import shutil
 import threading
 import uuid
 import webview
@@ -9,7 +10,19 @@ import webview
 # Adjust path to allow absolute imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from backend.imager import list_drives, flash_drive, inject_config, _normalize_disk_identity
+from backend.imager import (
+    list_drives,
+    flash_drive,
+    inject_config,
+    _normalize_disk_identity,
+    bootstrap_preflight_facts,
+)
+from backend.provisioning import (
+    ImageType,
+    ProvisioningData,
+    ProvisioningValidationError,
+    validate_provisioning,
+)
 from backend.ejector import request_safe_eject
 from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
@@ -288,7 +301,7 @@ class Api:
             )
         return result
 
-    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
+    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, image_type: str = ImageType.RASPIOS_VANILLA.value, wifi_security: str = "wpa2"):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
         """
@@ -311,6 +324,51 @@ class Api:
 
         drive_identity = selected_snapshot
 
+        # Gather read-only environmental facts, then validate the entire request
+        # before creating a worker, resolving/downloading an image, or writing disk.
+        try:
+            _, bootstrap_exists, bootstrap_sha256 = bootstrap_preflight_facts()
+            is_custom = image_type in {
+                ImageType.CUSTOM_VANILLA.value,
+                ImageType.CUSTOM_PREBAKED.value,
+            }
+            image_exists = os.path.isfile(image_path) if is_custom else True
+            image_size = os.path.getsize(image_path) if image_exists and is_custom else None
+            cache_parent = os.path.dirname(os.path.abspath(__file__))
+            cache_free_bytes = shutil.disk_usage(cache_parent).free
+            provisioning = validate_provisioning(
+                image_type=image_type,
+                image_path=image_path,
+                hostname=hostname,
+                wifi_ssid=wifi_ssid,
+                wifi_password=wifi_password,
+                wifi_security=wifi_security,
+                ssh_password=ssh_password,
+                dashboard_ui=dashboard_ui,
+                timezone=timezone,
+                pi_model=pi_model,
+                os_arch=os_arch,
+                ssh_enabled=ssh_enabled,
+                crowsnest=crowsnest,
+                username=username,
+                password_auth=password_auth,
+                power_relay=power_relay,
+                power_device=power_device,
+                power_gpio=power_gpio,
+                power_active_low=power_active_low,
+                restart_klipper_when_powered=restart_klipper_when_powered,
+                bootstrap_exists=bootstrap_exists,
+                bootstrap_sha256=bootstrap_sha256,
+                validate_media=True,
+                image_exists=image_exists,
+                image_size_bytes=image_size,
+                target_size_bytes=selected_snapshot.get("size_bytes"),
+                cache_free_bytes=cache_free_bytes,
+            )
+        except (OSError, ProvisioningValidationError, ValueError) as exc:
+            self.set_device_state("ERROR", 0, f"Provisioning preflight failed: {self._sanitize_error(exc)}")
+            return False
+
         with self._flash_lock:
             if self._flash_active:
                 self.set_device_state("ERROR", 0, "A flash operation is already running.")
@@ -320,7 +378,7 @@ class Api:
         try:
             thread = threading.Thread(
                 target=self._flash_worker,
-                args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth, drive_identity, power_relay, power_device, power_gpio, power_active_low, restart_klipper_when_powered),
+                args=(drive_id, provisioning, drive_identity),
                 daemon=True
             )
             thread.start()
@@ -516,37 +574,50 @@ class Api:
         if not valid_assets:
             raise ValueError(f"No .img.xz or .zip assets found in the latest release of {repo}")
             
-        # Match architecture
-        arch_terms = ["arm64", "64bit", "64"] if os_arch == "64bit" else ["armhf", "32bit", "32"]
-        
-        selected_asset = None
-        
-        # 1. Look for raspberry_pi/rpi AND arch
-        for asset in valid_assets:
-            name_lower = asset["name"].lower()
-            if ("raspberry_pi" in name_lower or "-rpi" in name_lower) and any(term in name_lower for term in arch_terms):
-                selected_asset = asset
-                break
-                
-        # 2. Look for just arch
-        if not selected_asset:
-            for asset in valid_assets:
-                name_lower = asset["name"].lower()
-                if any(term in name_lower for term in arch_terms):
-                    selected_asset = asset
-                    break
-                    
-        # 3. Look for raspberry_pi/rpi (no arch constraint)
-        if not selected_asset:
-            for asset in valid_assets:
-                name_lower = asset["name"].lower()
-                if "raspberry_pi" in name_lower or "-rpi" in name_lower:
-                    selected_asset = asset
-                    break
-                    
-        # 4. Fallback to first valid asset
-        if not selected_asset:
-            selected_asset = valid_assets[0]
+        if repo == "fluidd-core/FluiddPi":
+            if os_arch != "32bit":
+                raise ValueError("FluiddPi does not provide a 64-bit Raspberry Pi image.")
+            selected_asset = next(
+                (
+                    asset
+                    for asset in valid_assets
+                    if "fluiddpi" in asset["name"].lower()
+                    and "rpi" in asset["name"].lower()
+                ),
+                None,
+            )
+            if selected_asset is None:
+                raise ValueError("No supported FluiddPi Raspberry Pi image was found in the release.")
+        else:
+            # Architecture matching is deliberately strict. Falling back to an
+            # arbitrary Raspberry Pi asset can flash a valid but unbootable image.
+            arch_terms = (
+                ["arm64", "64bit", "aarch64"]
+                if os_arch == "64bit"
+                else ["armhf", "32bit", "armv7"]
+            )
+            selected_asset = next(
+                (
+                    asset
+                    for asset in valid_assets
+                    if ("raspberry_pi" in asset["name"].lower() or "-rpi" in asset["name"].lower())
+                    and any(term in asset["name"].lower() for term in arch_terms)
+                ),
+                None,
+            )
+            if selected_asset is None:
+                selected_asset = next(
+                    (
+                        asset
+                        for asset in valid_assets
+                        if any(term in asset["name"].lower() for term in arch_terms)
+                    ),
+                    None,
+                )
+            if selected_asset is None:
+                raise ValueError(
+                    f"No {os_arch} Raspberry Pi image was found in the latest {repo} release."
+                )
             
         download_url = selected_asset["browser_download_url"]
         filename = selected_asset["name"]
@@ -560,7 +631,7 @@ class Api:
                 
         return download_url, filename, sha256_url
 
-    def _resolve_prebaked_image(self, dashboard_ui: str, os_arch: str) -> str:
+    def _resolve_prebaked_image(self, image_type: ImageType, os_arch: str) -> str:
         """
         Resolves the pre-baked OS image (MainsailOS or FluiddPi).
         Queries GitHub API, downloads, caches, verifies, and decompresses as needed.
@@ -572,7 +643,14 @@ class Api:
         cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
         os.makedirs(cache_dir, exist_ok=True)
         
-        repo = "mainsail-crew/MainsailOS" if dashboard_ui in ("mainsail", "both") else "fluidd-core/FluiddPi"
+        if image_type is ImageType.MAINSAILOS_PREBAKED:
+            repo = "mainsail-crew/MainsailOS"
+        elif image_type is ImageType.FLUIDDPI_PREBAKED:
+            repo = "fluidd-core/FluiddPi"
+            if os_arch != "32bit":
+                raise ValueError("FluiddPi does not provide a 64-bit Raspberry Pi image.")
+        else:
+            raise ValueError(f"Unsupported automatic pre-baked image type: {image_type.value}")
         
         self.set_device_state("FLASHING", 0, f"Querying latest release for {repo}...")
         
@@ -835,16 +913,21 @@ class Api:
 
     # ── Flash Worker Orchestrator ─────────────────────────────────────────
 
-    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str, password_auth: bool, drive_identity: dict = None, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
+    def _flash_worker(self, drive_id: int, provisioning: ProvisioningData, drive_identity: dict = None):
         try:
             self.set_device_state("FLASHING", 0, "Initializing physical block-writing...")
 
             # Stage 1: Resolve image path (download/cache/verify)
-            image_path_original = image_path
-            if image_path in ("default_prebaked", "prebaked"):
-                image_path = self._resolve_prebaked_image(dashboard_ui, os_arch)
-            elif image_path == "default_lite":
-                image_path = self._resolve_default_image(os_arch)
+            image_path = provisioning.image_path
+            if provisioning.image_type in {
+                ImageType.MAINSAILOS_PREBAKED,
+                ImageType.FLUIDDPI_PREBAKED,
+            }:
+                image_path = self._resolve_prebaked_image(
+                    provisioning.image_type, provisioning.os_arch
+                )
+            elif provisioning.image_type is ImageType.RASPIOS_VANILLA:
+                image_path = self._resolve_default_image(provisioning.os_arch)
             else:
                 image_path = self._resolve_custom_image(image_path)
 
@@ -865,14 +948,26 @@ class Api:
             # Stage 3: Inject boot configuration files
             self.set_device_state("FLASHING", 95, "Injecting system configuration files...")
             inject_success = inject_config(
-                drive_id, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui,
-                timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth,
-                is_prebaked=(image_path_original in ("default_prebaked", "prebaked")),
-                power_relay=power_relay,
-                power_device=power_device,
-                power_gpio=power_gpio,
-                power_active_low=power_active_low,
-                restart_klipper_when_powered=restart_klipper_when_powered,
+                drive_id,
+                provisioning.hostname,
+                provisioning.wifi_ssid,
+                provisioning.wifi_password,
+                provisioning.ssh_password,
+                provisioning.dashboard_ui,
+                provisioning.timezone,
+                provisioning.pi_model,
+                provisioning.os_arch,
+                provisioning.ssh_enabled,
+                provisioning.crowsnest,
+                provisioning.username,
+                provisioning.password_auth,
+                image_type=provisioning.image_type,
+                power_relay=provisioning.power_relay,
+                power_device=provisioning.power_device,
+                power_gpio=provisioning.power_gpio,
+                power_active_low=provisioning.power_active_low,
+                restart_klipper_when_powered=provisioning.restart_klipper_when_powered,
+                wifi_security=provisioning.wifi_security,
             )
 
             if inject_success:

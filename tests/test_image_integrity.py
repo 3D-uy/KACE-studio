@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import main
+from backend.provisioning import ImageType, validate_provisioning
 
 
 def raw_image(size: int = 1024 * 1024) -> bytes:
@@ -122,7 +123,7 @@ def test_partial_cached_image_without_sidecar_is_reextracted(api, tmp_path, monk
         lambda _repo, _arch: ("https://invalid/fixture.zip", "fixture.zip", ""),
     )
 
-    resolved = api._resolve_prebaked_image("fluidd", "64bit")
+    resolved = api._resolve_prebaked_image(ImageType.FLUIDDPI_PREBAKED, "32bit")
     assert resolved == str(target)
     assert target.read_bytes() == content
     assert api._cached_file_is_valid(str(target), raw_image=True)
@@ -140,10 +141,30 @@ def test_custom_compressed_images_are_rejected_before_writer(api, tmp_path, monk
         raise AssertionError("raw writer must not be called")
 
     monkeypatch.setattr(main, "flash_drive", forbidden_writer)
-    api._flash_worker(
-        99, str(custom), "host", "ssid", "wifi", "ssh", "mainsail",
-        "UTC", "pi4", "64bit", True, False, "kace", True,
-    )
+    identity = {
+        "number": 99,
+        "friendly_name": "Test SD",
+        "size_bytes": 32 * 1024**3,
+        "bus_type": "USB",
+        "is_system": False,
+        "is_boot": False,
+        "serial_number": "SERIAL",
+        "unique_id": "UNIQUE",
+        "path": r"\\?\usbstor#test",
+        "media_type": "Unspecified",
+    }
+    api._drive_snapshots[99] = identity
+    assert api.start_flash(
+        99,
+        str(custom),
+        "host",
+        "",
+        "",
+        "validpass123",
+        "mainsail",
+        drive_identity=identity,
+        image_type=ImageType.CUSTOM_VANILLA.value,
+    ) is False
     assert not writer_called
 
 
@@ -156,6 +177,34 @@ def test_custom_raw_image_requires_plausible_partition_table(api, tmp_path):
     valid = tmp_path / "valid.img"
     valid.write_bytes(raw_image())
     assert api._resolve_custom_image(str(valid)) == str(valid)
+
+
+def test_custom_prebaked_family_reaches_injection_without_vanilla_inference(
+    api, tmp_path, monkeypatch
+):
+    image = tmp_path / "custom.img"
+    image.write_bytes(raw_image())
+    provisioning = validate_provisioning(
+        image_type=ImageType.CUSTOM_PREBAKED,
+        image_path=str(image),
+        hostname="printer-one",
+        wifi_ssid="",
+        wifi_password="",
+        ssh_password="validpass123",
+        dashboard_ui="mainsail",
+    )
+    captured = {}
+    monkeypatch.setattr(api, "_resolve_custom_image", lambda path: path)
+    monkeypatch.setattr(api, "_validate_raw_image", lambda _path: 1024)
+    monkeypatch.setattr(main, "flash_drive", lambda *_args: (True, ""))
+
+    def fake_inject(*_args, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(main, "inject_config", fake_inject)
+    api._flash_worker(99, provisioning, {"number": 99})
+    assert captured["image_type"] is ImageType.CUSTOM_PREBAKED
 
 
 def test_cancelled_download_removes_part_and_preserves_canonical(api, tmp_path, monkeypatch):

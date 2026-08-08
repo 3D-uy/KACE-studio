@@ -52,6 +52,7 @@ from backend.imager import (
     _get_country_from_timezone,
     _write_text_atomically,
 )
+from backend.provisioning import ImageType
 
 class TestKaceBackend(unittest.TestCase):
 
@@ -200,7 +201,7 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="test.local",
                     wifi_ssid="",
                     wifi_password="",
-                    ssh_password="testpwd",
+                    ssh_password="validpass123",
                     dashboard_ui="mainsail"
                 )
                 userconf_path = os.path.join(temp_boot, "userconf.txt")
@@ -227,7 +228,7 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="test.local",
                     wifi_ssid="TestSSID",
                     wifi_password="TestPass",
-                    ssh_password="testpwd",
+                    ssh_password="validpass123",
                     dashboard_ui="mainsail",
                     timezone="America/Sao_Paulo"
                 )
@@ -276,7 +277,7 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="test.local",
                     wifi_ssid="TestSSID",
                     wifi_password="TestPass",
-                    ssh_password="testpwd",
+                    ssh_password="validpass123",
                     dashboard_ui="mainsail",
                     timezone=""
                 )
@@ -342,7 +343,7 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="kace.local",
                     wifi_ssid="",
                     wifi_password="",
-                    ssh_password="pwd",
+                    ssh_password="validpass123",
                     dashboard_ui="fluidd",
                     timezone="Europe/London",
                     pi_model="pi4",
@@ -382,7 +383,7 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="kace.local",
                     wifi_ssid="",
                     wifi_password="",
-                    ssh_password="pwd",
+                    ssh_password="validpass123",
                     dashboard_ui="mainsail",
                     power_relay=True,
                     power_device="printer",
@@ -411,7 +412,7 @@ class TestKaceBackend(unittest.TestCase):
                 hostname="kace.local",
                 wifi_ssid="",
                 wifi_password="",
-                ssh_password="pwd",
+                ssh_password="validpass123",
                 dashboard_ui="mainsail",
                 power_relay=True,
                 power_device="printer",
@@ -421,13 +422,13 @@ class TestKaceBackend(unittest.TestCase):
     def test_bootstrap_config_rejects_invalid_requested_relay_device(self):
         from backend.imager import inject_config
 
-        with self.assertRaisesRegex(ValueError, "Invalid power device name"):
+        with self.assertRaisesRegex(ValueError, "Power device name"):
             inject_config(
                 1,
                 hostname="kace.local",
                 wifi_ssid="",
                 wifi_password="",
-                ssh_password="pwd",
+                ssh_password="validpass123",
                 dashboard_ui="mainsail",
                 power_relay=True,
                 power_device="printer power",
@@ -436,7 +437,7 @@ class TestKaceBackend(unittest.TestCase):
 
     def test_wifi_credentials_injection_escaping(self):
         r"""
-        Test that wifi_ssid and wifi_password containing shell metacharacters (", ', \n, ;, $, \)
+        Test that legal wifi values containing shell metacharacters (", ', ;, $, \)
         are safely written to config files without breaking file structure or enabling injection.
         Assert the output files remain valid and parseable.
         """
@@ -448,8 +449,8 @@ class TestKaceBackend(unittest.TestCase):
         
         temp_boot = tempfile.mkdtemp()
         try:
-            wifi_ssid = 'My"SSID"\n;$\\'
-            wifi_password = 'My\'Password\n;$\\'
+            wifi_ssid = 'My"SSID";$\\'
+            wifi_password = 'My\'Password;$\\'
             
             with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
                 success = inject_config(
@@ -538,8 +539,8 @@ class TestKaceBackend(unittest.TestCase):
                             disk_number=99,
                             hostname=hn,
                             wifi_ssid="ssid",
-                            wifi_password="pwd",
-                            ssh_password="pwd",
+                            wifi_password="validwifi123",
+                            ssh_password="validpass123",
                             dashboard_ui="mainsail"
                         )
         finally:
@@ -578,8 +579,8 @@ class TestKaceBackend(unittest.TestCase):
                     disk_number=99,
                     hostname="kace-both",
                     wifi_ssid="ssid",
-                    wifi_password="pwd",
-                    ssh_password="pwd",
+                    wifi_password="validwifi123",
+                    ssh_password="validpass123",
                     dashboard_ui="both"
                 )
                 self.assertTrue(success)
@@ -690,8 +691,8 @@ class TestKaceBackend(unittest.TestCase):
                 disk_number=99,
                 hostname="kace-test",
                 wifi_ssid="ssid",
-                wifi_password="pwd",
-                ssh_password="pwd",
+                wifi_password="validwifi123",
+                ssh_password="validpass123",
                 dashboard_ui="mainsail"
             )
             self.assertFalse(success)
@@ -710,8 +711,8 @@ class TestKaceBackend(unittest.TestCase):
                         disk_number=99,
                         hostname="kace-test",
                         wifi_ssid="ssid",
-                        wifi_password="pwd",
-                        ssh_password="pwd",
+                        wifi_password="validwifi123",
+                        ssh_password="validpass123",
                         dashboard_ui="mainsail"
                     )
                     self.assertFalse(success)
@@ -1179,7 +1180,7 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="MyPassword",
                     ssh_password="kacepwd123",
                     dashboard_ui="mainsail",
-                    is_prebaked=True
+                    image_type=ImageType.MAINSAILOS_PREBAKED
                 )
                 self.assertTrue(success)
                 
@@ -1225,7 +1226,7 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="MyPassword",
                     ssh_password="kacepwd123",
                     dashboard_ui="mainsail",
-                    is_prebaked=False
+                    image_type=ImageType.RASPIOS_VANILLA
                 )
                 self.assertTrue(success)
                 self.assertTrue(os.path.exists(cfg_path))
@@ -1278,9 +1279,9 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="kace-test",
                     wifi_ssid="TestNet",
                     wifi_password="TestPass",
-                    ssh_password="pwd123",
+                    ssh_password="validpass123",
                     dashboard_ui="mainsail",
-                    is_prebaked=True
+                    image_type=ImageType.MAINSAILOS_PREBAKED
                 )
                 self.assertTrue(success)
 
@@ -1322,9 +1323,9 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="kace-test",
                     wifi_ssid="TestNet",
                     wifi_password="MySecretPass",
-                    ssh_password="pwd123",
+                    ssh_password="validpass123",
                     dashboard_ui="mainsail",
-                    is_prebaked=False
+                    image_type=ImageType.RASPIOS_VANILLA
                 )
                 self.assertTrue(success)
 
@@ -1369,9 +1370,9 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="kace-test",
                     wifi_ssid="TestNet",
                     wifi_password="TestPass",
-                    ssh_password="pwd123",
+                    ssh_password="validpass123",
                     dashboard_ui="mainsail",
-                    is_prebaked=True
+                    image_type=ImageType.MAINSAILOS_PREBAKED
                 )
                 self.assertTrue(success)
 
@@ -1416,10 +1417,10 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="kace-test",
                     wifi_ssid="MyNetwork",
                     wifi_password="MySecretPass",
-                    ssh_password="pwd123",
+                    ssh_password="validpass123",
                     dashboard_ui="mainsail",
                     timezone="America/New_York",
-                    is_prebaked=True
+                    image_type=ImageType.MAINSAILOS_PREBAKED
                 )
                 self.assertTrue(success)
 
@@ -1458,9 +1459,9 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="kace-test",
                     wifi_ssid="TestNet",
                     wifi_password="TestPass",
-                    ssh_password="pwd123",
+                    ssh_password="validpass123",
                     dashboard_ui="mainsail",
-                    is_prebaked=False
+                    image_type=ImageType.RASPIOS_VANILLA
                 )
                 self.assertTrue(success)
 
@@ -1472,7 +1473,8 @@ class TestKaceBackend(unittest.TestCase):
                     fr_content = f.read()
                 self.assertIn("#!/bin/bash", fr_content)
                 self.assertIn("preconfigured-wifi.nmconnection", fr_content)
-                self.assertIn("chmod 600", fr_content)
+                self.assertIn("install -o root -g root -m 600", fr_content)
+                self.assertIn("cmp -s", fr_content)
                 
                 # Negative test / Regression Guard: vanilla firstrun.sh must NOT contain credentials logic
                 self.assertNotIn("chpasswd", fr_content)
@@ -1517,11 +1519,11 @@ class TestKaceBackend(unittest.TestCase):
                     hostname="kace-test",
                     wifi_ssid="TestNet",
                     wifi_password="TestPass",
-                    ssh_password="pwd123",
+                    ssh_password="validpass123",
                     dashboard_ui="mainsail",
                     username="customuser",
                     password_auth=True,
-                    is_prebaked=True
+                    image_type=ImageType.MAINSAILOS_PREBAKED
                 )
                 self.assertTrue(success)
 
@@ -1541,12 +1543,14 @@ class TestKaceBackend(unittest.TestCase):
                 self.assertNotIn("klipper moonraker crowsnest", fr_content)  # service unit patch moved to bootstrap.sh
                 self.assertIn("chpasswd -e", fr_content)
                 self.assertIn("PasswordAuthentication yes", fr_content)
-                self.assertIn(".kace-firstrun-done", fr_content)
+                self.assertIn("schema=kace-first-run/v1", fr_content)
+                self.assertIn("write_state complete 0", fr_content)
+                self.assertIn("MAX_ATTEMPTS=3", fr_content)
                 # Old strategy must NOT be present
                 self.assertNotIn("useradd -m", fr_content)
                 self.assertNotIn("passwd -l pi", fr_content)
-                # Password must be hashed — plain password "pwd123" must not be inside
-                self.assertNotIn("pwd123", fr_content)
+                # Password must be hashed; the plain password must not be embedded.
+                self.assertNotIn("validpass123", fr_content)
 
                 # cmdline.txt must contain systemd.run trigger pointing to firstrun.sh
                 with open(os.path.join(temp_boot, "cmdline.txt"), "r", encoding="utf-8") as f:
@@ -1561,8 +1565,8 @@ class TestKaceBackend(unittest.TestCase):
 
     def test_firstrun_trap_fallback_logic(self):
         """
-        Verify that both vanilla and prebaked generated firstrun.sh scripts contain
-        early trap registration, target_mnt fallback detection, and explicit sync.
+        Verify that both generated firstrun.sh variants retain durable state,
+        bounded retries, atomic trigger cleanup, and diagnostics on failure.
         """
         import tempfile
         import shutil
@@ -1581,11 +1585,14 @@ class TestKaceBackend(unittest.TestCase):
                         hostname="kace-test",
                         wifi_ssid="TestNet",
                         wifi_password="TestPass",
-                        ssh_password="pwd123",
+                        ssh_password="validpass123",
                         dashboard_ui="mainsail",
                         username="customuser",
                         password_auth=True,
-                        is_prebaked=mode
+                        image_type=(
+                            ImageType.MAINSAILOS_PREBAKED
+                            if mode else ImageType.RASPIOS_VANILLA
+                        ),
                     )
                     self.assertTrue(success)
 
@@ -1594,20 +1601,23 @@ class TestKaceBackend(unittest.TestCase):
                     with open(fr_path, "r", encoding="utf-8") as f:
                         fr_content = f.read()
 
-                    # 1. Early trap registration: trap cleanup EXIT must be declared before set -e
-                    trap_index = fr_content.find("trap cleanup EXIT")
-                    set_e_index = fr_content.find("set -e")
-                    self.assertNotEqual(trap_index, -1, "firstrun.sh must register EXIT trap")
-                    self.assertNotEqual(set_e_index, -1, "firstrun.sh must have set -e")
-                    self.assertTrue(trap_index < set_e_index, "trap registration must occur before set -e")
+                    # The trap is armed before the variant-specific body runs.
+                    trap_index = fr_content.find("trap finalize_first_run EXIT")
+                    body_index = fr_content.find("NM_SRC=")
+                    self.assertNotEqual(trap_index, -1)
+                    self.assertNotEqual(body_index, -1)
+                    self.assertLess(trap_index, body_index)
 
-                    # 2. Fallback target_mnt scanning logic in the trap body
-                    self.assertIn("target_mnt=\"$BOOT_MNT\"", fr_content)
-                    self.assertIn("-z \"$target_mnt\"", fr_content)
-                    self.assertIn("/boot/firmware/cmdline.txt", fr_content)
-                    self.assertIn("/boot/cmdline.txt", fr_content)
-
-                    # 3. Explicit sync at the end of cleanup
+                    self.assertIn("STATE_FILE=\"$BOOT_MNT/kace-firstrun.state\"", fr_content)
+                    self.assertIn("LOG_FILE=\"$BOOT_MNT/kace-firstrun.log\"", fr_content)
+                    self.assertIn("MAX_ATTEMPTS=3", fr_content)
+                    self.assertIn("write_state failed", fr_content)
+                    self.assertIn("write_state complete", fr_content)
+                    self.assertIn("remove_trigger_atomically", fr_content)
+                    self.assertIn("mv -f \"$temporary\" \"$CMDLINE\"", fr_content)
+                    self.assertIn('BOOT_MNT="/boot/firmware"', fr_content)
+                    self.assertIn('BOOT_MNT="/boot"', fr_content)
+                    self.assertIn('CMDLINE="$BOOT_MNT/cmdline.txt"', fr_content)
                     self.assertIn("sync", fr_content)
             finally:
                 shutil.rmtree(temp_boot)

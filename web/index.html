@@ -252,6 +252,14 @@
                                     <i class="fa-solid fa-folder-open"></i> Browse
                                 </button>
                             </div>
+                            <div id="custom-image-type-wrapper" style="display: none; margin-top: 8px;">
+                                <label for="custom-image-type" style="font-size: 12px;">CUSTOM IMAGE FAMILY</label>
+                                <select id="custom-image-type">
+                                    <option value="custom_vanilla" selected>Vanilla Raspberry Pi OS</option>
+                                    <option value="custom_prebaked">Pre-baked Klipper image</option>
+                                </select>
+                                <span class="tip-text">Choose pre-baked only when Klipper/Moonraker are already installed in the image.</span>
+                            </div>
                         </div>
 
                         <!-- Step 4: Target Storage Device -->
@@ -342,11 +350,15 @@
                             <div class="form-group" style="margin-bottom: 0;">
                                 <label for="wifi-ssid"><span class="brand-orange">STEP 8:</span> WI-FI NETWORK</label>
                                 <input type="text" id="wifi-ssid" placeholder="Network Name / SSID" style="margin-bottom: 8px;">
-                                <div class="password-wrapper" style="margin-bottom: 8px;">
+                                <select id="wifi-security-select" onchange="toggleWifiSecurity()" style="margin-bottom: 8px;">
+                                    <option value="wpa2" selected>WPA2/WPA3 Personal</option>
+                                    <option value="open">Open network (no password)</option>
+                                </select>
+                                <div class="password-wrapper" id="wifi-password-wrapper" style="margin-bottom: 8px;">
                                     <input type="password" id="wifi-password" placeholder="WiFi Password">
                                     <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('wifi-password', this)"></i>
                                 </div>
-                                <div class="password-wrapper">
+                                <div class="password-wrapper" id="wifi-password-confirm-wrapper">
                                     <input type="password" id="wifi-password-confirm" placeholder="Confirm WiFi Password">
                                     <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('wifi-password-confirm', this)"></i>
                                 </div>

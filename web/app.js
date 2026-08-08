@@ -183,14 +183,30 @@ function refreshDrives() {
 
 function toggleImageSource(value) {
     const wrapper = document.getElementById('custom-image-wrapper');
+    const typeWrapper = document.getElementById('custom-image-type-wrapper');
     const pathInput = document.getElementById('custom-image-path');
     if (value === 'custom') {
         wrapper.style.display = 'flex';
+        if (typeWrapper) typeWrapper.style.display = 'block';
     } else {
         wrapper.style.display = 'none';
+        if (typeWrapper) typeWrapper.style.display = 'none';
         pathInput.value = '';
         clearInputError('custom-image-path');
     }
+}
+
+function toggleWifiSecurity() {
+    const isOpen = document.getElementById('wifi-security-select').value === 'open';
+    ['wifi-password', 'wifi-password-confirm'].forEach(id => {
+        const input = document.getElementById(id);
+        if (!input) return;
+        input.disabled = isOpen;
+        if (isOpen) {
+            input.value = '';
+            clearInputError(id);
+        }
+    });
 }
 
 function browseLocalImage() {
@@ -285,6 +301,7 @@ function validateSshPasswords() {
 }
 
 function validateWifiPasswords() {
+    const wifiSecurity = document.getElementById('wifi-security-select').value;
     const wifiPassword = document.getElementById('wifi-password').value;
     const wifiPasswordConfirm = document.getElementById('wifi-password-confirm').value;
 
@@ -292,7 +309,7 @@ function validateWifiPasswords() {
     clearInputError('wifi-password-confirm');
 
     // If confirmation is introduced and does not match, show error immediately
-    if (wifiPasswordConfirm && wifiPassword !== wifiPasswordConfirm) {
+    if (wifiSecurity !== 'open' && wifiPasswordConfirm && wifiPassword !== wifiPasswordConfirm) {
         showInputError('wifi-password-confirm', "Wi-Fi passwords do not match.");
         return false;
     }
@@ -388,8 +405,8 @@ function openFormatModal() {
 
     const password = document.getElementById('ssh-password').value;
     const passwordConfirm = document.getElementById('ssh-password-confirm').value;
-    if (!password) {
-        showInputError('ssh-password', `An SSH password must be specified for user '${username || 'kace'}'.`);
+    if (password.length < 8) {
+        showInputError('ssh-password', `The account password for '${username || 'kace'}' must contain at least 8 characters.`);
         hasErrors = true;
         if (!errTab) errTab = 'credentials-tab';
     }
@@ -401,6 +418,7 @@ function openFormatModal() {
 
     // Step 8: WiFi credentials check
     const wifiSsid = document.getElementById('wifi-ssid').value.trim();
+    const wifiSecurity = document.getElementById('wifi-security-select').value;
     const wifiPassword = document.getElementById('wifi-password').value;
     const wifiPasswordConfirm = document.getElementById('wifi-password-confirm').value;
 
@@ -410,7 +428,20 @@ function openFormatModal() {
             hasErrors = true;
             if (!errTab) errTab = 'credentials-tab';
         }
-        if (wifiPassword !== wifiPasswordConfirm) {
+        if (new TextEncoder().encode(wifiSsid).length > 32) {
+            showInputError('wifi-ssid', "SSID must be at most 32 UTF-8 bytes.");
+            hasErrors = true;
+            if (!errTab) errTab = 'credentials-tab';
+        }
+        const validWpaPassword = wifiSecurity === 'open' ||
+            (wifiPassword.length >= 8 && wifiPassword.length <= 63) ||
+            /^[0-9A-Fa-f]{64}$/.test(wifiPassword);
+        if (!validWpaPassword) {
+            showInputError('wifi-password', "WPA passphrases must contain 8-63 characters or 64 hexadecimal digits.");
+            hasErrors = true;
+            if (!errTab) errTab = 'credentials-tab';
+        }
+        if (wifiSecurity !== 'open' && wifiPassword !== wifiPasswordConfirm) {
             showInputError('wifi-password-confirm', "Wi-Fi passwords do not match.");
             hasErrors = true;
             if (!errTab) errTab = 'credentials-tab';
@@ -569,6 +600,7 @@ function startFlashing() {
     // WiFi setup
     const wifiSsid = document.getElementById('wifi-ssid').value;
     const wifiPassword = document.getElementById('wifi-password').value;
+    const wifiSecurity = document.getElementById('wifi-security-select').value;
 
     // Services
     const sshEnabled = document.getElementById('ssh-enable').checked;
@@ -598,10 +630,13 @@ function startFlashing() {
     // Image configuration
     const imageSource = document.getElementById('image-source-select').value;
     let imagePath = "default_prebaked";
+    let imageType = dashboardUi === 'fluidd' ? 'fluiddpi_prebaked' : 'mainsailos_prebaked';
     if (imageSource === 'custom') {
         imagePath = document.getElementById('custom-image-path').value;
+        imageType = document.getElementById('custom-image-type').value;
     } else if (imageSource === 'raspios_lite') {
         imagePath = "default_lite";
+        imageType = 'raspios_vanilla';
     }
 
     // Show progress elements
@@ -641,7 +676,9 @@ function startFlashing() {
             powerDevice,
             powerGpio,
             powerActiveLow,
-            restartKlipperWhenPowered
+            restartKlipperWhenPowered,
+            imageType,
+            wifiSecurity
         ).then(res => {
             if (!res) {
                 window.updateDeviceState("ERROR", 0, "Flashing aborted or failed.");
@@ -2139,11 +2176,13 @@ const PERSISTED_FIELDS = [
     { id: 'timezone-select', type: 'value' },
     { id: 'os-arch-select', type: 'value' },
     { id: 'image-source-select', type: 'value' },
+    { id: 'custom-image-type', type: 'value' },
     { id: 'pi-model-select', type: 'hidden' },
     { id: 'bootstrap-ui-select-imager', type: 'hidden' },
     { id: 'ssh-enable', type: 'checked' },
     { id: 'crowsnest-enable', type: 'checked' },
     { id: 'ssh-username', type: 'value' },
+    { id: 'wifi-security-select', type: 'value' },
     { id: 'power-relay-enable', type: 'checked' },
     { id: 'power-device-name', type: 'value' },
 ];
@@ -2195,6 +2234,7 @@ function restoreFormState() {
         // Sync image source toggle visibility
         const imageSource = document.getElementById('image-source-select');
         if (imageSource) toggleImageSource(imageSource.value);
+        toggleWifiSecurity();
 
         // Sync custom dropdowns visual states
         document.querySelectorAll('.custom-select-container').forEach(container => {

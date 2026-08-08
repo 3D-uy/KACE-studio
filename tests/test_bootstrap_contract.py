@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from backend.provisioning import EXPECTED_BOOTSTRAP_SHA256
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "bootstrap.sh"
@@ -42,6 +44,7 @@ def test_packaged_bootstrap_matches_pinned_sha256():
     if AUTHORITATIVE_BOOTSTRAP.is_file():
         assert BOOTSTRAP.read_bytes() == AUTHORITATIVE_BOOTSTRAP.read_bytes()
     assert actual == _workflow_value("KACE_BOOTSTRAP_SHA256")
+    assert actual == EXPECTED_BOOTSTRAP_SHA256
 
 
 def test_workflow_fetches_bootstrap_from_immutable_reference():
