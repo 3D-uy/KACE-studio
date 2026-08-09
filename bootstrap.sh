@@ -24,6 +24,11 @@ esac
 BOOTSTRAP_SEQUENCE=0
 BOOTSTRAP_TERMINAL_EMITTED=0
 CURRENT_BOOTSTRAP_STAGE="INIT"
+POWER_RECONCILE_CONFIG=""
+POWER_RECONCILE_BACKUP=""
+POWER_RECONCILE_STATE=""
+POWER_RECONCILE_STATE_BACKUP=""
+POWER_RECONCILIATION_COMMITTED=0
 
 emit_bootstrap_event() {
     local event="$1"
@@ -362,9 +367,80 @@ validate_power_relay_settings() {
     fi
 }
 
+begin_power_reconciliation() {
+    local config_path="$1"
+    local state_path="${2:-${POWER_CONFIG_PATH:-${PRINTER_HOME:+$PRINTER_HOME/.config/kace/power.json}}}"
+    POWER_RECONCILE_CONFIG="$config_path"
+    POWER_RECONCILE_STATE="$state_path"
+    POWER_RECONCILIATION_COMMITTED=0
+    if [ -f "$config_path" ]; then
+        if ! POWER_RECONCILE_BACKUP=$(mktemp "${config_path}.kace-power-backup.XXXXXX") || \
+           ! cp -p "$config_path" "$POWER_RECONCILE_BACKUP"; then
+            [ -n "$POWER_RECONCILE_BACKUP" ] && rm -f "$POWER_RECONCILE_BACKUP"
+            POWER_RECONCILE_BACKUP=""
+            return 1
+        fi
+    else
+        POWER_RECONCILE_BACKUP="__ABSENT__"
+    fi
+    if [ -n "$state_path" ] && [ -f "$state_path" ]; then
+        if ! POWER_RECONCILE_STATE_BACKUP=$(mktemp "${state_path}.kace-power-backup.XXXXXX") || \
+           ! cp -p "$state_path" "$POWER_RECONCILE_STATE_BACKUP"; then
+            [ -n "$POWER_RECONCILE_STATE_BACKUP" ] && rm -f "$POWER_RECONCILE_STATE_BACKUP"
+            [ -n "$POWER_RECONCILE_BACKUP" ] && [ "$POWER_RECONCILE_BACKUP" != "__ABSENT__" ] && \
+                rm -f "$POWER_RECONCILE_BACKUP"
+            POWER_RECONCILE_BACKUP=""
+            POWER_RECONCILE_STATE_BACKUP=""
+            return 1
+        fi
+    else
+        POWER_RECONCILE_STATE_BACKUP="__ABSENT__"
+    fi
+}
+
+rollback_power_reconciliation() {
+    if [ "$POWER_RECONCILIATION_COMMITTED" -eq 1 ] || [ -z "$POWER_RECONCILE_CONFIG" ]; then
+        return 0
+    fi
+    if [ "$POWER_RECONCILE_BACKUP" = "__ABSENT__" ]; then
+        rm -f "$POWER_RECONCILE_CONFIG"
+    elif [ -n "$POWER_RECONCILE_BACKUP" ] && [ -f "$POWER_RECONCILE_BACKUP" ]; then
+        mv -f "$POWER_RECONCILE_BACKUP" "$POWER_RECONCILE_CONFIG"
+    fi
+    if [ -n "$POWER_RECONCILE_STATE" ]; then
+        if [ "$POWER_RECONCILE_STATE_BACKUP" = "__ABSENT__" ]; then
+            rm -f "$POWER_RECONCILE_STATE"
+        elif [ -n "$POWER_RECONCILE_STATE_BACKUP" ] && [ -f "$POWER_RECONCILE_STATE_BACKUP" ]; then
+            mv -f "$POWER_RECONCILE_STATE_BACKUP" "$POWER_RECONCILE_STATE"
+        fi
+    fi
+    POWER_RECONCILIATION_COMMITTED=1
+    log_warn "Rolled back moonraker.conf and power.json because power reconciliation did not commit."
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet moonraker 2>/dev/null; then
+        if ! $SUDO systemctl restart moonraker; then
+            log_warn "Moonraker could not be restarted after restoring its previous configuration."
+        fi
+    fi
+}
+
+commit_power_reconciliation() {
+    # The verified Moonraker configuration and power.json are authoritative at
+    # this point. Backup cleanup must not turn a committed transaction into a
+    # partial rollback if unlinking one backup fails.
+    POWER_RECONCILIATION_COMMITTED=1
+    if [ -n "$POWER_RECONCILE_BACKUP" ] && [ "$POWER_RECONCILE_BACKUP" != "__ABSENT__" ]; then
+        rm -f "$POWER_RECONCILE_BACKUP" || log_warn "Could not remove moonraker.conf power backup."
+    fi
+    if [ -n "$POWER_RECONCILE_STATE_BACKUP" ] && [ "$POWER_RECONCILE_STATE_BACKUP" != "__ABSENT__" ]; then
+        rm -f "$POWER_RECONCILE_STATE_BACKUP" || log_warn "Could not remove power.json backup."
+    fi
+}
+
 persist_power_controller_config() {
     local config_path="$PRINTER_HOME/.config/kace/power.json"
-    python3 - "$config_path" "$POWER_RELAY" "$POWER_DEVICE" <<'PY'
+    python3 - "$config_path" "$POWER_RELAY" "$POWER_DEVICE" "$POWER_GPIO" \
+        "$POWER_ACTIVE_LOW" "$POWER_RESTART_KLIPPER" "$POWER_INITIAL_STATE" \
+        "$POWER_OFF_WHEN_SHUTDOWN" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -373,12 +449,38 @@ import tempfile
 
 path = Path(sys.argv[1])
 enabled = sys.argv[2] == "true"
-device = sys.argv[3] if enabled else None
+desired = {
+    "schema": "kace-power/v1",
+    "revision": 1,
+    "enabled": enabled,
+    "device": sys.argv[3] if enabled else None,
+    "pin": f"gpiochip0/gpio{sys.argv[4]}" if enabled else None,
+    "active_low": sys.argv[5] == "true" if enabled else False,
+    "restart_klipper_when_powered": sys.argv[6] == "true" if enabled else False,
+    "initial_state": sys.argv[7] if enabled else "off",
+    "off_when_shutdown": sys.argv[8] == "true" if enabled else True,
+}
+previous = None
+try:
+    previous = json.loads(path.read_text(encoding="utf-8"))
+except FileNotFoundError:
+    pass
+except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+    raise RuntimeError(f"cannot replace invalid power.json safely: {exc}") from exc
+if isinstance(previous, dict) and previous.get("schema") == "kace-power/v1":
+    old_revision = previous.get("revision")
+    if isinstance(old_revision, int) and not isinstance(old_revision, bool) and old_revision > 0:
+        comparable = dict(previous)
+        comparable["revision"] = 1
+        if comparable == desired:
+            desired["revision"] = old_revision
+        else:
+            desired["revision"] = old_revision + 1
 path.parent.mkdir(parents=True, exist_ok=True)
 fd, temporary = tempfile.mkstemp(prefix=".power.", suffix=".tmp", dir=str(path.parent))
 try:
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as target:
-        json.dump({"schema": 1, "enabled": enabled, "device": device}, target)
+        json.dump(desired, target, indent=2, sort_keys=True)
         target.write("\n")
         target.flush()
         os.fsync(target.fileno())
@@ -388,19 +490,17 @@ finally:
     if os.path.exists(temporary):
         os.unlink(temporary)
 PY
-    $SUDO chown -R "$PRINTER_USER:$PRINTER_GROUP" "$PRINTER_HOME/.config/kace"
+    $SUDO chown "$PRINTER_USER:$PRINTER_GROUP" \
+        "$PRINTER_HOME/.config/kace" "$config_path"
 }
 
-upsert_power_relay_section() {
+reconcile_power_relay_section() {
     local config_path="$1"
-    local section_name="power $POWER_DEVICE"
-    local power_pin="gpiochip0/gpio${POWER_GPIO}"
-    if [ "$POWER_ACTIVE_LOW" = "true" ]; then
-        power_pin="!${power_pin}"
-    fi
-
-    python3 - "$config_path" "$section_name" "$power_pin" \
-        "$POWER_RESTART_KLIPPER" "$POWER_INITIAL_STATE" "$POWER_OFF_WHEN_SHUTDOWN" <<'PY'
+    local state_path="${POWER_CONFIG_PATH:-${PRINTER_HOME:+$PRINTER_HOME/.config/kace/power.json}}"
+    python3 - "$config_path" "$state_path" "$POWER_RELAY" "$POWER_DEVICE" "$POWER_GPIO" \
+        "$POWER_ACTIVE_LOW" "$POWER_RESTART_KLIPPER" "$POWER_INITIAL_STATE" \
+        "$POWER_OFF_WHEN_SHUTDOWN" <<'PY'
+import json
 import os
 from pathlib import Path
 import re
@@ -409,56 +509,122 @@ import sys
 import tempfile
 
 path = Path(sys.argv[1])
-section_name = sys.argv[2]
-expected = {
-    "type": "gpio",
-    "pin": sys.argv[3],
-    "restart_klipper_when_powered": sys.argv[4],
-    "initial_state": sys.argv[5],
-    "off_when_shutdown": sys.argv[6],
-}
+state_path = Path(sys.argv[2]) if sys.argv[2] else None
+enabled = sys.argv[3] == "true"
+device = sys.argv[4] if enabled else None
+pin = f"gpiochip0/gpio{sys.argv[5]}" if enabled else None
+if enabled and sys.argv[6] == "true":
+    pin = f"!{pin}"
+expected = [
+    "type: gpio",
+    f"pin: {pin}" if enabled else None,
+    f"restart_klipper_when_powered: {sys.argv[7]}" if enabled else None,
+    f"initial_state: {sys.argv[8]}" if enabled else None,
+    f"off_when_shutdown: {sys.argv[9]}" if enabled else None,
+]
+expected = [line for line in expected if line is not None]
+begin_marker = "# BEGIN KACE MANAGED: power"
+end_marker = "# END KACE MANAGED: power"
 
 content = path.read_text(encoding="utf-8")
 newline = "\r\n" if "\r\n" in content else "\n"
 lines = content.splitlines()
 section_re = re.compile(r"^\s*\[\s*([^\]]+?)\s*\]\s*(?:[#;].*)?$", re.IGNORECASE)
-section_indexes = [
-    index
-    for index, line in enumerate(lines)
-    if (match := section_re.match(line))
-    and match.group(1).strip().casefold() == section_name.casefold()
-]
-if len(section_indexes) > 1:
-    raise RuntimeError(f"duplicate [{section_name}] sections")
-
-managed_re = re.compile(
+managed_option_re = re.compile(
     r"^\s*(type|pin|restart_klipper_when_powered|initial_state|off_when_shutdown)\s*[:=]",
     re.IGNORECASE,
 )
-managed_lines = [f"{key}: {value}" for key, value in expected.items()]
 
-if section_indexes:
-    section_start = section_indexes[0]
-    section_end = len(lines)
-    for index in range(section_start + 1, len(lines)):
-        if section_re.match(lines[index]):
-            section_end = index
-            break
-    preserved_body = [
-        line for line in lines[section_start + 1:section_end]
-        if not managed_re.match(line)
+def spans(source):
+    headers = []
+    for index, line in enumerate(source):
+        match = section_re.match(line)
+        if match:
+            headers.append((match.group(1).strip(), index))
+    return [
+        (name, start, headers[i + 1][1] if i + 1 < len(headers) else len(source))
+        for i, (name, start) in enumerate(headers)
     ]
-    while preserved_body and not preserved_body[-1].strip():
-        preserved_body.pop()
-    replacement = [f"[{section_name}]", *preserved_body]
-    if preserved_body and preserved_body[-1].strip():
-        replacement.append("")
-    replacement.extend(managed_lines)
-    lines[section_start:section_end] = replacement
-else:
+
+previous_device = None
+if state_path and state_path.exists():
+    try:
+        previous = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot reconcile against invalid power.json: {exc}") from exc
+    if not isinstance(previous, dict) or previous.get("schema") not in (1, "kace-power/v1"):
+        raise RuntimeError("cannot reconcile against unsupported power.json schema")
+    if not isinstance(previous.get("enabled"), bool):
+        raise RuntimeError("cannot reconcile against invalid power.json enabled value")
+    if previous["enabled"]:
+        candidate = previous.get("device")
+        if not isinstance(candidate, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", candidate):
+            raise RuntimeError("cannot reconcile against invalid power.json device")
+        previous_device = candidate
+    if previous.get("schema") == "kace-power/v1":
+        required = {
+            "revision", "device", "pin", "active_low", "initial_state",
+            "restart_klipper_when_powered", "off_when_shutdown",
+        }
+        if not required.issubset(previous):
+            raise RuntimeError("cannot reconcile against incomplete versioned power.json")
+        revision = previous.get("revision")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise RuntimeError("cannot reconcile against invalid power.json revision")
+        for key in ("active_low", "restart_klipper_when_powered", "off_when_shutdown"):
+            if not isinstance(previous.get(key), bool):
+                raise RuntimeError(f"cannot reconcile against invalid power.json {key}")
+        if previous.get("initial_state") not in ("on", "off"):
+            raise RuntimeError("cannot reconcile against invalid power.json initial_state")
+        if previous["enabled"]:
+            if not isinstance(previous.get("pin"), str) or not re.fullmatch(
+                r"gpiochip[0-9]+/gpio[0-9]{1,3}", previous["pin"]
+            ):
+                raise RuntimeError("cannot reconcile against invalid power.json pin")
+        elif previous.get("device") is not None or previous.get("pin") is not None:
+            raise RuntimeError("disabled power.json must not name a device or pin")
+
+begin_indexes = [i for i, line in enumerate(lines) if line.strip() == begin_marker]
+end_indexes = [i for i, line in enumerate(lines) if line.strip() == end_marker]
+owned = {previous_device.casefold()} if previous_device else set()
+for marker in begin_indexes:
+    next_index = marker + 1
+    while next_index < len(lines) and (
+        not lines[next_index].strip()
+        or lines[next_index].lstrip().startswith(("#", ";"))
+    ):
+        next_index += 1
+    if next_index < len(lines):
+        match = section_re.match(lines[next_index])
+        if match and match.group(1).strip().casefold().startswith("power "):
+            owned.add(match.group(1).strip()[6:].strip().casefold())
+marker_set = set(begin_indexes + end_indexes)
+lines = [line for index, line in enumerate(lines) if index not in marker_set]
+
+existing_names = {
+    name[6:].strip().casefold()
+    for name, _start, _end in spans(lines)
+    if name.casefold().startswith("power ")
+}
+if enabled and device.casefold() in existing_names and device.casefold() not in owned:
+    raise RuntimeError(f"unmanaged Moonraker [power {device}] already exists")
+
+preserved = []
+for name, start, end in spans(lines):
+    if name.casefold().startswith("power ") and name[6:].strip().casefold() in owned:
+        preserved.extend(
+            line for line in lines[start + 1:end]
+            if line.strip() and not managed_option_re.match(line)
+        )
+for name, start, end in reversed(spans(lines)):
+    if name.casefold().startswith("power ") and name[6:].strip().casefold() in owned:
+        del lines[start:end]
+while lines and not lines[-1].strip():
+    lines.pop()
+if enabled:
     if lines and lines[-1].strip():
         lines.append("")
-    lines.extend([f"[{section_name}]", *managed_lines])
+    lines.extend([begin_marker, f"[power {device}]", *expected, *preserved, end_marker])
 
 new_content = newline.join(lines) + newline
 if new_content == content:
@@ -484,33 +650,63 @@ except BaseException:
 PY
 }
 
+upsert_power_relay_section() {
+    reconcile_power_relay_section "$1"
+}
+
 verify_power_relay_section() {
     local config_path="$1"
-    local section_name="power $POWER_DEVICE"
-    local power_pin="gpiochip0/gpio${POWER_GPIO}"
-    if [ "$POWER_ACTIVE_LOW" = "true" ]; then
-        power_pin="!${power_pin}"
-    fi
-
-    python3 - "$config_path" "$section_name" "$power_pin" \
-        "$POWER_RESTART_KLIPPER" "$POWER_INITIAL_STATE" "$POWER_OFF_WHEN_SHUTDOWN" <<'PY'
+    local state_path="${POWER_CONFIG_PATH:-${PRINTER_HOME:+$PRINTER_HOME/.config/kace/power.json}}"
+    python3 - "$config_path" "$state_path" "$POWER_RELAY" "$POWER_DEVICE" "$POWER_GPIO" \
+        "$POWER_ACTIVE_LOW" "$POWER_RESTART_KLIPPER" "$POWER_INITIAL_STATE" \
+        "$POWER_OFF_WHEN_SHUTDOWN" <<'PY'
+import json
 from pathlib import Path
 import re
 import sys
 
 path = Path(sys.argv[1])
-section_name = sys.argv[2]
+state_path = Path(sys.argv[2]) if sys.argv[2] else None
+enabled = sys.argv[3] == "true"
+device = sys.argv[4] if enabled else None
+pin = f"gpiochip0/gpio{sys.argv[5]}" if enabled else None
+if enabled and sys.argv[6] == "true":
+    pin = f"!{pin}"
 expected = {
     "type": "gpio",
-    "pin": sys.argv[3],
-    "restart_klipper_when_powered": sys.argv[4],
-    "initial_state": sys.argv[5],
-    "off_when_shutdown": sys.argv[6],
-}
+    "pin": pin,
+    "restart_klipper_when_powered": sys.argv[7],
+    "initial_state": sys.argv[8],
+    "off_when_shutdown": sys.argv[9],
+} if enabled else {}
+previous_device = None
+if state_path and state_path.exists():
+    previous = json.loads(state_path.read_text(encoding="utf-8"))
+    if isinstance(previous, dict) and previous.get("enabled") is True:
+        previous_device = previous.get("device")
 
 content = path.read_text(encoding="utf-8")
 lines = content.splitlines()
 section_re = re.compile(r"^\s*\[\s*([^\]]+?)\s*\]\s*(?:[#;].*)?$", re.IGNORECASE)
+begin_marker = "# BEGIN KACE MANAGED: power"
+end_marker = "# END KACE MANAGED: power"
+if enabled:
+    if sum(line.strip() == begin_marker for line in lines) != 1 or sum(line.strip() == end_marker for line in lines) != 1:
+        raise RuntimeError("expected exactly one KACE-managed power block")
+else:
+    if any(line.strip() in (begin_marker, end_marker) for line in lines):
+        raise RuntimeError("disabled power configuration retained KACE managed markers")
+    if previous_device:
+        stale = [
+            line for line in lines
+            if (match := section_re.match(line))
+            and match.group(1).strip().casefold() == f"power {previous_device}".casefold()
+        ]
+        if stale:
+            raise RuntimeError(f"disabled power configuration retained [power {previous_device}]")
+    raise SystemExit(0)
+
+section_name = f"power {device}"
 section_indexes = [
     index
     for index, line in enumerate(lines)
@@ -550,9 +746,6 @@ PY
 
 verify_requested_power_relay() {
     local config_path="$1"
-    if [ "$POWER_RELAY" != "true" ]; then
-        return 0
-    fi
     if ! verify_power_relay_section "$config_path"; then
         echo "=== KACE_BOOTSTRAP_ERROR: GPIO_RELAY_VERIFY ==="
         log_err "GPIO relay verification failed; preserving bootstrap configuration for diagnosis."
@@ -588,23 +781,6 @@ finalize_bootstrap_success() {
 ensure_moonraker_config() {
     local config_path="$1"
     local socket_path="$2"
-    local power_pin=""
-    local power_block=""
-
-    if [ "$POWER_RELAY" = "true" ]; then
-        power_pin="gpiochip0/gpio${POWER_GPIO}"
-        if [ "$POWER_ACTIVE_LOW" = "true" ]; then
-            power_pin="!${power_pin}"
-        fi
-        power_block="
-[power ${POWER_DEVICE}]
-type: gpio
-pin: ${power_pin}
-restart_klipper_when_powered: ${POWER_RESTART_KLIPPER}
-initial_state: ${POWER_INITIAL_STATE}
-off_when_shutdown: ${POWER_OFF_WHEN_SHUTDOWN}
-"
-    fi
 
     if [ ! -f "$config_path" ]; then
         local temporary_config
@@ -636,18 +812,16 @@ cors_domains:
 
 [file_manager]
 enable_object_processing: True
-${power_block}
 EOF
         chmod 644 "$temporary_config"
         mv -f "$temporary_config" "$config_path"
     fi
 
-    if [ "$POWER_RELAY" = "true" ]; then
-        upsert_power_relay_section "$config_path"
-        verify_requested_power_relay "$config_path"
-    fi
-
-    ensure_config_entry "$config_path" "file_manager" "enable_object_processing" "True"
+    ensure_config_entry "$config_path" "file_manager" "enable_object_processing" "True" || return 1
+    # Power is reconciled last so generic INI insertion cannot split the
+    # ownership marker from its immediately adjacent [power ...] section.
+    reconcile_power_relay_section "$config_path" || return 1
+    verify_requested_power_relay "$config_path" || return 1
 }
 
 _positive_timeout_or_default() {
@@ -713,6 +887,59 @@ for device in devices:
 
 raise SystemExit(3)
 PY
+}
+
+verify_power_api_configuration() {
+    local base_url="$1"
+    local state_path="${POWER_CONFIG_PATH:-${PRINTER_HOME:+$PRINTER_HOME/.config/kace/power.json}}"
+    local response=""
+    if ! response=$(curl --fail --silent --max-time 5 \
+        "$base_url/machine/device_power/devices"); then
+        log_err "Moonraker Power API could not be queried after reconciliation."
+        return 1
+    fi
+    if ! MOONRAKER_POWER_RESPONSE="$response" python3 - "$state_path" "$POWER_RELAY" "$POWER_DEVICE" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+
+state_path = Path(sys.argv[1]) if sys.argv[1] else None
+enabled = sys.argv[2] == "true"
+desired_device = sys.argv[3] if enabled else None
+previous_device = None
+if state_path and state_path.exists():
+    try:
+        previous = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot verify against invalid power.json: {exc}") from exc
+    if isinstance(previous, dict) and previous.get("enabled") is True:
+        previous_device = previous.get("device")
+
+payload = json.loads(os.environ["MOONRAKER_POWER_RESPONSE"])
+result = payload.get("result", payload)
+devices = result.get("devices") if isinstance(result, dict) else None
+if not isinstance(devices, list):
+    raise RuntimeError("Moonraker returned an invalid power device list")
+if enabled:
+    matches = [item for item in devices if isinstance(item, dict) and item.get("device") == desired_device]
+    if len(matches) != 1 or str(matches[0].get("type", "")).casefold() != "gpio":
+        raise RuntimeError(
+            f"expected exactly one gpio Moonraker power device named {desired_device!r}"
+        )
+if previous_device and previous_device != desired_device:
+    if any(isinstance(item, dict) and item.get("device") == previous_device for item in devices):
+        raise RuntimeError(f"stale Moonraker power device {previous_device!r} is still active")
+PY
+    then
+        log_err "Moonraker Power API does not match the requested KACE power configuration."
+        return 1
+    fi
+    if [ "$POWER_RELAY" = "true" ]; then
+        log_ok "Moonraker exposes exactly one intended GPIO power device '$POWER_DEVICE'."
+    else
+        log_ok "Moonraker confirms the previous KACE-managed power device is disabled."
+    fi
 }
 
 wait_for_power_device_ready() {
@@ -1002,6 +1229,9 @@ cleanup() {
 
 exit_handler() {
     local exit_status=$?
+    if [ "$exit_status" -ne 0 ]; then
+        rollback_power_reconciliation
+    fi
     if [ "$BOOTSTRAP_TERMINAL_EMITTED" -ne 1 ]; then
         if [ "$exit_status" -eq 2 ]; then
             emit_bootstrap_terminal "workflow_cancelled" "CANCELLED" "$exit_status"
@@ -1188,11 +1418,10 @@ echo "Resolved printer home directory: $PRINTER_HOME"
 PRINTER_USER=$(stat -c '%U' "$PRINTER_HOME" 2>/dev/null || echo "$USER")
 PRINTER_GROUP=$(stat -c '%G' "$PRINTER_HOME" 2>/dev/null || echo "$USER")
 
-persist_power_controller_config
-
 mkdir -p "$PRINTER_HOME/printer_data/config"
 mkdir -p "$PRINTER_HOME/printer_data/gcodes"
 mkdir -p "$PRINTER_HOME/printer_data/comms"
+begin_power_reconciliation "$PRINTER_HOME/printer_data/config/moonraker.conf"
 ensure_moonraker_config \
     "$PRINTER_HOME/printer_data/config/moonraker.conf" \
     "$PRINTER_HOME/printer_data/comms/klippy.sock"
@@ -1764,6 +1993,14 @@ if [ "$POWER_RELAY" = "true" ]; then
         exit 1
     fi
 fi
+
+if ! verify_power_api_configuration "http://127.0.0.1:7125"; then
+    echo "=== KACE_BOOTSTRAP_ERROR: GPIO_RELAY_API_VERIFY ==="
+    log_err "Power reconciliation was not persisted because Moonraker verification failed."
+    exit 1
+fi
+persist_power_controller_config
+commit_power_reconciliation
 
 # ── 10. Crowsnest (Optional) ──────────────────────────────────────────────────
 if [ "$CROWSNEST" = "true" ]; then

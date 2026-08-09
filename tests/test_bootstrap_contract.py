@@ -182,7 +182,9 @@ verify_requested_power_relay "$PRINTER_HOME/printer_data/config/moonraker.conf"
         '    "$PRINTER_HOME/printer_data/config/moonraker.conf"'
     )
     install_call = script.index('"$PRINTER_HOME/moonraker/scripts/install-moonraker.sh"')
-    restart_call = script.index("systemctl restart moonraker")
+    # Ignore the earlier rollback helper's recovery restart; this assertion is
+    # about the normal install/start-services path.
+    restart_call = script.index("systemctl restart moonraker", install_call)
     assert config_call < install_call < restart_call
 
 

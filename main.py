@@ -27,6 +27,7 @@ from backend.ejector import request_safe_eject
 from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
 from backend.power_controller import MoonrakerPowerController, PowerControllerError
+from backend.remote_power_config import RemotePowerConfigError, parse_remote_power_config
 from backend.workflow_events import KaceWorkflowEventParser
 from backend.bootstrap_events import BootstrapEventParser
 import mimetypes
@@ -148,6 +149,7 @@ class Api:
         self._power_controller = None
         self._power_target = None
         self._power_lock = threading.Lock()
+        self._remote_power_authority = None
         self._ssh_lock = threading.Lock()
         self._ssh_gen = 0
         self._bootstrap_lock = threading.Lock()
@@ -1026,6 +1028,10 @@ class Api:
             self._ssh.close()
             self._ssh_gen += 1
             current_gen = self._ssh_gen
+        with self._power_lock:
+            self._remote_power_authority = None
+            self._power_controller = None
+            self._power_target = None
 
         self.set_device_state("CONNECTING", 50, f"Establishing SSH connection to {ip}...")
         
@@ -1052,6 +1058,7 @@ class Api:
             # Reachability (including an open Moonraker port) is not evidence
             # that a KACE installation workflow completed successfully.
             self.set_device_state("SSH_READY", 100, f"SSH session connected to {ip}.")
+            remote_power = self._refresh_remote_power_authority()
                 
             # Write-coalescing buffer: collect rapid-fire SSH data chunks and flush
             # them as a single evaluate_js call every 15ms. This prevents interactive
@@ -1139,7 +1146,7 @@ class Api:
                     self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
                 
             self._ssh.run_command_stream("bash", on_data, on_close, cols=cols, rows=rows)
-            return {"status": "success"}
+            return {"status": "success", "power_config": remote_power}
         else:
             with self._ssh_lock:
                 if current_gen == self._ssh_gen:
@@ -1212,6 +1219,9 @@ class Api:
         with self._ssh_lock:
             self._ssh.close()
             self._ssh_gen += 1
+        # Keep the last schema that was successfully read from this device.
+        # Moonraker power control is independent of the interactive SSH session;
+        # dropping this authority would silently fall back to stale local hints.
         return True
 
     def clear_stored_host_key(self, ip: str) -> bool:
@@ -1263,13 +1273,52 @@ class Api:
             return None
         return manifest
 
+    def _read_remote_power_config(self) -> dict:
+        reader = getattr(self._ssh, "read_text_file_result", None)
+        if not callable(reader):
+            return {"status": "error", "config": None, "detail": "SSH file reader is unavailable"}
+        status, raw = reader(".config/kace/power.json", max_bytes=64 * 1024)
+        if status == "absent":
+            return {"status": "absent", "config": None, "detail": "No remote KACE power configuration exists"}
+        if status != "ok" or not isinstance(raw, str):
+            return {"status": "error", "config": None, "detail": "Remote power configuration could not be read"}
+        try:
+            config = parse_remote_power_config(raw)
+        except RemotePowerConfigError as exc:
+            return {"status": "invalid", "config": None, "detail": str(exc)}
+        return {"status": "configured", "config": config, "detail": ""}
+
+    def _refresh_remote_power_authority(self) -> dict:
+        result = self._read_remote_power_config()
+        with self._power_lock:
+            self._remote_power_authority = result
+            self._power_controller = None
+            self._power_target = None
+        return result
+
+    def get_remote_power_config(self) -> dict:
+        """Refresh the authoritative remote schema after SSH/bootstrap changes."""
+        return self._refresh_remote_power_authority()
+
+    def _resolve_power_device(self, suggested_device: str) -> str:
+        authority = self._remote_power_authority
+        if authority is None or authority.get("status") == "absent":
+            return suggested_device
+        if authority.get("status") != "configured":
+            raise PowerControllerError(authority.get("detail") or "Remote power configuration is unavailable")
+        config = authority.get("config")
+        if not isinstance(config, dict) or config.get("enabled") is not True:
+            raise PowerControllerError("Remote KACE power configuration is disabled")
+        return config.get("device")
+
     def _run_power_action(self, host: str, device: str, action: str) -> dict:
         """Run one Moonraker-only power action without depending on SSH/KACE."""
         try:
             with self._power_lock:
-                target = (host.strip() if isinstance(host, str) else host, device)
+                resolved_device = self._resolve_power_device(device)
+                target = (host.strip() if isinstance(host, str) else host, resolved_device)
                 if self._power_controller is None or self._power_target != target:
-                    self._power_controller = MoonrakerPowerController(host, device)
+                    self._power_controller = MoonrakerPowerController(host, resolved_device)
                     self._power_target = target
                 controller = self._power_controller
                 if action == "status":

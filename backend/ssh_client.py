@@ -298,32 +298,41 @@ class SSHSession:
                     # LOW-06 FIX: Log instead of silently swallowing to surface channel leaks.
                     print(f"Warning: SFTP download_file channel close error: {close_err}")
 
-    def read_text_file(self, relative_path: str, max_bytes: int = 256 * 1024):
-        """Read a small file below the remote user's home directory."""
+    def read_text_file_result(self, relative_path: str, max_bytes: int = 256 * 1024):
+        """Read a small home-relative file and distinguish absence from failure."""
         if not isinstance(relative_path, str) or not relative_path or relative_path.startswith("/"):
-            return None
+            return "error", None
         normalized = posixpath.normpath(relative_path.replace("\\", "/"))
         if normalized == ".." or normalized.startswith("../"):
-            return None
+            return "error", None
         sftp = self.get_sftp()
         if not sftp:
-            return None
+            return "error", None
         try:
             home = sftp.normalize(".")
             remote_path = posixpath.join(home, normalized)
             attrs = sftp.stat(remote_path)
             if attrs.st_size < 0 or attrs.st_size > max_bytes:
-                return None
+                return "error", None
             with sftp.open(remote_path, "rb") as source:
                 payload = source.read(max_bytes + 1)
             if len(payload) > max_bytes:
-                return None
-            return payload.decode("utf-8")
+                return "error", None
+            return "ok", payload.decode("utf-8")
+        except (FileNotFoundError, OSError) as exc:
+            if getattr(exc, "errno", None) == 2:
+                return "absent", None
+            print(f"SFTP read_text_file error for '{normalized}': {exc}")
+            return "error", None
         except Exception as exc:
             print(f"SFTP read_text_file error for '{normalized}': {exc}")
-            return None
+            return "error", None
         finally:
             try:
                 sftp.close()
             except Exception as close_err:
                 print(f"Warning: SFTP read_text_file channel close error: {close_err}")
+
+    def read_text_file(self, relative_path: str, max_bytes: int = 256 * 1024):
+        status, content = self.read_text_file_result(relative_path, max_bytes=max_bytes)
+        return content if status == "ok" else None

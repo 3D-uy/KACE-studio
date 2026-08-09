@@ -18,6 +18,7 @@ let printerPowerStatus = 'init';
 let printerPowerAvailable = false;
 let printerPowerRequestActive = false;
 let printerPowerPollTimer = null;
+let remotePowerAuthority = null;
 
 let userPreferences = { theme: 'dark', kace_auto_scan: true, form_state: {} };
 
@@ -1213,6 +1214,10 @@ function performSshLogin(username, password) {
                 connectedUsername = username;
                 term.write("\x1b[1;32m[KACE Workspace] SSH connection established successfully.\x1b[0m\r\n");
                 updateConnectionStatus(true);
+                applyRemotePowerConfig(res && res.power_config ? res.power_config : {
+                    status: 'error',
+                    detail: 'SSH connected but remote power configuration was not returned',
+                });
                 loginState = 'DISCONNECTED';
 
                 // Synchronize terminal dimensions with the remote PTY
@@ -1269,6 +1274,8 @@ function performSshLogin(username, password) {
 function connectToDevice(ip, name) {
     currentDeviceIp = ip;
     currentDeviceName = name;
+    // A remote schema is authoritative only for the device it was read from.
+    remotePowerAuthority = null;
     startPowerPolling();
 
     const terminalNav = document.getElementById('terminal-nav-btn');
@@ -1714,6 +1721,11 @@ function completeBootstrapSuccess(message) {
         finishBtn.classList.add('active');
     }
     window.updateDeviceState('BOOTSTRAPPED', 100, message || 'Bootstrap completed successfully.');
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.get_remote_power_config()
+            .then(result => applyRemotePowerConfig(result))
+            .catch(error => applyRemotePowerConfig({ status: 'error', detail: String(error) }));
+    }
     setTimeout(() => {
         const tracker = document.getElementById('bootstrap-progress-tracker');
         if (tracker && tracker.style.display !== 'none') {
@@ -1885,14 +1897,37 @@ function renderPrinterPower(result) {
         (result && result.device ? `${result.device}: ${status}` : `Power: ${status}`);
 }
 
+function applyRemotePowerConfig(result) {
+    remotePowerAuthority = result && typeof result === 'object' ? result : {
+        status: 'error',
+        detail: 'Remote power configuration response is invalid',
+    };
+    refreshPrinterPower();
+}
+
+function selectedPowerDevice() {
+    const suggested = document.getElementById('power-device-name').value.trim();
+    if (remotePowerAuthority === null || remotePowerAuthority.status === 'absent') {
+        return suggested;
+    }
+    if (remotePowerAuthority.status !== 'configured' ||
+        !remotePowerAuthority.config || remotePowerAuthority.config.enabled !== true) {
+        return '';
+    }
+    return remotePowerAuthority.config.device || '';
+}
+
 async function refreshPrinterPower() {
     if (printerPowerRequestActive || !window.pywebview || !window.pywebview.api) return;
-    const powerDevice = document.getElementById('power-device-name').value.trim();
+    const powerDevice = selectedPowerDevice();
     if (!currentDeviceIp || !powerDevice) {
+        const remoteDetail = remotePowerAuthority && remotePowerAuthority.status !== 'absent'
+            ? (remotePowerAuthority.detail || 'Remote KACE power configuration is disabled')
+            : 'POWER_DEVICE is required';
         renderPrinterPower({
             available: false,
             status: 'init',
-            detail: !currentDeviceIp ? 'Select a Moonraker device first' : 'POWER_DEVICE is required',
+            detail: !currentDeviceIp ? 'Select a Moonraker device first' : remoteDetail,
         });
         return;
     }
@@ -1924,7 +1959,7 @@ function stopPowerPolling() {
 }
 
 async function togglePrinterPower() {
-    const powerDevice = document.getElementById('power-device-name').value.trim();
+    const powerDevice = selectedPowerDevice();
     if (!currentDeviceIp || !powerDevice || printerPowerRequestActive || !printerPowerAvailable ||
         !['on', 'off'].includes(printerPowerStatus)) return;
     printerPowerRequestActive = true;
