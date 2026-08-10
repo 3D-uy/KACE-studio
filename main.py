@@ -1191,8 +1191,7 @@ class Api:
         Removes stored host keys for the target IP from the known_hosts file.
         """
         from backend.ssh_client import clear_host_key
-        clear_host_key(ip)
-        return True
+        return clear_host_key(ip)
 
 
     def download_file(self, remote_path: str) -> bool:

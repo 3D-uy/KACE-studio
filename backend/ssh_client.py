@@ -1,4 +1,9 @@
 import os
+import csv
+from contextlib import contextmanager
+from functools import lru_cache
+import subprocess
+import tempfile
 import threading
 import time
 import select
@@ -7,14 +12,138 @@ import paramiko
 from typing import Callable
 
 
+KNOWN_HOSTS_LOCK_TIMEOUT_SECONDS = 5.0
+_known_hosts_thread_lock = threading.RLock()
+
+
+@lru_cache(maxsize=1)
+def _windows_current_user_sid() -> str:
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        ["whoami", "/user", "/fo", "csv", "/nh"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        creationflags=flags,
+    )
+    if result.returncode != 0:
+        raise PermissionError("Could not determine the Windows user SID for SSH trust storage.")
+    try:
+        row = next(csv.reader([result.stdout.strip()]))
+        sid = row[1].strip()
+    except (IndexError, StopIteration) as exc:
+        raise PermissionError("Windows returned an invalid user SID.") from exc
+    if not sid.startswith("S-"):
+        raise PermissionError("Windows returned an invalid user SID.")
+    return sid
+
+
+def _restrict_path_permissions(path: str, *, directory: bool = False) -> None:
+    os.chmod(path, 0o700 if directory else 0o600)
+    if os.name != "nt":
+        return
+    inheritance = "(OI)(CI)F" if directory else "F"
+    grants = (
+        f"*{_windows_current_user_sid()}:{inheritance}",
+        f"*S-1-5-18:{inheritance}",
+        f"*S-1-5-32-544:{inheritance}",
+    )
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        ["icacls", path, "/inheritance:r", "/grant:r", *grants],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        creationflags=flags,
+    )
+    if result.returncode != 0:
+        raise PermissionError("Could not restrict the Windows ACL for SSH trust storage.")
+
+
+def _atomic_write_known_hosts(path: str, content: str) -> None:
+    directory = os.path.dirname(os.path.abspath(path))
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix=".known_hosts.", suffix=".part", dir=directory
+    )
+    descriptor_open = True
+    try:
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+            descriptor_open = False
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        _restrict_path_permissions(temporary_path)
+        os.replace(temporary_path, path)
+        _restrict_path_permissions(path)
+    except Exception:
+        if descriptor_open:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+@contextmanager
+def _known_hosts_lock(known_hosts_path: str):
+    lock_path = os.path.join(os.path.dirname(known_hosts_path), "known_hosts.lock")
+    with _known_hosts_thread_lock:
+        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        lock_file = os.fdopen(descriptor, "r+b", closefd=True)
+        acquired = False
+        try:
+            if os.path.getsize(lock_path) == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+                os.fsync(lock_file.fileno())
+            _restrict_path_permissions(lock_path)
+            deadline = time.monotonic() + KNOWN_HOSTS_LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    lock_file.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("Timed out locking SSH known_hosts storage.")
+                    time.sleep(0.05)
+            yield
+        finally:
+            if acquired:
+                lock_file.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+
+
 def _get_known_hosts_path() -> str:
     """Returns the path to KACE's persistent SSH known_hosts file."""
     kace_dir = os.path.join(os.path.expanduser("~"), ".kace")
-    os.makedirs(kace_dir, exist_ok=True)
+    os.makedirs(kace_dir, mode=0o700, exist_ok=True)
+    _restrict_path_permissions(kace_dir, directory=True)
     path = os.path.join(kace_dir, "known_hosts")
-    if not os.path.exists(path):
-        with open(path, "w", encoding="utf-8") as f:
-            pass
+    with _known_hosts_lock(path):
+        if not os.path.exists(path):
+            _atomic_write_known_hosts(path, "")
+        else:
+            _restrict_path_permissions(path)
     return path
 
 
@@ -24,44 +153,63 @@ def clear_host_key(ip: str):
     Supports parsing port-bracketed formats (e.g., [192.168.1.47]:22).
     """
     known_hosts_path = _get_known_hosts_path()
-    if not os.path.exists(known_hosts_path):
-        return
-
     target_ip = ip
     if ":" in ip:
         parts = ip.split(":")
         target_ip = parts[0]
 
-    lines_to_keep = []
     try:
-        with open(known_hosts_path, "r", encoding="utf-8") as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    lines_to_keep.append(line)
-                    continue
-                parts = stripped.split()
-                if parts:
-                    host_part = parts[0]
-                    # Split hosts separated by comma (e.g. host1,host2)
-                    hosts = [h.strip("[]") for h in host_part.split(",")]
-                    hosts_clean = []
-                    for h in hosts:
-                        if "]" in h:
-                            h = h.split("]")[0]
-                        if ":" in h:
-                            h = h.split(":")[0]
-                        hosts_clean.append(h)
-                    if target_ip in hosts_clean:
-                        # Skip this line (removes it from the file)
+        with _known_hosts_lock(known_hosts_path):
+            lines_to_keep = []
+            with open(known_hosts_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#"):
+                        lines_to_keep.append(line)
                         continue
-                lines_to_keep.append(line)
-
-        with open(known_hosts_path, "w", encoding="utf-8") as f:
-            f.writelines(lines_to_keep)
+                    parts = stripped.split()
+                    if parts:
+                        host_part = parts[0]
+                        hosts = [h.strip("[]") for h in host_part.split(",")]
+                        hosts_clean = []
+                        for host in hosts:
+                            if "]" in host:
+                                host = host.split("]")[0]
+                            if ":" in host:
+                                host = host.split(":")[0]
+                            hosts_clean.append(host)
+                        if target_ip in hosts_clean:
+                            continue
+                    lines_to_keep.append(line)
+            _atomic_write_known_hosts(known_hosts_path, "".join(lines_to_keep))
         print(f"[SECURITY] Removed stored host keys for {ip} from {known_hosts_path}.")
+        return True
     except Exception as e:
         print(f"Error clearing host key for {ip}: {e}")
+        return False
+
+
+def _persist_host_keys_atomically(
+    client, known_hosts_path: str, *, lock_held: bool = False
+) -> None:
+    def merge_and_publish():
+        merged = paramiko.HostKeys()
+        if os.path.getsize(known_hosts_path) > 0:
+            merged.load(known_hosts_path)
+        for hostname, keys in client.get_host_keys().items():
+            for key_type, key in keys.items():
+                merged.add(hostname, key_type, key)
+        lines = []
+        for hostname in sorted(merged.keys()):
+            for key_type, key in sorted(merged[hostname].items()):
+                lines.append(f"{hostname} {key_type} {key.get_base64()}\n")
+        _atomic_write_known_hosts(known_hosts_path, "".join(lines))
+
+    if lock_held:
+        merge_and_publish()
+        return
+    with _known_hosts_lock(known_hosts_path):
+        merge_and_publish()
 
 
 
@@ -104,28 +252,31 @@ class SSHSession:
             try:
                 self.client = paramiko.SSHClient()
 
-                # Load previously accepted host keys (TOFU persistence)
-                try:
-                    self.client.load_host_keys(known_hosts_path)
-                except FileNotFoundError:
-                    pass  # First run — no known_hosts yet
+                # Treat load, verification and persistence as one serialized
+                # trust transaction. Otherwise a concurrent explicit clear can
+                # be undone by a connection that loaded the previous key.
+                with _known_hosts_lock(known_hosts_path):
+                    try:
+                        self.client.load_host_keys(known_hosts_path)
+                    except FileNotFoundError:
+                        pass  # Defensive: the path is normally created above.
 
-                # AutoAddPolicy handles *new* hosts only.
-                # For known hosts, paramiko always validates the key against
-                # load_host_keys() entries regardless of policy, so a key change
-                # (MITM indicator) raises BadHostKeyException unconditionally.
-                self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    # AutoAddPolicy handles *new* hosts only.
+                    # For known hosts, paramiko always validates the key against
+                    # load_host_keys() entries regardless of policy, so a key change
+                    # (MITM indicator) raises BadHostKeyException unconditionally.
+                    self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-                self.client.connect(
-                    target_ip, port=port, username=username,
-                    password=password, timeout=5
-                )
+                    self.client.connect(
+                        target_ip, port=port, username=username,
+                        password=password, timeout=5
+                    )
 
-                # Persist the accepted host key for future validation
-                try:
-                    self.client.save_host_keys(known_hosts_path)
-                except Exception as save_err:
-                    print(f"Warning: Failed to save host key to {known_hosts_path}: {save_err}")
+                    # A connection is not accepted if its TOFU identity cannot
+                    # be persisted durably for the next verification.
+                    _persist_host_keys_atomically(
+                        self.client, known_hosts_path, lock_held=True
+                    )
 
                 return True
 
@@ -137,11 +288,15 @@ class SSHSession:
                     "If this is a freshly re-flashed Pi, remove the old entry from "
                     f"{known_hosts_path} and reconnect."
                 )
+                if self.client is not None:
+                    self.client.close()
                 self.client = None
                 raise e
 
             except Exception as e:
                 print(f"SSH connection attempt {attempt + 1}/{retries + 1} failed to {ip}: {e}")
+                if self.client is not None:
+                    self.client.close()
                 self.client = None
                 if attempt < retries:
                     time.sleep(delay)

@@ -1413,9 +1413,19 @@ function initTerminal() {
                 term.write("y\r\n[KACE Workspace] Clearing stored host key...\r\n");
                 loginState = 'CONNECTING';
                 if (window.pywebview && window.pywebview.api) {
-                    window.pywebview.api.clear_stored_host_key(currentDeviceIp).then(() => {
-                        promptTerminalLogin();
-                    });
+                    window.pywebview.api.clear_stored_host_key(currentDeviceIp)
+                        .then((cleared) => {
+                            if (!cleared) {
+                                term.write("[KACE Workspace] Could not safely update SSH trust storage. Connection remains blocked.\r\n");
+                                loginState = 'PROMPTING_HOST_KEY_MISMATCH';
+                                return;
+                            }
+                            promptTerminalLogin();
+                        })
+                        .catch(() => {
+                            term.write("[KACE Workspace] SSH trust storage failed. Connection remains blocked.\r\n");
+                            loginState = 'PROMPTING_HOST_KEY_MISMATCH';
+                        });
                 } else {
                     promptTerminalLogin();
                 }

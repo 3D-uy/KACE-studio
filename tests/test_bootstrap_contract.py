@@ -115,12 +115,16 @@ def test_bootstrap_pins_every_critical_external_dependency():
     assert "download_verified_file" in script
 
 
-def test_bootstrap_enables_native_klipper_features_idempotently():
+def test_bootstrap_preserves_printer_cfg_and_reconciles_only_moonraker_default():
     script = BOOTSTRAP.read_text(encoding="utf-8")
     assert "# BEGIN KACE_CONFIG_DEFAULT_HELPER" in script
     assert "os.replace(temporary_name, path)" in script
-    assert '"exclude_object"' in script
-    assert '"force_move" "enable_force_move" "True"' in script
+    config_block = script.split('# ── 5. Printer Data Directories & Config Files', 1)[1].split(
+        '# ── 6. Dashboard UI', 1
+    )[0]
+    assert '"exclude_object"' not in config_block
+    assert '"force_move" "enable_force_move" "True"' not in config_block
+    assert 'if [ ! -f "$PRINTER_HOME/printer_data/config/printer.cfg" ]' in config_block
     assert '"file_manager" "enable_object_processing" "True"' in script
 
 
