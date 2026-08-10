@@ -1463,7 +1463,7 @@ const KACE_FIRMWARE_DEPLOYMENT_STEPS = [
 
 const KACE_TERMINAL_ERRORS = new Set([
     'ABORTED', 'CANCELLED', 'FAILED_FLASH', 'FAILED_MONITOR', 'FAILED_UPLOAD',
-    'CONFIG_ERROR', 'FAILED_PRECONDITION',
+    'CONFIG_ERROR', 'FAILED_PRECONDITION', 'TIMEOUT',
 ]);
 
 const kaceWorkflowViews = new Map();
@@ -1543,7 +1543,8 @@ function renderKaceWorkflow(view) {
     const [completedThrough, currentIndex] = kaceWorkflowPosition(view, positionState);
 
     tracker.style.display = 'block';
-    tracker.classList.toggle('success', isDone || isActionRequired);
+    tracker.classList.toggle('success', isDone);
+    tracker.classList.toggle('action-required', isActionRequired);
     tracker.classList.toggle('error', isError);
     const method = view.data && typeof view.data.method === 'string' ? view.data.method : '';
     title.textContent = view.kind === 'firmware_deployment'
@@ -1617,7 +1618,10 @@ window.updateKaceWorkflowEvent = function (event) {
     const workflowId = event.workflow_id;
     const sequence = event.sequence;
     const state = event.state;
-    if (typeof workflowId !== 'string' || !workflowId ||
+    const schema = event.schema;
+    if ((schema !== 1 && schema !== 2) ||
+        (schema === 2 && event.workflow_kind !== 'firmware_deployment') ||
+        typeof workflowId !== 'string' || !workflowId ||
         !Number.isInteger(sequence) || sequence < 1 ||
         typeof state !== 'string' || !state) return false;
 
@@ -1648,6 +1652,7 @@ function restoreKaceDeploymentManifest(manifest) {
         !manifest.deployment || typeof manifest.deployment !== 'object') return false;
     const deployment = manifest.deployment;
     return window.updateKaceWorkflowEvent({
+        schema: 2,
         workflow_kind: 'firmware_deployment',
         workflow_id: manifest.workflow_id || deployment.deployment_id,
         sequence: Number.isInteger(manifest.sequence) && manifest.sequence > 0

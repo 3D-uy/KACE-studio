@@ -91,6 +91,12 @@ class KaceWorkflowEventParser:
         workflow_id = event.get("workflow_id")
         sequence = event.get("sequence")
         state = event.get("state")
+        schema = event.get("schema")
+        workflow_kind = event.get("workflow_kind")
+        if isinstance(schema, bool) or schema not in (1, 2):
+            return None
+        if schema == 2 and workflow_kind != "firmware_deployment":
+            return None
         if not isinstance(workflow_id, str) or not workflow_id.strip():
             return None
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:

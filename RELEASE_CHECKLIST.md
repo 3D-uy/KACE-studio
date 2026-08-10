@@ -44,6 +44,9 @@ python -m pytest -v
 - [ ] Disk-selection and writer tests use mocks and never open a physical device.
 - [ ] Cancellation, partial cache, ZIP/XZ truncation, custom-image, capacity, and identity-reassignment tests pass.
 - [ ] Bootstrap stage/error markers still match the parser in `web/app.js`.
+- [ ] Simulated KACE workflow transcripts leave `TIMEOUT`, cancellation, flash
+      failure, and rollback failure terminal; `ACTION_REQUIRED` is never styled
+      or interpreted as success.
 - [ ] Source mode uses the sibling `KACE/scripts/bootstrap.sh` when both repositories are checked out together.
 
 ## 4. Windows build
