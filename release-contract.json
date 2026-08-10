@@ -19,6 +19,7 @@
   },
   "bundled_resources": [
     "bootstrap.sh",
+    "image-manifest.json",
     "release-contract.json",
     "web"
   ]

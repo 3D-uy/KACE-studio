@@ -31,6 +31,7 @@ from backend.remote_power_config import RemotePowerConfigError, parse_remote_pow
 from backend.workflow_events import KaceWorkflowEventParser
 from backend.bootstrap_events import BootstrapEventParser
 from backend.resources import bundled_path, verify_runtime_resources
+from backend.image_manifest import ImageManifest
 import mimetypes
 
 HTTP_TIMEOUT_SECONDS = 30
@@ -153,6 +154,7 @@ class Api:
         self._remote_power_authority = None
         self._ssh_lock = threading.Lock()
         self._ssh_gen = 0
+        self._ssh_attempt_gen = 0
         self._bootstrap_lock = threading.Lock()
         self._bootstrap_active = False
         self._bootstrap_workflow_id = None
@@ -237,6 +239,16 @@ class Api:
             msg
         )
         return msg
+
+    @staticmethod
+    def _ssh_session_is_active(session) -> bool:
+        checker = getattr(session, "is_connected", None)
+        if not callable(checker):
+            return False
+        try:
+            return checker() is True
+        except Exception:
+            return False
 
     def set_device_state(self, state: str, progress: int = 0, message: str = ""):
         """
@@ -549,172 +561,42 @@ class Api:
         """Wrapper for backward compatibility."""
         return self._decompress_archive(cached_xz, target_img, status_prefix)
 
-    def _get_latest_github_release_asset(self, repo: str, os_arch: str) -> tuple:
-        """
-        Queries the GitHub API to find the latest release asset matching the architecture.
-        Returns (download_url, filename, sha256_url).
-        """
-        import urllib.request
-        import json
-        import ssl
-        
-        url = f"https://api.github.com/repos/{repo}/releases/latest"
-        req = urllib.request.Request(
-            url,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
-        ssl_ctx = ssl.create_default_context()
-        
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            
-        assets = data.get("assets", [])
-        if not assets:
-            raise ValueError(f"No assets found in the latest release of {repo}")
-            
-        # Filter for image files (.img.xz or .zip)
-        valid_assets = [a for a in assets if a["name"].lower().endswith((".img.xz", ".zip"))]
-        if not valid_assets:
-            raise ValueError(f"No .img.xz or .zip assets found in the latest release of {repo}")
-            
-        if repo == "fluidd-core/FluiddPi":
-            if os_arch != "32bit":
-                raise ValueError("FluiddPi does not provide a 64-bit Raspberry Pi image.")
-            selected_asset = next(
-                (
-                    asset
-                    for asset in valid_assets
-                    if "fluiddpi" in asset["name"].lower()
-                    and "rpi" in asset["name"].lower()
-                ),
-                None,
-            )
-            if selected_asset is None:
-                raise ValueError("No supported FluiddPi Raspberry Pi image was found in the release.")
-        else:
-            # Architecture matching is deliberately strict. Falling back to an
-            # arbitrary Raspberry Pi asset can flash a valid but unbootable image.
-            arch_terms = (
-                ["arm64", "64bit", "aarch64"]
-                if os_arch == "64bit"
-                else ["armhf", "32bit", "armv7"]
-            )
-            selected_asset = next(
-                (
-                    asset
-                    for asset in valid_assets
-                    if ("raspberry_pi" in asset["name"].lower() or "-rpi" in asset["name"].lower())
-                    and any(term in asset["name"].lower() for term in arch_terms)
-                ),
-                None,
-            )
-            if selected_asset is None:
-                selected_asset = next(
-                    (
-                        asset
-                        for asset in valid_assets
-                        if any(term in asset["name"].lower() for term in arch_terms)
-                    ),
-                    None,
-                )
-            if selected_asset is None:
-                raise ValueError(
-                    f"No {os_arch} Raspberry Pi image was found in the latest {repo} release."
-                )
-            
-        download_url = selected_asset["browser_download_url"]
-        filename = selected_asset["name"]
-        
-        # Check if there is a matching .sha256 or .xz.sha256 in assets
-        sha256_url = ""
-        for asset in assets:
-            if asset["name"] == filename + ".sha256":
-                sha256_url = asset["browser_download_url"]
-                break
-                
-        return download_url, filename, sha256_url
-
     def _resolve_prebaked_image(self, image_type: ImageType, os_arch: str) -> str:
         """
-        Resolves the pre-baked OS image (MainsailOS or FluiddPi).
-        Queries GitHub API, downloads, caches, verifies, and decompresses as needed.
+        Resolves an immutable, checksummed pre-baked image manifest entry.
+        Downloads, caches, verifies, and decompresses as needed.
         Returns the path to the ready-to-flash .img file.
         """
-        import urllib.request
-        import ssl
-        
         cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
         os.makedirs(cache_dir, exist_ok=True)
-        
-        if image_type is ImageType.MAINSAILOS_PREBAKED:
-            repo = "mainsail-crew/MainsailOS"
-        elif image_type is ImageType.FLUIDDPI_PREBAKED:
-            repo = "fluidd-core/FluiddPi"
-            if os_arch != "32bit":
-                raise ValueError("FluiddPi does not provide a 64-bit Raspberry Pi image.")
-        else:
+        if image_type not in {ImageType.MAINSAILOS_PREBAKED, ImageType.FLUIDDPI_PREBAKED}:
             raise ValueError(f"Unsupported automatic pre-baked image type: {image_type.value}")
-        
-        self.set_device_state("FLASHING", 0, f"Querying latest release for {repo}...")
-        
-        try:
-            download_url, filename, sha256_url = self._get_latest_github_release_asset(repo, os_arch)
-        except Exception as e:
-            print(f"Error fetching latest release from GitHub API: {e}", file=sys.stderr)
-            # Fallback values if GitHub API rate limits or fails
-            if repo == "mainsail-crew/MainsailOS":
-                # Static fallback URLs for MainsailOS
-                version = "3.0.0"
-                arch_suffix = "arm64" if os_arch == "64bit" else "armhf"
-                filename = f"2026-05-06-MainsailOS-raspberry_pi-{arch_suffix}-trixie-{version}.img.xz"
-                download_url = f"https://github.com/mainsail-crew/MainsailOS/releases/download/{version}/{filename}"
-                sha256_url = download_url + ".sha256"
-            else:
-                # Static fallback URLs for FluiddPi
-                version = "v1.19.0"
-                filename = f"fluiddpi-rpi-lite-{version}.zip"
-                download_url = f"https://github.com/fluidd-core/FluiddPI/releases/download/{version}/{filename}"
-                sha256_url = ""
-                
-        cached_archive = os.path.join(cache_dir, filename)
+        return self._resolve_manifest_image(image_type.value, os_arch, cache_dir)
+
+    def _resolve_manifest_image(self, image_type: str, os_arch: str, cache_dir: str) -> str:
+        entry = ImageManifest.load_bundled().resolve(image_type, os_arch)
+        self.set_device_state(
+            "FLASHING", 0, f"Resolving pinned {image_type} image {entry.version}..."
+        )
+        cached_archive = os.path.join(cache_dir, entry.filename)
         cached_archive_sha = cached_archive + ".sha256"
-        
-        base_name = filename.replace(".xz", "").replace(".zip", "")
+        base_name = entry.filename.replace(".xz", "").replace(".zip", "")
         if not base_name.endswith(".img"):
             base_name += ".img"
         target_img = os.path.join(cache_dir, base_name)
-        
-        # Fetch remote SHA256 if available
-        remote_sha256 = ""
-        if sha256_url:
-            self.set_device_state("FLASHING", 0, "Checking checksum of latest online release...")
-            try:
-                ssl_ctx = ssl.create_default_context()
-                sha_req = urllib.request.Request(
-                    sha256_url,
-                    headers={'User-Agent': 'Mozilla/5.0'}
-                )
-                with urllib.request.urlopen(sha_req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as sha_response:
-                    sha_content = sha_response.read().decode('utf-8').strip()
-                    remote_sha256 = sha_content.split()[0]
-            except Exception as net_err:
-                print(f"Network checksum warning: {net_err}. Using cache if available.", file=sys.stderr)
-                
         self._check_cancelled()
-        
-        # Cache entries are reusable only when an atomically-published checksum
-        # sidecar matches the complete file.
-        archive_valid = self._cached_file_is_valid(cached_archive, remote_sha256)
+
+        archive_valid = self._cached_file_is_valid(cached_archive, entry.sha256)
         image_valid = self._cached_file_is_valid(target_img, raw_image=True)
-        need_download = not archive_valid and (not image_valid or bool(remote_sha256))
+        need_download = not archive_valid
         need_decompress = not image_valid
-            
-        # Download stage
+
         if need_download:
-            self._download_os_image(download_url, cached_archive, cached_archive_sha, remote_sha256, download_url, os_arch)
+            self._download_os_image(
+                entry.url, cached_archive, cached_archive_sha, entry.sha256, entry.url, os_arch
+            )
             need_decompress = True
-            
-        # Decompression stage
+
         if need_decompress:
             self._decompress_archive(cached_archive, target_img, "Decompressing OS image")
 
@@ -728,6 +610,8 @@ class Api:
         import time as _time
         import urllib.request
 
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", str(remote_sha256 or "")):
+            raise ValueError("Automatic image downloads require a pinned SHA-256 checksum.")
         if not redirected_url:
             raise ValueError("Cannot resolve download URL and no cached image is available.")
 
@@ -788,7 +672,7 @@ class Api:
 
             self.set_device_state("FLASHING", 0, "Verifying downloaded archive integrity...")
             calculated_sha256 = self._compute_sha256(archive_part, "Verifying archive integrity")
-            if remote_sha256 and calculated_sha256.lower() != remote_sha256.lower():
+            if calculated_sha256.lower() != remote_sha256.lower():
                 raise ValueError(
                     f"Integrity check failed: SHA256 mismatch.\nExpected: {remote_sha256}\nCalculated: {calculated_sha256}"
                 )
@@ -808,68 +692,9 @@ class Api:
         Downloads, caches, verifies, and decompresses as needed.
         Returns the path to the ready-to-flash .img file.
         """
-        import urllib.request
-
         cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
         os.makedirs(cache_dir, exist_ok=True)
-
-        arch_suffix = "arm64" if os_arch == "64bit" else "armhf"
-        target_img = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}.img")
-        cached_xz = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}.img.xz")
-        cached_xz_sha = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}.img.xz.sha256")
-
-        # Check for legacy fallback (raspios_lite.img in current dir)
-        local_legacy = os.path.join(os.path.dirname(os.path.abspath(__file__)), "raspios_lite.img")
-        if os.path.exists(local_legacy):
-            target_img = local_legacy
-
-        # Fetch remote SHA256 to check if cache is valid
-        self.set_device_state("FLASHING", 0, "Checking for latest official Raspberry Pi OS Lite release online...")
-        download_url = f"https://downloads.raspberrypi.org/raspios_lite_{arch_suffix}_latest"
-
-        req = urllib.request.Request(
-            download_url,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
-
-        remote_sha256 = ""
-        redirected_url = ""
-        # L6 FIX: Explicit SSL context for certificate validation on all remote requests.
-        import ssl
-        ssl_ctx = ssl.create_default_context()
-        try:
-            with urllib.request.urlopen(req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as response:
-                redirected_url = response.geturl()
-
-            sha_url = redirected_url + ".sha256"
-            sha_req = urllib.request.Request(
-                sha_url,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            )
-            with urllib.request.urlopen(sha_req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as sha_response:
-                sha_content = sha_response.read().decode('utf-8').strip()
-                remote_sha256 = sha_content.split()[0]
-        except Exception as net_err:
-            print(f"Network check warning: {net_err}. Using cache if available.", file=sys.stderr)
-
-        self._check_cancelled()
-
-        archive_valid = self._cached_file_is_valid(cached_xz, remote_sha256)
-        image_valid = self._cached_file_is_valid(target_img, raw_image=True)
-        need_download = not archive_valid and (not image_valid or bool(remote_sha256))
-        need_decompress = not image_valid
-
-        # Download stage
-        if need_download:
-            self._download_os_image(download_url, cached_xz, cached_xz_sha, remote_sha256, redirected_url, arch_suffix)
-            need_decompress = True
-
-        # Decompression stage
-        if need_decompress:
-            self._decompress_xz(cached_xz, target_img, "Decompressing OS image")
-
-        self._validate_raw_image(target_img)
-        return target_img
+        return self._resolve_manifest_image(ImageType.RASPIOS_VANILLA.value, os_arch, cache_dir)
 
     def _resolve_custom_image(self, image_path: str) -> str:
         """
@@ -1024,37 +849,65 @@ class Api:
         if not ip or not _IP_HOST_RE.match(ip.strip()):
             return {"status": "failed", "message": "Invalid IP address or hostname format."}
 
-        self._interrupt_bootstrap("SSH session was replaced before bootstrap completed.")
+        candidate = SSHSession()
         with self._ssh_lock:
-            self._ssh.close()
-            self._ssh_gen += 1
-            current_gen = self._ssh_gen
-        with self._power_lock:
-            self._remote_power_authority = None
-            self._power_controller = None
-            self._power_target = None
+            self._ssh_attempt_gen += 1
+            attempt_gen = self._ssh_attempt_gen
 
         self.set_device_state("CONNECTING", 50, f"Establishing SSH connection to {ip}...")
         
         import paramiko
         try:
-            success = self._ssh.connect(ip, username, password)
+            success = candidate.connect(ip, username, password)
         except paramiko.BadHostKeyException as host_key_err:
+            candidate.close()
             with self._ssh_lock:
-                if current_gen == self._ssh_gen:
-                    self.set_device_state("ERROR", 0, f"SSH Host Key Mismatch for {ip}.")
+                current_attempt = attempt_gen == self._ssh_attempt_gen
+                retained = current_attempt and self._ssh_session_is_active(self._ssh)
+            if not current_attempt:
+                return {"status": "failed", "message": "Connection superseded by a newer attempt."}
+            if retained:
+                self.set_device_state("SSH_READY", 100, "New SSH host key was rejected; existing session retained.")
+            else:
+                self.set_device_state("ERROR", 0, f"SSH Host Key Mismatch for {ip}.")
             return {"status": "host_key_mismatch", "message": str(host_key_err)}
         except Exception as conn_err:
+            candidate.close()
             sanitized_msg = self._sanitize_error(conn_err)
             with self._ssh_lock:
-                if current_gen == self._ssh_gen:
-                    self.set_device_state("ERROR", 0, f"SSH connection failed: {sanitized_msg}")
+                current_attempt = attempt_gen == self._ssh_attempt_gen
+                retained = current_attempt and self._ssh_session_is_active(self._ssh)
+            if not current_attempt:
+                return {"status": "failed", "message": "Connection superseded by a newer attempt."}
+            if retained:
+                self.set_device_state("SSH_READY", 100, "New SSH connection failed; existing session retained.")
+            else:
+                self.set_device_state("ERROR", 0, f"SSH connection failed: {sanitized_msg}")
             return {"status": "failed", "message": sanitized_msg}
 
         if success:
             with self._ssh_lock:
-                if current_gen != self._ssh_gen:
-                    return {"status": "failed", "message": "Connection superseded by a newer attempt."}
+                if attempt_gen != self._ssh_attempt_gen:
+                    superseded = True
+                    previous_session = None
+                    current_gen = None
+                else:
+                    superseded = False
+                    previous_session = self._ssh
+                    self._ssh = candidate
+                    self._ssh_gen += 1
+                    current_gen = self._ssh_gen
+
+            if superseded:
+                candidate.close()
+                return {"status": "failed", "message": "Connection superseded by a newer attempt."}
+
+            self._interrupt_bootstrap("SSH session was replaced before bootstrap completed.")
+            previous_session.close()
+            with self._power_lock:
+                self._remote_power_authority = None
+                self._power_controller = None
+                self._power_target = None
 
             # Reachability (including an open Moonraker port) is not evidence
             # that a KACE installation workflow completed successfully.
@@ -1146,12 +999,19 @@ class Api:
                     # Stale callbacks should not clear the status
                     self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
                 
-            self._ssh.run_command_stream("bash", on_data, on_close, cols=cols, rows=rows)
+            candidate.run_command_stream("bash", on_data, on_close, cols=cols, rows=rows)
             return {"status": "success", "power_config": remote_power}
         else:
+            candidate.close()
             with self._ssh_lock:
-                if current_gen == self._ssh_gen:
-                    self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
+                current_attempt = attempt_gen == self._ssh_attempt_gen
+                retained = current_attempt and self._ssh_session_is_active(self._ssh)
+            if not current_attempt:
+                return {"status": "failed", "message": "Connection superseded by a newer attempt."}
+            if retained:
+                self.set_device_state("SSH_READY", 100, "New SSH connection failed; existing session retained.")
+            else:
+                self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
             return {"status": "failed", "message": "Verify user password or network path."}
 
     def start_bootstrap(self, dashboard_ui: str) -> dict:
@@ -1218,8 +1078,11 @@ class Api:
         """
         self._interrupt_bootstrap("SSH session was closed before bootstrap completed.")
         with self._ssh_lock:
-            self._ssh.close()
+            previous_session = self._ssh
+            self._ssh = SSHSession()
+            self._ssh_attempt_gen += 1
             self._ssh_gen += 1
+        previous_session.close()
         # Keep the last schema that was successfully read from this device.
         # Moonraker power control is independent of the interactive SSH session;
         # dropping this authority would silently fall back to stale local hints.

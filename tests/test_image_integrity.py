@@ -117,13 +117,16 @@ def test_partial_cached_image_without_sidecar_is_reextracted(api, tmp_path, monk
     target.write_bytes(content[:4096])
 
     monkeypatch.setattr(main, "__file__", str(tmp_path / "main.py"))
-    monkeypatch.setattr(
-        api,
-        "_get_latest_github_release_asset",
-        lambda _repo, _arch: ("https://invalid/fixture.zip", "fixture.zip", ""),
+    entry = SimpleNamespace(
+        version="fixture-v1",
+        url="https://invalid/fixture.zip",
+        filename="fixture.zip",
+        sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
     )
+    manifest = SimpleNamespace(resolve=lambda *_args: entry)
+    monkeypatch.setattr(main.ImageManifest, "load_bundled", lambda: manifest)
 
-    resolved = api._resolve_prebaked_image(ImageType.FLUIDDPI_PREBAKED, "32bit")
+    resolved = api._resolve_prebaked_image(ImageType.MAINSAILOS_PREBAKED, "32bit")
     assert resolved == str(target)
     assert target.read_bytes() == content
     assert api._cached_file_is_valid(str(target), raw_image=True)
@@ -242,7 +245,9 @@ def test_cancelled_download_removes_part_and_preserves_canonical(api, tmp_path, 
     monkeypatch.setattr(api, "_check_cancelled", cancel_after_first_chunk)
 
     with pytest.raises(ValueError, match="synthetic cancellation"):
-        api._download_os_image("unused", str(cached), str(checksum), "", "https://invalid", "arm64")
+        api._download_os_image(
+            "unused", str(cached), str(checksum), "0" * 64, "https://invalid", "arm64"
+        )
 
     assert cached.read_bytes() == b"previous archive"
     assert checksum.read_text(encoding="utf-8") == "previous checksum\n"

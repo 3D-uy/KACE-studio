@@ -8,6 +8,7 @@ a = Analysis(
     datas=[
         ('web', 'web'),
         ('bootstrap.sh', '.'),
+        ('image-manifest.json', '.'),
         ('release-contract.json', '.'),
     ],  # Includes vendor/fonts, vendor/xterm, vendor/fontawesome
     hiddenimports=[],

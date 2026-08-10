@@ -65,8 +65,9 @@ def test_sftp_route_sanitizes_internal_paths(tmp_path):
     assert "Protected Path" in json.loads(body)["error"]
 
 
-def test_github_release_query_uses_bounded_http_timeout(monkeypatch):
+def test_pinned_image_download_uses_bounded_http_timeout(monkeypatch, tmp_path):
     calls = []
+    payload = b"pinned payload"
 
     class Response:
         def __enter__(self):
@@ -75,44 +76,48 @@ def test_github_release_query_uses_bounded_http_timeout(monkeypatch):
         def __exit__(self, *_args):
             return False
 
-        def read(self):
-            return json.dumps({
-                "assets": [{
-                    "name": "image-rpi-arm64.img.xz",
-                    "browser_download_url": "https://example.invalid/image.img.xz",
-                }]
-            }).encode()
+        def info(self):
+            return {"Content-Length": str(len(payload))}
+
+        def read(self, _size):
+            if getattr(self, "done", False):
+                return b""
+            self.done = True
+            return payload
 
     def fake_urlopen(*args, **kwargs):
         calls.append((args, kwargs))
         return Response()
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("shutil.disk_usage", lambda _path: type("Usage", (), {"free": 6 * 1024**3})())
 
-    Api()._get_latest_github_release_asset("owner/repo", "64bit")
+    Api()._download_os_image(
+        "https://example.invalid/image.img.xz",
+        str(tmp_path / "image.img.xz"),
+        str(tmp_path / "image.img.xz.sha256"),
+        __import__("hashlib").sha256(payload).hexdigest(),
+        "https://example.invalid/image.img.xz",
+        "arm64",
+    )
 
     assert calls
     assert calls[0][1]["timeout"] == HTTP_TIMEOUT_SECONDS
     assert HTTP_TIMEOUT_SECONDS > 0
 
 
-def test_github_release_query_never_falls_back_to_wrong_architecture(monkeypatch):
-    class Response:
-        def __enter__(self):
-            return self
+def test_automatic_download_rejects_missing_checksum_before_network(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("network must not run")),
+    )
 
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return json.dumps({
-                "assets": [{
-                    "name": "image-rpi-armhf.img.xz",
-                    "browser_download_url": "https://example.invalid/image.img.xz",
-                }]
-            }).encode()
-
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response())
-
-    with pytest.raises(ValueError, match="No 64bit Raspberry Pi image"):
-        Api()._get_latest_github_release_asset("owner/repo", "64bit")
+    with pytest.raises(ValueError, match="pinned SHA-256"):
+        Api()._download_os_image(
+            "https://example.invalid/image.img.xz",
+            str(tmp_path / "image.img.xz"),
+            str(tmp_path / "image.img.xz.sha256"),
+            "",
+            "https://example.invalid/image.img.xz",
+            "arm64",
+        )

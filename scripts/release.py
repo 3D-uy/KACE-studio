@@ -19,6 +19,8 @@ from typing import Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 CONTRACT_PATH = ROOT / "release-contract.json"
 LOCK_PATH = ROOT / "requirements.lock"
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
@@ -50,6 +52,17 @@ def load_contract(path: Path = CONTRACT_PATH) -> dict:
     if contract.get("schema") != "kace-studio-release-contract/v1":
         raise ReleaseContractError("unsupported release contract schema")
     return contract
+
+
+def verify_image_manifest(path: Path) -> int:
+    """Require every releasable automatic image to satisfy the runtime contract."""
+    from backend.image_manifest import ImageManifest, ManifestError
+
+    try:
+        manifest = ImageManifest.load(path)
+    except ManifestError as exc:
+        raise ReleaseContractError(f"image manifest is invalid: {exc}") from exc
+    return len(manifest.entries)
 
 
 def _require_pattern(value: object, pattern: re.Pattern[str], label: str) -> str:
@@ -89,6 +102,7 @@ def verify_inputs(contract: dict | None = None, root: Path = ROOT) -> dict:
     installer_hash = _require_pattern(
         kace.get("installer_sha256"), SHA256, "installer_sha256"
     )
+    image_count = verify_image_manifest(root / "image-manifest.json")
 
     bootstrap = root / "bootstrap.sh"
     if sha256_file(bootstrap) != bootstrap_hash:
@@ -123,6 +137,7 @@ def verify_inputs(contract: dict | None = None, root: Path = ROOT) -> dict:
         "installer_sha256": installer_hash,
         "resources": files,
         "requirements_lock_sha256": sha256_file(lock_path),
+        "image_manifest_entries": image_count,
     }
 
 

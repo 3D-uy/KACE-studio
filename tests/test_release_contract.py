@@ -43,7 +43,30 @@ def test_release_inputs_have_one_consistent_immutable_bootstrap_contract():
     assert len(facts["bootstrap_sha256"]) == 64
     assert len(facts["installer_ref"]) == 40
     assert len(facts["installer_sha256"]) == 64
-    assert len(facts["resources"]) == 30
+    assert ROOT / "image-manifest.json" in facts["resources"]
+
+
+def test_release_verification_rejects_unchecksummed_image_manifest(tmp_path):
+    manifest = tmp_path / "image-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "kace-studio-image-manifest/v1",
+                "images": [
+                    {
+                        "image_type": "raspios_vanilla",
+                        "architecture": "64bit",
+                        "version": "unsafe",
+                        "url": "https://example.invalid/image.img.xz",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(release.ReleaseContractError, match="image manifest"):
+        release.verify_image_manifest(manifest)
 
 
 def test_ci_uses_locked_inputs_and_immutable_actions():
@@ -59,7 +82,7 @@ def test_ci_uses_locked_inputs_and_immutable_actions():
 
 def test_spec_bundles_every_runtime_contract_root():
     spec = (ROOT / "main.spec").read_text(encoding="utf-8")
-    for source in ("web", "bootstrap.sh", "release-contract.json"):
+    for source in ("web", "bootstrap.sh", "image-manifest.json", "release-contract.json"):
         assert repr(source) in spec
 
 
@@ -107,13 +130,16 @@ def test_release_input_verification_rejects_internal_installer_drift(tmp_path):
         "requirements.txt",
         "requirements-dev.txt",
         "bootstrap.sh",
+        "image-manifest.json",
     ):
         (tmp_path / name).write_bytes((ROOT / name).read_bytes())
     (tmp_path / "web").mkdir()
     (tmp_path / "web" / "index.html").write_text("ok", encoding="utf-8")
     contract_path = tmp_path / "release-contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    contract["bundled_resources"] = ["bootstrap.sh", "release-contract.json", "web"]
+    contract["bundled_resources"] = [
+        "bootstrap.sh", "image-manifest.json", "release-contract.json", "web"
+    ]
     contract["kace"]["installer_ref"] = "f" * 40
     contract_path.write_text(json.dumps(contract), encoding="utf-8")
     with pytest.raises(release.ReleaseContractError, match="installer ref"):

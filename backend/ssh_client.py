@@ -219,6 +219,16 @@ class SSHSession:
             except Exception as e:
                 print(f"Error resizing remote PTY: {e}")
 
+    def is_connected(self) -> bool:
+        """Return whether this isolated session still owns an active transport."""
+        if self.client is None:
+            return False
+        try:
+            transport = self.client.get_transport()
+            return bool(transport and transport.is_active())
+        except Exception:
+            return False
+
     def close(self):
         """
         Safely tears down active channels and connections.

@@ -56,6 +56,25 @@ class Win32DiskWriter:
             ctypes.c_void_p
         ]
         self._WriteFile.restype = wintypes.BOOL
+
+        self._ReadFile = kernel32.ReadFile
+        self._ReadFile.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+        ]
+        self._ReadFile.restype = wintypes.BOOL
+
+        self._SetFilePointerEx = kernel32.SetFilePointerEx
+        self._SetFilePointerEx.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_longlong,
+            ctypes.POINTER(ctypes.c_longlong),
+            wintypes.DWORD,
+        ]
+        self._SetFilePointerEx.restype = wintypes.BOOL
         
         self._CloseHandle = kernel32.CloseHandle
         self._CloseHandle.argtypes = [wintypes.HANDLE]
@@ -183,9 +202,40 @@ class Win32DiskWriter:
             
         return bytes_written.value
 
+    def seek(self, offset: int):
+        if self._is_invalid(self.handle):
+            raise OSError("Handle is closed or invalid.")
+        if not isinstance(offset, int) or offset < 0:
+            raise ValueError("Disk offset must be a non-negative integer.")
+        new_position = ctypes.c_longlong(0)
+        if not self._SetFilePointerEx(
+            self.handle, ctypes.c_longlong(offset), ctypes.byref(new_position), 0
+        ):
+            err_code = ctypes.windll.kernel32.GetLastError()
+            raise OSError(None, f"SetFilePointerEx failed with GetLastError: {err_code}", self.physical_path, err_code)
+        if new_position.value != offset:
+            raise OSError(f"Physical disk seek reached {new_position.value} instead of {offset}.")
+        return new_position.value
+
+    def read(self, size: int) -> bytes:
+        if self._is_invalid(self.handle):
+            raise OSError("Handle is closed or invalid.")
+        if not isinstance(size, int) or size <= 0:
+            raise ValueError("Disk read size must be a positive integer.")
+        buffer = ctypes.create_string_buffer(size)
+        bytes_read = wintypes.DWORD(0)
+        if not self._ReadFile(
+            self.handle, buffer, size, ctypes.byref(bytes_read), None
+        ):
+            err_code = ctypes.windll.kernel32.GetLastError()
+            raise OSError(None, f"ReadFile failed with GetLastError: {err_code}", self.physical_path, err_code)
+        return buffer.raw[:bytes_read.value]
+
     def flush(self):
         if not self._is_invalid(self.handle):
-            self._FlushFileBuffers(self.handle)
+            if not self._FlushFileBuffers(self.handle):
+                err_code = ctypes.windll.kernel32.GetLastError()
+                raise OSError(None, f"FlushFileBuffers failed with GetLastError: {err_code}", self.physical_path, err_code)
 
     def close(self):
         if not self._is_invalid(self.handle):
@@ -201,6 +251,40 @@ class Win32DiskWriter:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+
+def _verify_disk_readback(dest, image_size, expected_sha256, chunk_size=4 * 1024 * 1024, progress_callback=None):
+    """Hash exactly the source-image byte range from the physical disk."""
+    if not isinstance(image_size, int) or image_size <= 0:
+        raise ValueError("Readback image size must be a positive integer.")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", str(expected_sha256 or "")):
+        raise ValueError("Readback requires a valid expected SHA-256.")
+    if not isinstance(chunk_size, int) or chunk_size <= 0 or chunk_size % 512 != 0:
+        raise ValueError("Readback chunk size must be a positive multiple of 512 bytes.")
+
+    dest.seek(0)
+    digest = hashlib.sha256()
+    bytes_read = 0
+    while bytes_read < image_size:
+        requested = min(chunk_size, image_size - bytes_read)
+        physical_read_size = ((requested + 511) // 512) * 512
+        chunk = dest.read(physical_read_size)
+        if len(chunk) < requested:
+            raise OSError(
+                f"Physical disk readback ended early at {bytes_read} of {image_size} bytes."
+            )
+        digest.update(chunk[:requested])
+        bytes_read += requested
+        if progress_callback is not None:
+            progress_callback(bytes_read, image_size)
+
+    actual_sha256 = digest.hexdigest()
+    if actual_sha256.lower() != expected_sha256.lower():
+        raise OSError(
+            "Physical disk readback SHA-256 mismatch: "
+            f"expected {expected_sha256.lower()}, calculated {actual_sha256}."
+        )
+    return actual_sha256
 
 def safe_print_err(msg):
     try:
@@ -505,7 +589,37 @@ def main():
                     safe_print_out(f"PROGRESS: {pct}")
                     write_status(status_file, "writing", progress=pct, message=f"Writing blocks: {pct}%")
                     last_pct = pct
-                    
+
+            dest.flush()
+            safe_print_out("STATUS: Verifying physical disk readback...")
+            write_status(
+                status_file,
+                "verifying",
+                progress=0,
+                message="Verifying physical disk readback...",
+            )
+            last_verify_pct = [-1]
+
+            def report_readback(bytes_read, total_bytes):
+                pct = int((bytes_read / total_bytes) * 100)
+                if pct != last_verify_pct[0]:
+                    safe_print_out(f"VERIFY_PROGRESS: {pct}")
+                    write_status(
+                        status_file,
+                        "verifying",
+                        progress=pct,
+                        message=f"Verifying physical disk readback: {pct}%",
+                    )
+                    last_verify_pct[0] = pct
+
+            _verify_disk_readback(
+                dest,
+                image_size,
+                expected_image_sha256,
+                chunk_size=chunk_size,
+                progress_callback=report_readback,
+            )
+
         # 3. Bring disk back online to allow Windows to mount partitions (non-fatal)
         safe_print_out("STATUS: Bringing disk back online...")
         write_status(status_file, "bringing_online", progress=95, message="Bringing disk online...")
