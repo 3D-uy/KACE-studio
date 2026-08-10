@@ -30,6 +30,7 @@ from backend.power_controller import MoonrakerPowerController, PowerControllerEr
 from backend.remote_power_config import RemotePowerConfigError, parse_remote_power_config
 from backend.workflow_events import KaceWorkflowEventParser
 from backend.bootstrap_events import BootstrapEventParser
+from backend.resources import bundled_path, verify_runtime_resources
 import mimetypes
 
 HTTP_TIMEOUT_SECONDS = 30
@@ -1438,18 +1439,14 @@ class Api:
 
 def main():
     api = Api()
-    if hasattr(sys, '_MEIPASS'):
-        current_dir = sys._MEIPASS
-    else:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-    web_dir = os.path.join(current_dir, "web")
-    html_path = os.path.join(web_dir, "index.html")
+    web_dir = bundled_path("web")
+    html_path = web_dir / "index.html"
     
     if not os.path.exists(html_path):
         print(f"Error: Frontend assets not found at {html_path}", file=sys.stderr)
         sys.exit(1)
         
-    wsgi_app = KaceWsgiApp(web_dir, api)
+    wsgi_app = KaceWsgiApp(str(web_dir), api)
     
     window = webview.create_window(
         title="KACE Studio Desktop Launcher",
@@ -1466,7 +1463,11 @@ def main():
 
 if __name__ == "__main__":
     # Elevated disk flashing mode trigger
-    if len(sys.argv) > 1 and sys.argv[1] == "--write-disk":
+    if len(sys.argv) > 1 and sys.argv[1] == "--verify-package":
+        verify_runtime_resources()
+        print("KACE Studio packaged resource contract passed.")
+        sys.exit(0)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--write-disk":
         from backend.kace_writer import main as writer_main
         # Shift args to remove program name and the write-disk trigger
         sys.argv = sys.argv[1:]

@@ -35,7 +35,9 @@ The two projects are independent repositories with a deliberately narrow integra
 5. The bootstrap installs Klipper, Moonraker, the selected web interface, optional Crowsnest support, and KACE, then launches the KACE wizard in the same SSH terminal.
 6. Studio reports success only after the wizard exits successfully and the bootstrap verifies the final requested relay configuration.
 
-Studio CI fetches `scripts/bootstrap.sh` from an immutable KACE commit, verifies its SHA-256, and supplies that exact file to the PyInstaller build. Source mode prefers the sibling `KACE/scripts/bootstrap.sh` checkout when both repositories share this workspace; packaged mode uses the bundled copy.
+`release-contract.json` is the single machine-readable source for the immutable KACE bootstrap/installer tuple and the exact packaging toolchain. Studio CI downloads that bootstrap, verifies it before the build, then inspects the finished PyInstaller archive and compares every contract-owned resource byte for byte. Source mode prefers the sibling `KACE/scripts/bootstrap.sh` checkout when both repositories share this workspace; packaged mode resolves only the `_MEIPASS` copy. Resource resolution never depends on the process working directory.
+
+The build also emits `KACE-studio.release.json` next to the executable. It records the Studio commit and dirty state, KACE bootstrap and installed-source refs/hashes, Python/PyInstaller identity, runner image, dependency-lock/spec hashes, every bundled-resource hash, and the final EXE SHA-256. This is an external manifest so hashing it cannot change the executable it identifies. CI fixes `PYTHONHASHSEED` and the PE timestamp to the source commit, builds twice from a clean checkout, and rejects different hashes. The manifest distinguishes that same-builder proof from independent-builder reproduction, which remains false until separately demonstrated.
 
 ## Current status
 

@@ -5,7 +5,11 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('web', 'web'), ('bootstrap.sh', '.')],  # Includes vendor/fonts, vendor/xterm, vendor/fontawesome
+    datas=[
+        ('web', 'web'),
+        ('bootstrap.sh', '.'),
+        ('release-contract.json', '.'),
+    ],  # Includes vendor/fonts, vendor/xterm, vendor/fontawesome
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

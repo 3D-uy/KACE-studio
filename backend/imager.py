@@ -8,6 +8,7 @@ import uuid
 import re
 from backend.sha512_crypt import hash_password
 from backend.provisioning import ImageType, WifiSecurity, validate_provisioning
+from backend.resources import resolve_bootstrap_source as _resolve_bootstrap_resource
 
 # Set KACE_DEBUG=1 in the environment to enable verbose path/status logging.
 # Do NOT enable in packaged/production builds — logs leak filesystem paths.
@@ -340,16 +341,7 @@ def _sha256_file(file_path: str) -> str:
 
 def resolve_bootstrap_source() -> str:
     """Return the exact bootstrap resource used by injection in every runtime."""
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(current_dir)
-    if hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, "bootstrap.sh")
-    sibling_path = os.path.abspath(
-        os.path.join(project_root, "..", "KACE", "scripts", "bootstrap.sh")
-    )
-    if os.path.isfile(sibling_path):
-        return sibling_path
-    return os.path.join(project_root, "bootstrap.sh")
+    return str(_resolve_bootstrap_resource())
 
 
 def bootstrap_preflight_facts() -> tuple[str, bool, str]:

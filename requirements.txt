@@ -1,5 +1,5 @@
-# Runtime dependencies (pinned to tested versions)
-pywebview>=6.2.1,<7.0
-paramiko>=5.0.0,<6.0
-pcrypt>=1.0.5,<2.0
-pytz>=2026.2,<2027.0
+# Direct runtime inputs. CI installs the fully resolved, hashed requirements.lock.
+pywebview==6.2.1
+paramiko==5.0.0
+pcrypt==1.0.5
+pytz==2026.3.post1

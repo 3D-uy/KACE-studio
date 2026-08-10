@@ -1,0 +1,25 @@
+{
+  "schema": "kace-studio-release-contract/v1",
+  "product": "KACE Studio",
+  "artifact": "KACE-studio.exe",
+  "entrypoint": "main.py",
+  "spec": "main.spec",
+  "python": "3.12.13",
+  "pyinstaller": "6.21.0",
+  "build_environment": {
+    "PYTHONHASHSEED": "1",
+    "SOURCE_DATE_EPOCH": "git-commit-timestamp"
+  },
+  "kace": {
+    "repository": "https://github.com/3D-uy/KACE.git",
+    "bootstrap_ref": "e392414334d48dccfd6d177035a5a47b9bf5f7be",
+    "bootstrap_sha256": "cd659dd38f5e4c3557f55bbddcffd71fe46ab761e51185bbdafebfbcea9b2b9e",
+    "installer_ref": "5a709db8b26fa0cd2ce225d9a0f15af610a73c34",
+    "installer_sha256": "2b805f348e429e3f35183f9b9989bf3ea4d56f5af95aefac9807447dbd256805"
+  },
+  "bundled_resources": [
+    "bootstrap.sh",
+    "release-contract.json",
+    "web"
+  ]
+}

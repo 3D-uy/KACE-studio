@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
+from backend.resources import load_release_contract
 
-EXPECTED_BOOTSTRAP_SHA256 = (
-    "76895a2ebd66b6bdfe4c6ee162af0978f65f2d2dd6e84803760dadb5e15bebbb"
-)
+
+EXPECTED_BOOTSTRAP_SHA256 = load_release_contract()["kace"]["bootstrap_sha256"]
 MIN_CACHE_FREE_BYTES = 5 * 1024**3
 MIN_AUTOMATIC_TARGET_BYTES = 8_000_000_000
 

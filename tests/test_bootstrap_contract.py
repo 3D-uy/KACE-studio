@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -18,6 +19,7 @@ from backend.provisioning import EXPECTED_BOOTSTRAP_SHA256
 ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "bootstrap.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+RELEASE_CONTRACT = ROOT / "release-contract.json"
 AUTHORITATIVE_BOOTSTRAP = ROOT.parent / "KACE" / "scripts" / "bootstrap.sh"
 
 
@@ -32,10 +34,9 @@ def _find_bash() -> str | None:
 
 
 def _workflow_value(name: str) -> str:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    match = re.search(rf"^\s{{2}}{name}:\s*([0-9a-f]+)\s*$", workflow, re.MULTILINE)
-    assert match, f"Missing workflow value: {name}"
-    return match.group(1)
+    contract = json.loads(RELEASE_CONTRACT.read_text(encoding="utf-8"))
+    key = name.removeprefix("KACE_BOOTSTRAP_").lower()
+    return contract["kace"][f"bootstrap_{key}"]
 
 
 def test_packaged_bootstrap_matches_pinned_sha256():
@@ -51,7 +52,9 @@ def test_workflow_fetches_bootstrap_from_immutable_reference():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     ref = _workflow_value("KACE_BOOTSTRAP_REF")
     assert re.fullmatch(r"[0-9a-f]{40}", ref)
-    assert "KACE/{ref}/scripts/bootstrap.sh" in workflow
+    assert "python scripts/release.py fetch-bootstrap" in workflow
+    assert "KACE_BOOTSTRAP_REF:" not in workflow
+    assert ref in RELEASE_CONTRACT.read_text(encoding="utf-8")
     assert "KACE/main/scripts/bootstrap.sh" not in workflow
 
 
