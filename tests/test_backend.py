@@ -2,6 +2,8 @@ import unittest
 import sys
 import os
 import tempfile
+import ast
+import inspect
 from unittest.mock import patch
 
 # Include project root in PATH
@@ -55,6 +57,53 @@ from backend.imager import (
 from backend.provisioning import ImageType
 
 class TestKaceBackend(unittest.TestCase):
+
+    def test_inject_config_never_writes_boot_files_with_direct_open(self):
+        """Every published boot file must go through an atomic writer."""
+        from backend.imager import inject_config
+
+        tree = ast.parse(inspect.getsource(inject_config))
+        direct_writes = []
+        for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+            if not isinstance(call.func, ast.Name) or call.func.id != "open":
+                continue
+            mode = None
+            if len(call.args) >= 2 and isinstance(call.args[1], ast.Constant):
+                mode = call.args[1].value
+            for keyword in call.keywords:
+                if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant):
+                    mode = keyword.value.value
+            if isinstance(mode, str) and any(flag in mode for flag in "wax+"):
+                direct_writes.append(call.lineno)
+
+        self.assertEqual(direct_writes, [], f"direct boot writes at source lines {direct_writes}")
+
+    def test_userconf_publish_failure_preserves_existing_boot_file(self):
+        from backend import imager
+
+        with tempfile.TemporaryDirectory() as boot_dir:
+            userconf_path = os.path.join(boot_dir, "userconf.txt")
+            with open(userconf_path, "w", encoding="utf-8") as existing:
+                existing.write("existing:$6$preserve-me\n")
+
+            real_atomic_write = imager._write_text_atomically
+
+            def fail_userconf_publish(path, content):
+                if os.path.normcase(path) == os.path.normcase(userconf_path):
+                    raise OSError("synthetic publish failure")
+                return real_atomic_write(path, content)
+
+            with patch("backend.imager.get_boot_drive_letter", return_value=boot_dir), \
+                 patch("backend.imager._write_text_atomically", side_effect=fail_userconf_publish), \
+                 patch("backend.imager.subprocess.run"):
+                result = imager.inject_config(
+                    7, "printer", "", "", "validpass123", "mainsail"
+                )
+
+            self.assertFalse(result)
+            with open(userconf_path, "r", encoding="utf-8") as existing:
+                self.assertEqual(existing.read(), "existing:$6$preserve-me\n")
+            self.assertFalse(any(name.endswith(".part") for name in os.listdir(boot_dir)))
 
     def test_atomic_boot_config_write_preserves_previous_content_on_failure(self):
         with tempfile.TemporaryDirectory() as boot_dir:
@@ -699,23 +748,20 @@ class TestKaceBackend(unittest.TestCase):
             
         temp_boot = tempfile.mkdtemp()
         try:
-            original_open = open
-            def mock_open(file, mode="r", *args, **kwargs):
-                if temp_boot in str(file) and "w" in mode:
-                    raise PermissionError("[Errno 13] Permission denied (Mocked read-only)")
-                return original_open(file, mode, *args, **kwargs)
-                
-            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
-                with patch("builtins.open", side_effect=mock_open):
-                    success = inject_config(
-                        disk_number=99,
-                        hostname="kace-test",
-                        wifi_ssid="ssid",
-                        wifi_password="validwifi123",
-                        ssh_password="validpass123",
-                        dashboard_ui="mainsail"
-                    )
-                    self.assertFalse(success)
+            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot), \
+                 patch(
+                     "backend.imager.tempfile.mkstemp",
+                     side_effect=PermissionError("[Errno 13] Permission denied (Mocked read-only)"),
+                 ):
+                success = inject_config(
+                    disk_number=99,
+                    hostname="kace-test",
+                    wifi_ssid="ssid",
+                    wifi_password="validwifi123",
+                    ssh_password="validpass123",
+                    dashboard_ui="mainsail"
+                )
+                self.assertFalse(success)
         finally:
             shutil.rmtree(temp_boot)
 

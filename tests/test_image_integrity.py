@@ -118,6 +118,8 @@ def test_partial_cached_image_without_sidecar_is_reextracted(api, tmp_path, monk
 
     monkeypatch.setattr(main, "__file__", str(tmp_path / "main.py"))
     entry = SimpleNamespace(
+        image_type=ImageType.MAINSAILOS_PREBAKED.value,
+        architecture="32bit",
         version="fixture-v1",
         url="https://invalid/fixture.zip",
         filename="fixture.zip",
@@ -199,6 +201,7 @@ def test_custom_prebaked_family_reaches_injection_without_vanilla_inference(
     captured = {}
     monkeypatch.setattr(api, "_resolve_custom_image", lambda path: path)
     monkeypatch.setattr(api, "_validate_raw_image", lambda _path: 1024)
+    monkeypatch.setattr(api, "_preflight_prebaked_image", lambda *_args: None)
     monkeypatch.setattr(main, "flash_drive", lambda *_args: (True, ""))
 
     def fake_inject(*_args, **kwargs):

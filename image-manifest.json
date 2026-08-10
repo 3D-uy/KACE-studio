@@ -20,14 +20,46 @@
       "architecture": "32bit",
       "version": "3.0.0",
       "url": "https://github.com/mainsail-crew/MainsailOS/releases/download/3.0.0/2026-05-06-MainsailOS-raspberry_pi-armhf-trixie-3.0.0.img.xz",
-      "sha256": "00065697ef89eb66b001ef8e774f30609cdfdbb634125cf5a1726468ffe2aa55"
+      "sha256": "00065697ef89eb66b001ef8e774f30609cdfdbb634125cf5a1726468ffe2aa55",
+      "preflight": {
+        "family": "mainsailos",
+        "version": "3.0.0",
+        "source_commit": "77ff5c1eb2731f53440ff2f251b379e1916964ba",
+        "services": [
+          "headless_nm.service",
+          "klipper.service",
+          "moonraker.service"
+        ],
+        "capabilities": [
+          "boot_firmware_mount",
+          "networkmanager_boot_profile",
+          "printer_data_layout",
+          "systemd_first_boot"
+        ]
+      }
     },
     {
       "image_type": "mainsailos_prebaked",
       "architecture": "64bit",
       "version": "3.0.0",
       "url": "https://github.com/mainsail-crew/MainsailOS/releases/download/3.0.0/2026-05-06-MainsailOS-raspberry_pi-arm64-trixie-3.0.0.img.xz",
-      "sha256": "a4610653b041b80c8283ec7c3ae629fcf700c09f894a156624ef44d8eda15339"
+      "sha256": "a4610653b041b80c8283ec7c3ae629fcf700c09f894a156624ef44d8eda15339",
+      "preflight": {
+        "family": "mainsailos",
+        "version": "3.0.0",
+        "source_commit": "77ff5c1eb2731f53440ff2f251b379e1916964ba",
+        "services": [
+          "headless_nm.service",
+          "klipper.service",
+          "moonraker.service"
+        ],
+        "capabilities": [
+          "boot_firmware_mount",
+          "networkmanager_boot_profile",
+          "printer_data_layout",
+          "systemd_first_boot"
+        ]
+      }
     }
   ]
 }

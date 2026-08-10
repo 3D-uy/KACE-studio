@@ -9,6 +9,11 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from backend.resources import bundled_path
+from backend.prebaked_preflight import (
+    PrebakedContract,
+    PrebakedPreflightError,
+    parse_prebaked_contract,
+)
 
 
 SCHEMA = "kace-studio-image-manifest/v1"
@@ -28,6 +33,7 @@ class ImageManifestEntry:
     version: str
     url: str
     sha256: str
+    preflight: PrebakedContract | None = None
 
     @property
     def filename(self) -> str:
@@ -79,6 +85,18 @@ class ImageManifest:
                 raise ManifestError(f"Image manifest entry {index} has an unsupported image URL.")
             if not isinstance(sha256, str) or not SHA256.fullmatch(sha256):
                 raise ManifestError(f"Image manifest entry {index} requires a valid sha256.")
+            preflight = None
+            if image_type.endswith("_prebaked"):
+                try:
+                    preflight = parse_prebaked_contract(
+                        raw.get("preflight"),
+                        image_type=image_type,
+                        expected_version=version.strip(),
+                    )
+                except PrebakedPreflightError as exc:
+                    raise ManifestError(
+                        f"Image manifest entry {index} has an invalid {exc}."
+                    ) from exc
             identity = (image_type, architecture)
             if identity in identities:
                 raise ManifestError(f"Duplicate image manifest entry: {image_type}/{architecture}.")
@@ -90,6 +108,7 @@ class ImageManifest:
                     version=version.strip(),
                     url=url,
                     sha256=sha256.lower(),
+                    preflight=preflight,
                 )
             )
         return cls(tuple(entries))

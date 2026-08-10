@@ -50,7 +50,7 @@ The `main` branch and CI artifacts are development outputs, not a stable compati
 - Guided desktop flow built with PyWebView and a local HTML/CSS/JavaScript interface.
 - Official image discovery, download, checksum handling, cache reuse, and atomic `.part` publication.
 - Complete ZIP and XZ extraction checks before a raw image becomes flashable.
-- Custom-image support limited to uncompressed `.img` files, with optional adjacent SHA-256 sidecars.
+- Custom-image support limited to uncompressed `.img` files, with optional adjacent SHA-256 sidecars. Custom pre-baked images additionally require a checksum-bound capability contract.
 - Minimum raw-image plausibility and destination-capacity checks.
 - Windows disk discovery with system/boot exclusions and allowed-bus filtering.
 - A full selected-device identity snapshot passed to the elevated writer for revalidation.
@@ -187,6 +187,7 @@ CI does not publish a release, sign the executable, or flash physical media.
 - Physical imaging is Windows-only.
 - Automated official-image paths handle the ZIP/XZ formats implemented by the acquisition pipeline.
 - Manually selected custom images must already be raw `.img` files; compressed custom files are rejected before the writer.
+- A custom image classified as pre-baked must have `<image>.img.kace-preflight.json`. The `kace-studio-prebaked-preflight/v1` document must bind `image_sha256` to the selected raw image and declare a supported `family`, `version`, full `source_commit`, the required systemd `services`, and provisioning `capabilities`. Missing, incompatible, or mismatched contracts stop before any block write.
 - The current removable-target policy accepts supported USB, SD, and MMC paths after system/boot and identity checks. External USB HDD/SSD devices remain high-risk even with reinforced confirmation.
 - Network discovery depends on local routing, firewall rules, SSH availability, and Moonraker port visibility.
 - Studio can provision the dashboard choices implemented by the KACE bootstrap. Upstream images and installers can change independently.

@@ -841,8 +841,7 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         if ssh_enabled:
             ssh_file = ssh_marker_paths[0]
             try:
-                with open(ssh_file, "w") as f:
-                    pass # Writes empty file to enable SSH
+                _write_text_atomically(ssh_file, "")
                 if not os.path.exists(ssh_file):
                     raise IOError(f"SSH enablement file not found at: {ssh_file}")
             except Exception as e:
@@ -851,8 +850,7 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
                 
             ssh_txt_file = ssh_marker_paths[1]
             try:
-                with open(ssh_txt_file, "w") as f:
-                    pass
+                _write_text_atomically(ssh_txt_file, "")
                 if not os.path.exists(ssh_txt_file):
                     raise IOError(f"SSH txt enablement file not found at: {ssh_txt_file}")
             except Exception as e:
@@ -872,8 +870,7 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         hashed_pw = hash_password(ssh_password)
         userconf_file = os.path.join(boot_path, "userconf.txt")
         try:
-            with open(userconf_file, "w", newline="\n") as f:
-                f.write(f"{username}:{hashed_pw}\n")
+            _write_text_atomically(userconf_file, f"{username}:{hashed_pw}\n")
             if not os.path.exists(userconf_file):
                 raise IOError(f"userconf.txt file not found at: {userconf_file}")
             with open(userconf_file, "r", encoding="utf-8") as f_check:
@@ -917,8 +914,7 @@ network={{
 }}
 """
             try:
-                with open(wpa_conf, "w", newline="\n") as f:
-                    f.write(wpa_content)
+                _write_text_atomically(wpa_conf, wpa_content)
                 if not os.path.exists(wpa_conf):
                     raise IOError(f"wpa_supplicant.conf not found at: {wpa_conf}")
                 with open(wpa_conf, "r", encoding="utf-8") as f_check:
@@ -971,8 +967,7 @@ method=auto
 addr-gen-mode=default-or-eui64
 """
             try:
-                with open(nm_file, "w", newline="\n") as f:
-                    f.write(nm_content)
+                _write_text_atomically(nm_file, nm_content)
                 if not os.path.exists(nm_file):
                     raise IOError(f"preconfigured-wifi.nmconnection connection profile not found at: {nm_file}")
                 with open(nm_file, "r", encoding="utf-8") as f_check:
@@ -1082,8 +1077,7 @@ enabled = {"true" if ssh_enabled else "false"}
 password_authentication = {"true" if password_auth else "false"}
 """
         try:
-            with open(custom_toml_path, "w", newline="\n") as f:
-                f.write(toml_content)
+            _write_text_atomically(custom_toml_path, toml_content)
             if not os.path.exists(custom_toml_path):
                 raise IOError(f"custom.toml not found at: {custom_toml_path}")
             with open(custom_toml_path, "r", encoding="utf-8") as f_check:
@@ -1159,8 +1153,7 @@ password_authentication = {"true" if password_auth else "false"}
                     f'REGDOMAIN="{country_code}"\n'
                 )
                 try:
-                    with open(headless_nm_path, "w", newline="\n") as f:
-                        f.write(headless_content)
+                    _write_text_atomically(headless_nm_path, headless_content)
                     if not os.path.exists(headless_nm_path):
                         raise IOError(f"headless_nm.txt not found at: {headless_nm_path}")
                     with open(headless_nm_path, "r", encoding="utf-8") as f_check:
@@ -1338,8 +1331,7 @@ enable_ssh: {"true" if ssh_enabled else "false"}
 ssh_pwauth: {"true" if effective_password_auth else "false"}
 """
             try:
-                with open(userdata_path, "w", newline="\n") as f:
-                    f.write(userdata_content)
+                _write_text_atomically(userdata_path, userdata_content)
                 if not os.path.exists(userdata_path):
                     raise IOError(f"user-data not found at: {userdata_path}")
                 with open(userdata_path, "r", encoding="utf-8") as f_check:
@@ -1386,8 +1378,7 @@ ssh_pwauth: {"true" if effective_password_auth else "false"}
       optional: true
 """
             try:
-                with open(network_config_path, "w", newline="\n") as f:
-                    f.write(network_content)
+                _write_text_atomically(network_config_path, network_content)
                 if not os.path.exists(network_config_path):
                     raise IOError(f"network-config not found at: {network_config_path}")
                 with open(network_config_path, "r", encoding="utf-8") as f_check:
@@ -1405,8 +1396,7 @@ ssh_pwauth: {"true" if effective_password_auth else "false"}
             metadata_path = os.path.join(boot_path, "meta-data")
             metadata_content = f"instance-id: kace-{instance_uuid}\n"
             try:
-                with open(metadata_path, "w", newline="\n") as f:
-                    f.write(metadata_content)
+                _write_text_atomically(metadata_path, metadata_content)
                 if not os.path.exists(metadata_path):
                     raise IOError(f"meta-data not found at: {metadata_path}")
                 with open(metadata_path, "r", encoding="utf-8") as f_check:

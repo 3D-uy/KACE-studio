@@ -3,6 +3,7 @@ import sys
 import json
 import re
 import shutil
+import tempfile
 import threading
 import uuid
 import webview
@@ -32,9 +33,11 @@ from backend.workflow_events import KaceWorkflowEventParser
 from backend.bootstrap_events import BootstrapEventParser
 from backend.resources import bundled_path, verify_runtime_resources
 from backend.image_manifest import ImageManifest
+from backend.prebaked_preflight import load_custom_preflight
 import mimetypes
 
 HTTP_TIMEOUT_SECONDS = 30
+IMAGE_PROVENANCE_SCHEMA = "kace-studio-image-provenance/v1"
 
 # Prevent Windows registry pollution from overriding MIME types
 mimetypes.add_type('application/javascript', '.js')
@@ -561,6 +564,89 @@ class Api:
         """Wrapper for backward compatibility."""
         return self._decompress_archive(cached_xz, target_img, status_prefix)
 
+    @staticmethod
+    def _image_provenance_path(image_path: str) -> str:
+        return image_path + ".provenance.json"
+
+    @staticmethod
+    def _write_json_atomically(path: str, payload: dict) -> None:
+        directory = os.path.dirname(os.path.abspath(path))
+        os.makedirs(directory, exist_ok=True)
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=f".{os.path.basename(path)}.", suffix=".part", dir=directory
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+                json.dump(payload, output, sort_keys=True, separators=(",", ":"))
+                output.write("\n")
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary_path, path)
+        except Exception:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+    @staticmethod
+    def _image_provenance_payload(entry, image_sha256: str) -> dict:
+        return {
+            "schema": IMAGE_PROVENANCE_SCHEMA,
+            "image_type": entry.image_type,
+            "architecture": entry.architecture,
+            "version": entry.version,
+            "archive_sha256": entry.sha256,
+            "image_sha256": image_sha256,
+        }
+
+    def _image_provenance_is_valid(
+        self, image_path: str, entry, *, verify_image: bool = False
+    ) -> bool:
+        provenance_path = self._image_provenance_path(image_path)
+        checksum_path = image_path + ".sha256"
+        try:
+            with open(provenance_path, "r", encoding="utf-8") as source:
+                provenance = json.load(source)
+            with open(checksum_path, "r", encoding="utf-8") as source:
+                image_sha256 = source.read().strip().split()[0].lower()
+        except (OSError, UnicodeError, json.JSONDecodeError, IndexError):
+            return False
+        if provenance != self._image_provenance_payload(entry, image_sha256):
+            return False
+        if verify_image:
+            actual_sha256 = self._compute_sha256(
+                image_path, "Verifying pre-baked image identity"
+            )
+            return actual_sha256.lower() == image_sha256
+        return True
+
+    def _preflight_prebaked_image(
+        self, image_path: str, provisioning: ProvisioningData
+    ):
+        """Validate an immutable release/custom capability contract before disk writes."""
+        self.set_device_state(
+            "FLASHING", 0, "Validating pre-baked image services and capabilities..."
+        )
+        if provisioning.image_type is ImageType.CUSTOM_PREBAKED:
+            return load_custom_preflight(image_path)
+        if provisioning.image_type not in {
+            ImageType.MAINSAILOS_PREBAKED,
+            ImageType.FLUIDDPI_PREBAKED,
+        }:
+            raise ValueError("Pre-baked preflight received a non-pre-baked image type.")
+
+        entry = ImageManifest.load_bundled().resolve(
+            provisioning.image_type.value, provisioning.os_arch
+        )
+        if entry.preflight is None:
+            raise ValueError("Pinned pre-baked image has no preflight contract.")
+        if not self._image_provenance_is_valid(image_path, entry, verify_image=True):
+            raise ValueError(
+                "Pre-baked image provenance does not match its pinned archive, version, and checksum."
+            )
+        return entry.preflight
+
     def _resolve_prebaked_image(self, image_type: ImageType, os_arch: str) -> str:
         """
         Resolves an immutable, checksummed pre-baked image manifest entry.
@@ -588,8 +674,9 @@ class Api:
 
         archive_valid = self._cached_file_is_valid(cached_archive, entry.sha256)
         image_valid = self._cached_file_is_valid(target_img, raw_image=True)
+        provenance_valid = image_valid and self._image_provenance_is_valid(target_img, entry)
         need_download = not archive_valid
-        need_decompress = not image_valid
+        need_decompress = not provenance_valid
 
         if need_download:
             self._download_os_image(
@@ -598,9 +685,17 @@ class Api:
             need_decompress = True
 
         if need_decompress:
-            self._decompress_archive(cached_archive, target_img, "Decompressing OS image")
+            image_sha256 = self._decompress_archive(
+                cached_archive, target_img, "Decompressing OS image"
+            )
+            self._write_json_atomically(
+                self._image_provenance_path(target_img),
+                self._image_provenance_payload(entry, image_sha256),
+            )
 
         self._validate_raw_image(target_img)
+        if not self._image_provenance_is_valid(target_img, entry):
+            raise ValueError("Prepared image provenance verification failed.")
         return target_img
 
     def _download_os_image(self, download_url: str, cached_xz: str, cached_xz_sha: str, remote_sha256: str, redirected_url: str, arch_suffix: str):
@@ -761,6 +856,9 @@ class Api:
 
             self._check_cancelled()
             self._validate_raw_image(image_path)
+            if provisioning.image_type.is_prebaked:
+                self._preflight_prebaked_image(image_path, provisioning)
+                self._check_cancelled()
 
             # Stage 2: Flash image to drive
             self.set_device_state("FLASHING", 0, "Writing blocks to SD card...")
