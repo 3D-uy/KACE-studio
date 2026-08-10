@@ -1443,6 +1443,7 @@ const KACE_INSTALLATION_STEPS = [
     'Waiting for controller transition',
     'MCU disconnected',
     'Waiting for MCU to return',
+    'Confirming MCU identity',
     'MCU detected',
     'Moonraker connected',
     'Klipper ready',
@@ -1488,26 +1489,34 @@ function kaceWorkflowDefinition(kind) {
         BACKUP: [-1, 0],
         COPYING_FIRMWARE: [-1, 0],
         FIRMWARE_COPIED: [0, 1],
+        MEDIA_PREPARED: [0, 1],
         MONITOR_ARMED: [0, 1],
+        AWAITING_POWER_CYCLE: [0, 1],
+        AWAITING_MEDIA_INSTALLATION: [0, 1],
+        AWAITING_BOOTLOADER: [0, 1],
+        FLASHING: [0, 1],
         AWAITING_DISCONNECT: [0, 1],
         MCU_ABSENT: [2, 3],
         AWAITING_RECONNECT: [2, 3],
-        MCU_PRESENT: [4, 5],
-        WAITING_MOONRAKER: [4, 5],
-        MOONRAKER_ONLINE: [5, 6],
-        WAITING_KLIPPER_READY: [5, 6],
-        KLIPPER_READY: [6, 7],
-        WAITING_MCU_REGISTRATION: [6, 7],
-        MCU_REGISTERED: [7, 8],
-        VERIFYING_FIRMWARE: [7, 8],
-        FIRMWARE_VERIFIED: [8, 9],
-        APPLYING_CONFIG: [8, 9],
-        VERIFYING_UPLOAD: [8, 9],
-        FIRMWARE_RESTART: [8, 9],
-        VERIFYING_CONFIG: [8, 9],
-        ROLLING_BACK: [8, 9],
-        VERIFYING_ROLLBACK: [8, 9],
-        DONE: [10, -1],
+        AWAITING_REENUMERATION: [2, 3],
+        AWAITING_MCU_CONFIRMATION: [3, 4],
+        MCU_IDENTITY_CONFIRMED: [4, 5],
+        MCU_PRESENT: [5, 6],
+        WAITING_MOONRAKER: [5, 6],
+        MOONRAKER_ONLINE: [6, 7],
+        WAITING_KLIPPER_READY: [6, 7],
+        KLIPPER_READY: [7, 8],
+        WAITING_MCU_REGISTRATION: [7, 8],
+        MCU_REGISTERED: [8, 9],
+        VERIFYING_FIRMWARE: [8, 9],
+        FIRMWARE_VERIFIED: [9, 10],
+        APPLYING_CONFIG: [9, 10],
+        VERIFYING_UPLOAD: [9, 10],
+        FIRMWARE_RESTART: [9, 10],
+        VERIFYING_CONFIG: [9, 10],
+        ROLLING_BACK: [9, 10],
+        VERIFYING_ROLLBACK: [9, 10],
+        DONE: [11, -1],
         },
     };
 }
@@ -1558,6 +1567,20 @@ function renderKaceWorkflow(view) {
                     detailLines.push(`${index + 1}. ${instruction.text}`);
                 }
             });
+        }
+        const identity = view.data.identity_assessment;
+        if (identity && typeof identity === 'object') {
+            if (Number.isInteger(identity.score) && Number.isInteger(identity.automatic_threshold)) {
+                detailLines.push(`MCU identity evidence: ${identity.score}/${identity.automatic_threshold}`);
+            }
+            if (Array.isArray(identity.reasons)) {
+                identity.reasons.forEach(reason => {
+                    if (typeof reason === 'string') detailLines.push(`Identity: ${reason}`);
+                });
+            }
+        }
+        if (view.data.manually_confirmed === true) {
+            detailLines.push('MCU identity physically confirmed by the operator');
         }
     }
     detail.textContent = detailLines.join('\n');

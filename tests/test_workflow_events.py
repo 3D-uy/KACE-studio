@@ -153,6 +153,34 @@ def test_firmware_deployment_events_preserve_method_artifact_and_instructions():
     assert "downloadKaceFirmwareArtifact" in app_js
 
 
+def test_mcu_identity_confirmation_states_are_observationally_rendered():
+    parser = KaceWorkflowEventParser()
+    event = {
+        "schema": 1,
+        "workflow_id": "install-flow",
+        "sequence": 12,
+        "state": "AWAITING_MCU_CONFIRMATION",
+        "detail": "physical MCU identity requires explicit confirmation",
+        "data": {
+            "identity_assessment": {
+                "verdict": "AMBIGUOUS",
+                "score": 80,
+                "automatic_threshold": 90,
+                "reasons": ["reported serial changed"],
+            },
+            "manually_confirmed": False,
+        },
+    }
+    line = f"{PREFIX}{json.dumps(event)} ===\n"
+
+    assert parser.feed(line) == [event]
+    app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    assert "AWAITING_MCU_CONFIRMATION: [3, 4]" in app_js
+    assert "MCU_IDENTITY_CONFIRMED: [4, 5]" in app_js
+    assert "MCU identity evidence:" in app_js
+    assert "physically confirmed by the operator" in app_js
+
+
 def test_manifest_reader_is_home_relative_and_size_limited():
     from backend.ssh_client import SSHSession
 

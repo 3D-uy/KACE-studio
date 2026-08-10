@@ -58,7 +58,7 @@ The `main` branch and CI artifacts are development outputs, not a stable compati
 - Local network discovery for SSH and Moonraker endpoints.
 - Embedded SSH terminal and SFTP file management.
 - Bootstrap progress and failure reporting in the desktop UI.
-- Read-only MANUAL/USB firmware-deployment progress, instructions, native artifact download, and reconnect recovery from KACE's deployment manifest.
+- Read-only firmware progress, including KACE-owned MCU identity evidence and manual-confirmation states, instructions, native artifact download, and reconnect recovery from KACE's deployment manifest.
 
 ## Requirements
 
@@ -122,8 +122,8 @@ Before building, place the bootstrap file verified against the pinned KACE commi
 
 | Area | Responsibility |
 | --- | --- |
-| `main.py` | PyWebView API, desktop lifecycle, image acquisition, cache orchestration, and workflow state |
-| `web/` | Local user interface, workflow state, validation, terminal, and bundled front-end assets |
+| `main.py` | PyWebView API, desktop lifecycle, image acquisition, cache orchestration, and forwarding of KACE-owned workflow events |
+| `web/` | Local user interface, read-only workflow projections, validation, terminal, and bundled front-end assets |
 | `backend/imager.py` | Disk discovery, identity policy, elevated-writer invocation, and boot-partition injection |
 | `backend/kace_writer.py` | UAC-elevated physical-device revalidation and raw image writing |
 | `backend/discovery.py` | Local-network host and service discovery |
