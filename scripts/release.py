@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -296,15 +297,24 @@ if ($null -ne $signature.SignerCertificate) {
     try:
         environment = os.environ.copy()
         environment["KACE_AUTHENTICODE_TARGET"] = str(artifact.resolve())
+        powershell = shutil.which("pwsh") or shutil.which("powershell.exe")
+        if powershell is None:
+            raise ReleaseContractError("PowerShell is required for Authenticode verification")
         result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
             text=True,
             check=True,
             env=environment,
         )
         evidence = json.loads(result.stdout)
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        raise ReleaseContractError(
+            f"Authenticode evidence command failed{suffix}"
+        ) from exc
+    except (OSError, json.JSONDecodeError) as exc:
         raise ReleaseContractError("Authenticode evidence could not be read") from exc
     if not isinstance(evidence, dict):
         raise ReleaseContractError("Authenticode evidence is malformed")
