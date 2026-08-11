@@ -1,5 +1,57 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import json
+from pathlib import Path
+
+from PyInstaller.utils.win32.versioninfo import (
+    FixedFileInfo,
+    StringFileInfo,
+    StringStruct,
+    StringTable,
+    VarFileInfo,
+    VarStruct,
+    VSVersionInfo,
+)
+
+
+contract = json.loads((Path(SPECPATH) / 'release-contract.json').read_text(encoding='utf-8'))
+metadata = contract['windows_metadata']
+numeric_version = tuple(metadata['numeric_version'])
+version_info = VSVersionInfo(
+    ffi=FixedFileInfo(
+        filevers=numeric_version,
+        prodvers=numeric_version,
+        mask=0x3F,
+        flags=0x0,
+        OS=0x40004,
+        fileType=0x1,
+        subtype=0x0,
+        date=(0, 0),
+    ),
+    kids=[
+        StringFileInfo(
+            [
+                StringTable(
+                    '040904B0',
+                    [
+                        StringStruct(key, metadata[key])
+                        for key in (
+                            'CompanyName',
+                            'FileDescription',
+                            'FileVersion',
+                            'InternalName',
+                            'OriginalFilename',
+                            'ProductName',
+                            'ProductVersion',
+                        )
+                    ],
+                )
+            ]
+        ),
+        VarFileInfo([VarStruct('Translation', [1033, 1200])]),
+    ],
+)
+
 
 a = Analysis(
     ['main.py'],
@@ -41,4 +93,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='web/KACE-studio.ico',
+    version=version_info,
 )

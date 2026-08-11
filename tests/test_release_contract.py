@@ -78,12 +78,19 @@ def test_ci_uses_locked_inputs_and_immutable_actions():
     action_refs = re.findall(r"uses:\s*[^@\s]+@([^\s]+)", workflow)
     assert action_refs
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
+    assert "workflow_dispatch:" in workflow
+    assert "bash -n bootstrap.sh" in workflow
+    assert "shellcheck --severity=warning bootstrap.sh" in workflow
+    assert "independent-windows-builder:" in workflow
+    assert "python scripts/release.py verify-release-gates" in workflow
 
 
 def test_spec_bundles_every_runtime_contract_root():
     spec = (ROOT / "main.spec").read_text(encoding="utf-8")
     for source in ("web", "bootstrap.sh", "image-manifest.json", "release-contract.json"):
         assert repr(source) in spec
+    assert "version=version_info" in spec
+    assert "contract['windows_metadata']" in spec
 
 
 def test_rebuild_verification_rejects_different_artifacts(tmp_path):
@@ -93,6 +100,58 @@ def test_rebuild_verification_rejects_different_artifacts(tmp_path):
     candidate.write_bytes(b"second")
     with pytest.raises(release.ReleaseContractError, match="repeated clean build"):
         release.verify_rebuild(reference, candidate)
+
+
+def test_release_signature_gate_rejects_unsigned_wrong_or_untimestamped(monkeypatch):
+    expected = "a" * 64
+    cases = (
+        ({"status": "NotSigned", "certificate_sha256": "", "timestamp_present": False}, "not valid"),
+        ({"status": "Valid", "certificate_sha256": "b" * 64, "timestamp_present": True}, "certificate"),
+        ({"status": "Valid", "certificate_sha256": expected, "timestamp_present": False}, "timestamp"),
+    )
+    for evidence, message in cases:
+        monkeypatch.setattr(release, "inspect_authenticode_signature", lambda _artifact, value=evidence: value)
+        with pytest.raises(release.ReleaseContractError, match=message):
+            release.verify_authenticode_signature(Path("artifact.exe"), expected)
+
+
+def test_independent_attestation_is_bound_to_source_and_artifact(tmp_path, monkeypatch):
+    head = "a" * 40
+    artifact_hash = "b" * 64
+    primary = tmp_path / "primary.json"
+    attestation = tmp_path / "independent.json"
+    primary.write_text(
+        json.dumps(
+            {
+                "schema": "kace-studio-release-manifest/v1",
+                "source": {"commit": head},
+                "artifact": {"sha256": artifact_hash},
+                "reproducibility": {"same_environment_rebuild_verified": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    attestation.write_text(
+        json.dumps(
+            {
+                "schema": "kace-studio-independent-build-attestation/v1",
+                "source_commit": head,
+                "artifact_sha256": artifact_hash,
+                "independent_builder": {"github_job": "independent-windows-builder"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(release, "_git", lambda *_args, **_kwargs: head)
+    result = release.attach_independent_attestation(primary, attestation, root=tmp_path)
+    assert result["reproducibility"]["independent_builder_reproduced"] is True
+    assert result["reproducibility"]["independent_attestation_sha256"] == release.sha256_file(attestation)
+
+    changed = json.loads(attestation.read_text(encoding="utf-8"))
+    changed["artifact_sha256"] = "c" * 64
+    attestation.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(release.ReleaseContractError, match="different artifact"):
+        release.attach_independent_attestation(primary, attestation, root=tmp_path)
 
 
 def test_verified_contract_download_is_atomic(tmp_path, monkeypatch):
@@ -152,3 +211,5 @@ def test_built_archive_contains_exact_contract_resources():
     assert {entry["path"] for entry in inventory} == {
         path.relative_to(ROOT).as_posix() for path in release.resource_files(release.load_contract())
     }
+    metadata = release.verify_windows_metadata(ROOT / "dist" / "KACE-studio.exe")
+    assert metadata == release.load_contract()["windows_metadata"]

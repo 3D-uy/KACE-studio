@@ -2101,7 +2101,7 @@ fi
 # cloud-init is OS-owned and remains enabled. Remove only a seed whose instance-id
 # proves that Studio created it; preserve every unrelated boot file.
 log_stage "CLOUDINIT" "Cleaning completed KACE first-boot seed"
-cleanup_kace_cloud_init_seed
+cleanup_kace_cloud_init_seed /boot/firmware /boot
 log_ok "Cloud-init service state preserved."
 
 # ── Done ──────────────────────────────────────────────────────────────────────

@@ -62,6 +62,7 @@ $env:PYTHONHASHSEED = '1'
 $env:SOURCE_DATE_EPOCH = (git show -s --format=%ct HEAD)
 python -m PyInstaller --clean -y main.spec
 python scripts/release.py verify-bundle dist/KACE-studio.exe
+python scripts/release.py verify-metadata dist/KACE-studio.exe
 python scripts/release.py write-manifest dist/KACE-studio.exe dist/KACE-studio.release.json
 ```
 
@@ -70,6 +71,7 @@ python scripts/release.py write-manifest dist/KACE-studio.exe dist/KACE-studio.r
 - [ ] The exact bootstrap, release contract, and every tracked `web/` byte are extracted from the PyInstaller archive and compared with the verified inputs.
 - [ ] The comparison accounts for Studio's intentional boot-partition version comment and LF normalization at injection time; those transformed bytes are tested separately from the packaged input.
 - [ ] The executable contains no unexpected development paths, caches, logs, or credentials.
+- [ ] PE numeric/string version metadata matches `release-contract.json` exactly.
 
 ## 5. End-to-end qualification
 
@@ -89,15 +91,18 @@ Automated CI must never be pointed at physical disks or printer controllers.
 - [ ] Every KACE workflow required by its release guide passes before Studio is published.
 - [ ] Studio's Windows/Ubuntu and Python 3.11/3.12 test matrix passes.
 - [ ] The Windows executable build passes after those tests.
+- [ ] A second clean Windows runner reproduces the unsigned EXE byte for byte and emits `KACE-studio.independent-build.json` bound to the exact source commit and artifact SHA-256.
 - [ ] The CI logs show the expected immutable bootstrap ref and checksum.
 - [ ] The downloaded CI artifact has its external `KACE-studio.release.json` manifest and matching SHA-256.
 - [ ] Packaged-bootstrap verification matches the CI-fetched input exactly.
+- [ ] A manually dispatched `release_candidate` run fails closed without all signing secrets, verifies the expected signer certificate SHA-256, requires a trusted timestamp, and passes `verify-release-gates` before exposing signed evidence.
 
 ## 7. Publication
 
 - [ ] Publish KACE first and KACE Studio second.
 - [ ] Use immutable tags and record their resolved commits.
 - [ ] Publish checksums through a channel separate from the artifact download.
+- [ ] Publish only the signed manifest and artifact produced by the release-candidate gate; never promote the ordinary unsigned CI artifact.
 - [ ] Document supported environments, hardware qualification, known limitations, and rollback.
 - [ ] Confirm the same-environment double build matches, and do not call the artifact independently reproducible until a second controlled builder also matches; the manifest records these as different claims.
 

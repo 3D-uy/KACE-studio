@@ -37,7 +37,9 @@ The two projects are independent repositories with a deliberately narrow integra
 
 `release-contract.json` is the single machine-readable source for the immutable KACE bootstrap/installer tuple and the exact packaging toolchain. Studio CI downloads that bootstrap, verifies it before the build, then inspects the finished PyInstaller archive and compares every contract-owned resource byte for byte. Source mode prefers the sibling `KACE/scripts/bootstrap.sh` checkout when both repositories share this workspace; packaged mode resolves only the `_MEIPASS` copy. Resource resolution never depends on the process working directory.
 
-The build also emits `KACE-studio.release.json` next to the executable. It records the Studio commit and dirty state, KACE bootstrap and installed-source refs/hashes, Python/PyInstaller identity, runner image, dependency-lock/spec hashes, every bundled-resource hash, and the final EXE SHA-256. This is an external manifest so hashing it cannot change the executable it identifies. CI fixes `PYTHONHASHSEED` and the PE timestamp to the source commit, builds twice from a clean checkout, and rejects different hashes. The manifest distinguishes that same-builder proof from independent-builder reproduction, which remains false until separately demonstrated.
+The build also emits `KACE-studio.release.json` next to the executable. It records the Studio commit and dirty state, KACE bootstrap and installed-source refs/hashes, Python/PyInstaller identity, runner image, dependency-lock/spec hashes, every bundled-resource hash, contractual Windows version metadata, Authenticode status, and the final EXE SHA-256. This is an external manifest so hashing it cannot change the executable it identifies. CI fixes `PYTHONHASHSEED` and the PE timestamp to the source commit, builds twice from a clean checkout, and rejects different hashes. A second Windows job rebuilds from the same commit on a fresh runner and emits an image- and commit-bound independent-build attestation only when the executable is byte-identical.
+
+Manual CI exposes a separate `release_candidate` gate. It is fail-closed: publication evidence is produced only when the configured PFX, password, and expected signer-certificate SHA-256 are present; `signtool` signs with SHA-256 and a trusted timestamp; and the packaged bytes, PE metadata, same-runner rebuild, independent rebuild, manifest, signer identity, and timestamp all verify. Ordinary CI artifacts remain explicitly unsigned development outputs. The workflow never publishes a GitHub release.
 
 ## Current status
 
@@ -180,7 +182,7 @@ GitHub Actions currently:
 - Includes the verified `bootstrap.sh` and local web assets through `main.spec`.
 - Uploads the executable as a CI artifact.
 
-CI does not publish a release, sign the executable, or flash physical media.
+CI does not publish a release or flash physical media. Normal CI builds remain unsigned; the manual release-candidate path can sign only when repository signing secrets and the expected certificate identity are configured.
 
 ## Compatibility and limits
 

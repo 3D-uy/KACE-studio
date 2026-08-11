@@ -93,6 +93,44 @@ def resource_files(contract: dict, root: Path = ROOT) -> list[Path]:
 
 def verify_inputs(contract: dict | None = None, root: Path = ROOT) -> dict:
     contract = contract or load_contract(root / "release-contract.json")
+    metadata = contract.get("windows_metadata")
+    if not isinstance(metadata, dict):
+        raise ReleaseContractError("windows_metadata is missing")
+    numeric_version = metadata.get("numeric_version")
+    if (
+        not isinstance(numeric_version, list)
+        or len(numeric_version) != 4
+        or any(not isinstance(item, int) or item < 0 or item > 65535 for item in numeric_version)
+    ):
+        raise ReleaseContractError("windows_metadata.numeric_version is invalid")
+    metadata_keys = (
+        "CompanyName",
+        "FileDescription",
+        "FileVersion",
+        "InternalName",
+        "OriginalFilename",
+        "ProductName",
+        "ProductVersion",
+    )
+    if any(not isinstance(metadata.get(key), str) or not metadata[key] for key in metadata_keys):
+        raise ReleaseContractError("windows_metadata strings are incomplete")
+    if metadata["OriginalFilename"] != contract.get("artifact"):
+        raise ReleaseContractError("Windows OriginalFilename differs from artifact")
+    if metadata["ProductName"] != contract.get("product"):
+        raise ReleaseContractError("Windows ProductName differs from product")
+    if metadata["ProductVersion"] != contract.get("version"):
+        raise ReleaseContractError("Windows ProductVersion differs from version")
+    signing = contract.get("signing")
+    if not isinstance(signing, dict) or signing.get("required_for_release") is not True:
+        raise ReleaseContractError("release signing gate is not mandatory")
+    if signing.get("digest_algorithm") != "sha256":
+        raise ReleaseContractError("release signing digest must be SHA-256")
+    if signing.get("timestamp_required") is not True:
+        raise ReleaseContractError("release signatures must be timestamped")
+    if signing.get("timestamp_url") != "https://timestamp.digicert.com":
+        raise ReleaseContractError("release timestamp service is not pinned")
+    if signing.get("expected_certificate_sha256_env") != "KACE_SIGNING_CERT_SHA256":
+        raise ReleaseContractError("release signer identity environment is invalid")
     kace = contract.get("kace", {})
     bootstrap_ref = _require_pattern(kace.get("bootstrap_ref"), FULL_SHA, "bootstrap_ref")
     bootstrap_hash = _require_pattern(
@@ -175,6 +213,125 @@ def verify_bundle(artifact: Path, contract: dict | None = None, root: Path = ROO
     return inventory
 
 
+def _decode_pe_text(value: object) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="strict").rstrip("\x00")
+    return str(value).rstrip("\x00")
+
+
+def verify_windows_metadata(artifact: Path, contract: dict | None = None) -> dict:
+    """Verify the PE version resource against the release contract."""
+    try:
+        import pefile
+    except ImportError as exc:
+        raise ReleaseContractError("pefile is required to inspect Windows metadata") from exc
+
+    contract = contract or load_contract()
+    expected = contract["windows_metadata"]
+    try:
+        pe = pefile.PE(str(artifact), fast_load=False)
+    except Exception as exc:
+        raise ReleaseContractError(f"artifact is not a readable PE file: {artifact}") from exc
+    try:
+        fixed_entries = getattr(pe, "VS_FIXEDFILEINFO", None) or []
+        if len(fixed_entries) != 1:
+            raise ReleaseContractError("artifact has no unambiguous fixed version metadata")
+        fixed = fixed_entries[0]
+        numeric_version = [
+            fixed.FileVersionMS >> 16,
+            fixed.FileVersionMS & 0xFFFF,
+            fixed.FileVersionLS >> 16,
+            fixed.FileVersionLS & 0xFFFF,
+        ]
+        strings: dict[str, str] = {}
+        for group in getattr(pe, "FileInfo", None) or []:
+            for entry in group:
+                if _decode_pe_text(entry.Key) != "StringFileInfo":
+                    continue
+                for table in entry.StringTable:
+                    for key, value in table.entries.items():
+                        strings[_decode_pe_text(key)] = _decode_pe_text(value)
+    finally:
+        pe.close()
+
+    if numeric_version != expected["numeric_version"]:
+        raise ReleaseContractError(
+            f"Windows numeric version mismatch: {numeric_version} != {expected['numeric_version']}"
+        )
+    for key, value in expected.items():
+        if key == "numeric_version":
+            continue
+        if strings.get(key) != value:
+            raise ReleaseContractError(
+                f"Windows metadata mismatch for {key}: {strings.get(key)!r} != {value!r}"
+            )
+    return {"numeric_version": numeric_version, **{key: strings[key] for key in expected if key != "numeric_version"}}
+
+
+def inspect_authenticode_signature(artifact: Path) -> dict:
+    """Return Authenticode evidence without treating an unsigned artifact as valid."""
+    if platform.system() != "Windows":
+        raise ReleaseContractError("Authenticode verification requires Windows")
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$signature = Get-AuthenticodeSignature -LiteralPath $env:KACE_AUTHENTICODE_TARGET
+$certificateSha256 = ''
+if ($null -ne $signature.SignerCertificate) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $certificateSha256 = ([System.BitConverter]::ToString($sha.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+[ordered]@{
+    status = [string]$signature.Status
+    status_message = [string]$signature.StatusMessage
+    certificate_sha256 = $certificateSha256
+    subject = $(if ($null -eq $signature.SignerCertificate) { '' } else { [string]$signature.SignerCertificate.Subject })
+    timestamp_present = ($null -ne $signature.TimeStamperCertificate)
+    timestamp_subject = $(if ($null -eq $signature.TimeStamperCertificate) { '' } else { [string]$signature.TimeStamperCertificate.Subject })
+} | ConvertTo-Json -Compress
+"""
+    try:
+        environment = os.environ.copy()
+        environment["KACE_AUTHENTICODE_TARGET"] = str(artifact.resolve())
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=environment,
+        )
+        evidence = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise ReleaseContractError("Authenticode evidence could not be read") from exc
+    if not isinstance(evidence, dict):
+        raise ReleaseContractError("Authenticode evidence is malformed")
+    return evidence
+
+
+def verify_authenticode_signature(
+    artifact: Path,
+    expected_certificate_sha256: str,
+    contract: dict | None = None,
+) -> dict:
+    contract = contract or load_contract()
+    expected = _require_pattern(
+        expected_certificate_sha256, SHA256, "expected signing certificate SHA-256"
+    )
+    evidence = inspect_authenticode_signature(artifact)
+    if evidence.get("status") != "Valid":
+        raise ReleaseContractError(
+            f"Authenticode signature is not valid: {evidence.get('status', 'unknown')}"
+        )
+    if evidence.get("certificate_sha256") != expected:
+        raise ReleaseContractError("Authenticode signer certificate SHA-256 mismatch")
+    if contract["signing"]["timestamp_required"] and evidence.get("timestamp_present") is not True:
+        raise ReleaseContractError("Authenticode signature has no trusted timestamp evidence")
+    return evidence
+
+
 def _git(*args: str, root: Path = ROOT) -> str:
     result = subprocess.run(
         ["git", *args], cwd=root, capture_output=True, text=True, check=True
@@ -197,11 +354,14 @@ def build_manifest(
     *,
     allow_dirty: bool = False,
     reproducible_reference: Path | None = None,
+    require_signature: bool = False,
+    expected_certificate_sha256: str | None = None,
     root: Path = ROOT,
 ) -> dict:
     contract = load_contract(root / "release-contract.json")
     inputs = verify_inputs(contract, root)
     inventory = verify_bundle(artifact, contract, root)
+    windows_metadata = verify_windows_metadata(artifact, contract)
     head = _git("rev-parse", "HEAD", root=root)
     dirty = bool(_git("status", "--porcelain", "--untracked-files=all", root=root))
     if dirty and not allow_dirty:
@@ -227,10 +387,23 @@ def build_manifest(
     if reproducible_reference is not None:
         verify_rebuild(reproducible_reference, artifact)
         repeated_build_verified = True
+    if require_signature:
+        if expected_certificate_sha256 is None:
+            raise ReleaseContractError("release signature gate requires an expected certificate SHA-256")
+        signature = verify_authenticode_signature(
+            artifact, expected_certificate_sha256, contract
+        )
+        signature["verified"] = True
+    elif platform.system() == "Windows":
+        signature = inspect_authenticode_signature(artifact)
+        signature["verified"] = False
+    else:
+        signature = {"status": "NotChecked", "verified": False}
 
     return {
         "schema": "kace-studio-release-manifest/v1",
         "product": contract["product"],
+        "version": contract["version"],
         "source": {
             "repository": "https://github.com/3D-uy/KACE-studio.git",
             "commit": head,
@@ -244,6 +417,10 @@ def build_manifest(
             "platform": platform.platform(),
             "runner_image_os": os.environ.get("ImageOS", ""),
             "runner_image_version": os.environ.get("ImageVersion", ""),
+            "github_run_id": os.environ.get("GITHUB_RUN_ID", ""),
+            "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+            "github_job": os.environ.get("GITHUB_JOB", ""),
+            "runner_name": os.environ.get("RUNNER_NAME", ""),
             "python_hash_seed": os.environ["PYTHONHASHSEED"],
             "source_date_epoch": commit_epoch,
         },
@@ -259,6 +436,8 @@ def build_manifest(
             "name": artifact.name,
             "sha256": sha256_file(artifact),
             "size": artifact.stat().st_size,
+            "windows_metadata": windows_metadata,
+            "authenticode": signature,
         },
         "reproducibility": {
             "claim": "locked-inputs-and-attested-output",
@@ -266,6 +445,172 @@ def build_manifest(
             "independent_builder_reproduced": False,
         },
     }
+
+
+def _load_json_object(path: Path, label: str) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReleaseContractError(f"{label} is unreadable") from exc
+    if not isinstance(value, dict):
+        raise ReleaseContractError(f"{label} is malformed")
+    return value
+
+
+def build_independent_attestation(
+    primary_manifest_path: Path,
+    primary_artifact: Path,
+    independent_artifact: Path,
+    *,
+    root: Path = ROOT,
+) -> dict:
+    manifest = _load_json_object(primary_manifest_path, "primary build manifest")
+    if manifest.get("schema") != "kace-studio-release-manifest/v1":
+        raise ReleaseContractError("primary build manifest schema is unsupported")
+    head = _git("rev-parse", "HEAD", root=root)
+    if manifest.get("source", {}).get("commit") != head:
+        raise ReleaseContractError("primary build manifest source differs from checkout")
+    primary_hash = sha256_file(primary_artifact)
+    if manifest.get("artifact", {}).get("sha256") != primary_hash:
+        raise ReleaseContractError("primary artifact differs from its manifest")
+    if manifest.get("reproducibility", {}).get("same_environment_rebuild_verified") is not True:
+        raise ReleaseContractError("primary build lacks same-environment reproduction evidence")
+    verified_hash = verify_rebuild(primary_artifact, independent_artifact)
+    verify_bundle(independent_artifact, root=root)
+    verify_windows_metadata(independent_artifact)
+    return {
+        "schema": "kace-studio-independent-build-attestation/v1",
+        "source_commit": head,
+        "artifact_sha256": verified_hash,
+        "primary_builder": dict(manifest.get("toolchain", {})),
+        "independent_builder": {
+            "platform": platform.platform(),
+            "runner_image_os": os.environ.get("ImageOS", ""),
+            "runner_image_version": os.environ.get("ImageVersion", ""),
+            "github_run_id": os.environ.get("GITHUB_RUN_ID", ""),
+            "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+            "github_job": os.environ.get("GITHUB_JOB", ""),
+            "runner_name": os.environ.get("RUNNER_NAME", ""),
+        },
+    }
+
+
+def attach_independent_attestation(
+    primary_manifest_path: Path,
+    attestation_path: Path,
+    *,
+    root: Path = ROOT,
+) -> dict:
+    manifest = _load_json_object(primary_manifest_path, "primary build manifest")
+    attestation = _load_json_object(attestation_path, "independent build attestation")
+    if attestation.get("schema") != "kace-studio-independent-build-attestation/v1":
+        raise ReleaseContractError("independent build attestation schema is unsupported")
+    head = _git("rev-parse", "HEAD", root=root)
+    if manifest.get("source", {}).get("commit") != head or attestation.get("source_commit") != head:
+        raise ReleaseContractError("independent build evidence source differs from checkout")
+    artifact_hash = manifest.get("artifact", {}).get("sha256")
+    if attestation.get("artifact_sha256") != artifact_hash:
+        raise ReleaseContractError("independent build evidence identifies a different artifact")
+    reproducibility = manifest.get("reproducibility")
+    if not isinstance(reproducibility, dict):
+        raise ReleaseContractError("primary reproducibility evidence is malformed")
+    result = json.loads(json.dumps(manifest))
+    result["reproducibility"]["independent_builder_reproduced"] = True
+    result["reproducibility"]["independent_attestation_sha256"] = sha256_file(
+        attestation_path
+    )
+    result["reproducibility"]["independent_builder"] = attestation[
+        "independent_builder"
+    ]
+    return result
+
+
+def finalize_signed_manifest(
+    unsigned_manifest_path: Path,
+    signed_artifact: Path,
+    attestation_path: Path,
+    expected_certificate_sha256: str,
+    *,
+    root: Path = ROOT,
+) -> dict:
+    contract = load_contract(root / "release-contract.json")
+    verify_inputs(contract, root)
+    verify_bundle(signed_artifact, contract, root)
+    metadata = verify_windows_metadata(signed_artifact, contract)
+    signature = verify_authenticode_signature(
+        signed_artifact, expected_certificate_sha256, contract
+    )
+    signature["verified"] = True
+    manifest = _load_json_object(unsigned_manifest_path, "unsigned build manifest")
+    attestation = _load_json_object(attestation_path, "independent build attestation")
+    head = _git("rev-parse", "HEAD", root=root)
+    if manifest.get("source", {}).get("commit") != head or attestation.get("source_commit") != head:
+        raise ReleaseContractError("signed release evidence source differs from checkout")
+    unsigned_hash = manifest.get("artifact", {}).get("sha256")
+    if attestation.get("artifact_sha256") != unsigned_hash:
+        raise ReleaseContractError("independent builder did not reproduce the unsigned artifact")
+    if manifest.get("reproducibility", {}).get("same_environment_rebuild_verified") is not True:
+        raise ReleaseContractError("unsigned artifact lacks double-build evidence")
+    result = json.loads(json.dumps(manifest))
+    result["artifact"] = {
+        "name": signed_artifact.name,
+        "sha256": sha256_file(signed_artifact),
+        "size": signed_artifact.stat().st_size,
+        "windows_metadata": metadata,
+        "authenticode": signature,
+    }
+    result["reproducibility"]["unsigned_artifact_sha256"] = unsigned_hash
+    result["reproducibility"]["signature_changes_artifact_bytes"] = True
+    result["reproducibility"]["independent_builder_reproduced"] = True
+    result["reproducibility"]["independent_attestation_sha256"] = sha256_file(
+        attestation_path
+    )
+    result["reproducibility"]["independent_builder"] = attestation[
+        "independent_builder"
+    ]
+    return result
+
+
+def verify_release_gates(
+    artifact: Path,
+    manifest_path: Path,
+    attestation_path: Path,
+    expected_certificate_sha256: str,
+    *,
+    root: Path = ROOT,
+) -> dict:
+    """Fail closed unless metadata, provenance, independent build, and signing pass."""
+    contract = load_contract(root / "release-contract.json")
+    verify_inputs(contract, root)
+    verify_bundle(artifact, contract, root)
+    verify_windows_metadata(artifact, contract)
+    signature = verify_authenticode_signature(
+        artifact, expected_certificate_sha256, contract
+    )
+    manifest = _load_json_object(manifest_path, "release manifest")
+    attestation = _load_json_object(attestation_path, "independent build attestation")
+    head = _git("rev-parse", "HEAD", root=root)
+    if bool(_git("status", "--porcelain", "--untracked-files=all", root=root)):
+        raise ReleaseContractError("release gates require a clean worktree")
+    if manifest.get("source", {}).get("commit") != head:
+        raise ReleaseContractError("release manifest source differs from checkout")
+    if manifest.get("artifact", {}).get("sha256") != sha256_file(artifact):
+        raise ReleaseContractError("release artifact differs from manifest")
+    if manifest.get("artifact", {}).get("authenticode", {}).get("verified") is not True:
+        raise ReleaseContractError("release manifest does not attest a verified signature")
+    reproducibility = manifest.get("reproducibility", {})
+    if reproducibility.get("same_environment_rebuild_verified") is not True:
+        raise ReleaseContractError("same-environment double build was not verified")
+    if reproducibility.get("independent_builder_reproduced") is not True:
+        raise ReleaseContractError("independent builder reproduction was not verified")
+    if reproducibility.get("independent_attestation_sha256") != sha256_file(attestation_path):
+        raise ReleaseContractError("independent attestation hash differs from manifest")
+    reproduced_hash = reproducibility.get(
+        "unsigned_artifact_sha256", sha256_file(artifact)
+    )
+    if attestation.get("artifact_sha256") != reproduced_hash:
+        raise ReleaseContractError("independent builder reproduced a different unsigned artifact")
+    return signature
 
 
 def write_json_atomically(path: Path, data: dict) -> None:
@@ -348,6 +693,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     subparsers.add_parser("verify-remote-installer")
     bundle = subparsers.add_parser("verify-bundle")
     bundle.add_argument("artifact", type=Path)
+    metadata = subparsers.add_parser("verify-metadata")
+    metadata.add_argument("artifact", type=Path)
+    signature = subparsers.add_parser("verify-signature")
+    signature.add_argument("artifact", type=Path)
+    signature.add_argument("--expected-certificate-sha256", required=True)
     rebuild = subparsers.add_parser("verify-rebuild")
     rebuild.add_argument("reference", type=Path)
     rebuild.add_argument("candidate", type=Path)
@@ -356,6 +706,28 @@ def main(argv: Iterable[str] | None = None) -> int:
     manifest.add_argument("output", type=Path)
     manifest.add_argument("--allow-dirty", action="store_true")
     manifest.add_argument("--reproducible-reference", type=Path)
+    manifest.add_argument("--require-signature", action="store_true")
+    manifest.add_argument("--expected-certificate-sha256")
+    independent = subparsers.add_parser("write-independent-attestation")
+    independent.add_argument("primary_manifest", type=Path)
+    independent.add_argument("primary_artifact", type=Path)
+    independent.add_argument("independent_artifact", type=Path)
+    independent.add_argument("output", type=Path)
+    attach = subparsers.add_parser("attach-independent-attestation")
+    attach.add_argument("primary_manifest", type=Path)
+    attach.add_argument("attestation", type=Path)
+    attach.add_argument("output", type=Path)
+    signed = subparsers.add_parser("finalize-signed-manifest")
+    signed.add_argument("unsigned_manifest", type=Path)
+    signed.add_argument("signed_artifact", type=Path)
+    signed.add_argument("attestation", type=Path)
+    signed.add_argument("output", type=Path)
+    signed.add_argument("--expected-certificate-sha256", required=True)
+    gates = subparsers.add_parser("verify-release-gates")
+    gates.add_argument("artifact", type=Path)
+    gates.add_argument("manifest", type=Path)
+    gates.add_argument("attestation", type=Path)
+    gates.add_argument("--expected-certificate-sha256", required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "verify-inputs":
@@ -366,6 +738,12 @@ def main(argv: Iterable[str] | None = None) -> int:
             verify_remote_installer()
         elif args.command == "verify-bundle":
             verify_bundle(args.artifact)
+        elif args.command == "verify-metadata":
+            verify_windows_metadata(args.artifact)
+        elif args.command == "verify-signature":
+            verify_authenticode_signature(
+                args.artifact, args.expected_certificate_sha256
+            )
         elif args.command == "verify-rebuild":
             verify_rebuild(args.reference, args.candidate)
         elif args.command == "write-manifest":
@@ -375,7 +753,42 @@ def main(argv: Iterable[str] | None = None) -> int:
                     args.artifact,
                     allow_dirty=args.allow_dirty,
                     reproducible_reference=args.reproducible_reference,
+                    require_signature=args.require_signature,
+                    expected_certificate_sha256=args.expected_certificate_sha256,
                 ),
+            )
+        elif args.command == "write-independent-attestation":
+            write_json_atomically(
+                args.output,
+                build_independent_attestation(
+                    args.primary_manifest,
+                    args.primary_artifact,
+                    args.independent_artifact,
+                ),
+            )
+        elif args.command == "attach-independent-attestation":
+            write_json_atomically(
+                args.output,
+                attach_independent_attestation(
+                    args.primary_manifest, args.attestation
+                ),
+            )
+        elif args.command == "finalize-signed-manifest":
+            write_json_atomically(
+                args.output,
+                finalize_signed_manifest(
+                    args.unsigned_manifest,
+                    args.signed_artifact,
+                    args.attestation,
+                    args.expected_certificate_sha256,
+                ),
+            )
+        elif args.command == "verify-release-gates":
+            verify_release_gates(
+                args.artifact,
+                args.manifest,
+                args.attestation,
+                args.expected_certificate_sha256,
             )
     except (ReleaseContractError, OSError, subprocess.SubprocessError) as exc:
         print(f"Release contract failed: {exc}", file=sys.stderr)

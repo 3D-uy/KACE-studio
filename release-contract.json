@@ -1,6 +1,7 @@
 {
   "schema": "kace-studio-release-contract/v1",
   "product": "KACE Studio",
+  "version": "0.5.0-dev",
   "artifact": "KACE-studio.exe",
   "entrypoint": "main.py",
   "spec": "main.spec",
@@ -10,10 +11,27 @@
     "PYTHONHASHSEED": "1",
     "SOURCE_DATE_EPOCH": "git-commit-timestamp"
   },
+  "windows_metadata": {
+    "numeric_version": [0, 5, 0, 0],
+    "CompanyName": "3D-uy",
+    "FileDescription": "KACE Studio",
+    "FileVersion": "0.5.0-dev",
+    "InternalName": "KACE-studio",
+    "OriginalFilename": "KACE-studio.exe",
+    "ProductName": "KACE Studio",
+    "ProductVersion": "0.5.0-dev"
+  },
+  "signing": {
+    "required_for_release": true,
+    "digest_algorithm": "sha256",
+    "timestamp_required": true,
+    "timestamp_url": "https://timestamp.digicert.com",
+    "expected_certificate_sha256_env": "KACE_SIGNING_CERT_SHA256"
+  },
   "kace": {
     "repository": "https://github.com/3D-uy/KACE.git",
-    "bootstrap_ref": "9bfc0ad8a9af572ba757ef31db17acfaf670153d",
-    "bootstrap_sha256": "6d9206ef7743e30d80ddd11473ea6f5ceaaa6a327a422094d69867205c14f1f3",
+    "bootstrap_ref": "433aa17cb8dd6da1cfddb1dd6bb6427fdd224789",
+    "bootstrap_sha256": "aaa748c4bc8c65159b9133c39438f03015922902ab64300419df9164f0b8e441",
     "installer_ref": "592a8549a09333ae42582bd458e378f6d0ea78c3",
     "installer_sha256": "9b8dfb1d5121eaaf6a8d9641da06aba5a6392dafcf218b431b3a23bc9f66dcdb"
   },
