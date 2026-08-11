@@ -71,6 +71,21 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# The Windows 10+ UCRT/API-set DLLs come from the runner image, not the locked
+# Python/dependency inputs. Bundling them makes two otherwise identical builds
+# differ whenever GitHub rolls out a new Windows image. Use the OS copies so the
+# unsigned artifact is derived only from the controlled toolchain.
+HOST_WINDOWS_RUNTIME_PREFIXES = ('api-ms-win-', 'ext-ms-win-')
+HOST_WINDOWS_RUNTIME_BINARIES = {'ucrtbase.dll'}
+a.binaries = [
+    entry
+    for entry in a.binaries
+    if not (
+        Path(entry[0]).name.lower() in HOST_WINDOWS_RUNTIME_BINARIES
+        or Path(entry[0]).name.lower().startswith(HOST_WINDOWS_RUNTIME_PREFIXES)
+    )
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(

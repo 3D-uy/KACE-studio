@@ -92,6 +92,7 @@ Automated CI must never be pointed at physical disks or printer controllers.
 - [ ] Studio's Windows/Ubuntu and Python 3.11/3.12 test matrix passes.
 - [ ] The Windows executable build passes after those tests.
 - [ ] A second clean Windows runner reproduces the unsigned EXE byte for byte and emits `KACE-studio.independent-build.json` bound to the exact source commit and artifact SHA-256.
+- [ ] The packaged archive does not vendor runner-image `api-ms-win-*`, `ext-ms-win-*`, or `ucrtbase.dll`; supported Windows 10/11 hosts provide these system runtimes.
 - [ ] The CI logs show the expected immutable bootstrap ref and checksum.
 - [ ] The downloaded CI artifact has its external `KACE-studio.release.json` manifest and matching SHA-256.
 - [ ] Packaged-bootstrap verification matches the CI-fetched input exactly.

@@ -2,6 +2,11 @@
 *.sh text eol=lf
 # Force LF line endings for PyInstaller spec files
 *.spec text eol=lf
+# Bundled text is part of the EXE identity and must not vary with checkout policy
+*.json text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
 # Treat font binaries as binary (no diff / no line-ending conversion)
 *.ttf binary
 *.woff binary

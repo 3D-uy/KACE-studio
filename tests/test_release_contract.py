@@ -87,6 +87,24 @@ def test_ci_uses_locked_inputs_and_immutable_actions():
     assert "python scripts/release.py verify-release-gates" in workflow
 
 
+def test_windows_ci_fails_closed_on_native_command_errors():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert workflow.count("$PSNativeCommandUseErrorActionPreference = $true") >= 5
+    assert "cat pytest_run.log" not in workflow
+    assert "python -m pytest -v --junitxml=pytest-results.xml" in workflow
+
+
+def test_reproducible_build_excludes_host_windows_runtime_and_normalizes_text():
+    spec = (ROOT / "main.spec").read_text(encoding="utf-8")
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "HOST_WINDOWS_RUNTIME_PREFIXES" in spec
+    assert "api-ms-win-" in spec
+    assert "ucrtbase.dll" in spec
+    assert "a.binaries =" in spec
+    for pattern in ("*.json", "*.js", "*.css", "*.html"):
+        assert f"{pattern} text eol=lf" in attributes
+
+
 def test_spec_bundles_every_runtime_contract_root():
     spec = (ROOT / "main.spec").read_text(encoding="utf-8")
     for source in ("web", "bootstrap.sh", "image-manifest.json", "release-contract.json"):

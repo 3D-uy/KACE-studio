@@ -78,7 +78,7 @@ The `main` branch and CI artifacts are development outputs, not a stable compati
 
 - Python 3.11 or 3.12.
 - Git.
-- Windows for real writer validation; Linux is supported for non-destructive CI tests.
+- Windows 10 or 11 for the desktop application and real writer validation; the packaged EXE uses the OS-provided UCRT/API-set runtime. Linux is supported for non-destructive CI tests.
 - PyInstaller when building the executable.
 
 Docker is not required to run Studio. It is used by the KACE repository for configuration and firmware validation.
