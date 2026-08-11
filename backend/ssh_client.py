@@ -2,6 +2,7 @@ import os
 import csv
 from contextlib import contextmanager
 from functools import lru_cache
+import math
 import subprocess
 import tempfile
 import threading
@@ -13,7 +14,38 @@ from typing import Callable
 
 
 KNOWN_HOSTS_LOCK_TIMEOUT_SECONDS = 5.0
+DEFAULT_SSH_CONNECT_DEADLINE_SECONDS = 30.0
+SSH_CONNECT_DEADLINE_ENV = "KACE_STUDIO_SSH_CONNECT_DEADLINE_S"
 _known_hosts_thread_lock = threading.RLock()
+
+
+class SSHConnectionDeadlineExceeded(TimeoutError):
+    """Raised when the complete SSH trust/connect/retry transaction expires."""
+
+
+def _validated_positive_seconds(value: object, label: str) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a positive finite number of seconds.") from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"{label} must be a positive finite number of seconds.")
+    return seconds
+
+
+def ssh_connect_deadline_seconds() -> float:
+    """Read the fail-closed, configurable wall-clock SSH deadline."""
+    value = os.environ.get(
+        SSH_CONNECT_DEADLINE_ENV, str(DEFAULT_SSH_CONNECT_DEADLINE_SECONDS)
+    )
+    return _validated_positive_seconds(value, SSH_CONNECT_DEADLINE_ENV)
+
+
+def _remaining_seconds(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SSHConnectionDeadlineExceeded("SSH connection deadline exceeded.")
+    return remaining
 
 
 @lru_cache(maxsize=1)
@@ -88,9 +120,17 @@ def _atomic_write_known_hosts(path: str, content: str) -> None:
 
 
 @contextmanager
-def _known_hosts_lock(known_hosts_path: str):
+def _known_hosts_lock(known_hosts_path: str, *, deadline: float | None = None):
     lock_path = os.path.join(os.path.dirname(known_hosts_path), "known_hosts.lock")
-    with _known_hosts_thread_lock:
+    if deadline is None:
+        thread_lock_acquired = _known_hosts_thread_lock.acquire()
+    else:
+        thread_lock_acquired = _known_hosts_thread_lock.acquire(
+            timeout=_remaining_seconds(deadline)
+        )
+    if not thread_lock_acquired:
+        raise TimeoutError("Timed out locking SSH known_hosts storage.")
+    try:
         descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         lock_file = os.fdopen(descriptor, "r+b", closefd=True)
         acquired = False
@@ -100,7 +140,9 @@ def _known_hosts_lock(known_hosts_path: str):
                 lock_file.flush()
                 os.fsync(lock_file.fileno())
             _restrict_path_permissions(lock_path)
-            deadline = time.monotonic() + KNOWN_HOSTS_LOCK_TIMEOUT_SECONDS
+            lock_deadline = time.monotonic() + KNOWN_HOSTS_LOCK_TIMEOUT_SECONDS
+            if deadline is not None:
+                lock_deadline = min(lock_deadline, deadline)
             while True:
                 try:
                     lock_file.seek(0)
@@ -115,9 +157,9 @@ def _known_hosts_lock(known_hosts_path: str):
                     acquired = True
                     break
                 except OSError:
-                    if time.monotonic() >= deadline:
+                    if time.monotonic() >= lock_deadline:
                         raise TimeoutError("Timed out locking SSH known_hosts storage.")
-                    time.sleep(0.05)
+                    time.sleep(min(0.05, max(lock_deadline - time.monotonic(), 0)))
             yield
         finally:
             if acquired:
@@ -131,15 +173,17 @@ def _known_hosts_lock(known_hosts_path: str):
 
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             lock_file.close()
+    finally:
+        _known_hosts_thread_lock.release()
 
 
-def _get_known_hosts_path() -> str:
+def _get_known_hosts_path(*, deadline: float | None = None) -> str:
     """Returns the path to KACE's persistent SSH known_hosts file."""
     kace_dir = os.path.join(os.path.expanduser("~"), ".kace")
     os.makedirs(kace_dir, mode=0o700, exist_ok=True)
     _restrict_path_permissions(kace_dir, directory=True)
     path = os.path.join(kace_dir, "known_hosts")
-    with _known_hosts_lock(path):
+    with _known_hosts_lock(path, deadline=deadline):
         if not os.path.exists(path):
             _atomic_write_known_hosts(path, "")
         else:
@@ -218,8 +262,102 @@ class SSHSession:
         self.client = None
         self.channel = None
         self.running = False
+        self._state_lock = threading.RLock()
 
-    def connect(self, ip: str, username: str, password: str) -> bool:
+    def _discard_client(self, client) -> None:
+        with self._state_lock:
+            if self.client is client:
+                self.client = None
+        try:
+            client.close()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _close_transport_objects(channel, client) -> None:
+        if channel:
+            try:
+                channel.close()
+            except Exception:
+                pass
+        if client:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    def _detach_transport(self):
+        self.running = False
+        with self._state_lock:
+            channel = self.channel
+            client = self.client
+            self.channel = None
+            self.client = None
+        return channel, client
+
+    def _abort_connect_nonblocking(self) -> None:
+        channel, client = self._detach_transport()
+        closer = threading.Thread(
+            target=self._close_transport_objects,
+            args=(channel, client),
+            daemon=True,
+            name="kace-ssh-deadline-close",
+        )
+        closer.start()
+
+    def connect(
+        self,
+        ip: str,
+        username: str,
+        password: str,
+        *,
+        deadline_seconds: float | None = None,
+    ) -> bool:
+        """Establish the complete SSH transaction within one wall-clock deadline."""
+        seconds = (
+            ssh_connect_deadline_seconds()
+            if deadline_seconds is None
+            else _validated_positive_seconds(deadline_seconds, "deadline_seconds")
+        )
+        deadline = time.monotonic() + seconds
+        cancelled = threading.Event()
+        finished = threading.Event()
+        outcome: dict[str, object] = {}
+
+        def worker() -> None:
+            try:
+                outcome["success"] = self._connect_until_deadline(
+                    ip, username, password, deadline, cancelled
+                )
+            except Exception as exc:
+                outcome["error"] = exc
+            finally:
+                if cancelled.is_set():
+                    self.close()
+                finished.set()
+
+        thread = threading.Thread(target=worker, daemon=True, name="kace-ssh-connect")
+        thread.start()
+        wait_seconds = max(deadline - time.monotonic(), 0.0)
+        if not finished.wait(wait_seconds):
+            cancelled.set()
+            self._abort_connect_nonblocking()
+            raise SSHConnectionDeadlineExceeded(
+                f"SSH connection deadline exceeded after {seconds:g} seconds."
+            )
+        error = outcome.get("error")
+        if isinstance(error, Exception):
+            raise error
+        return bool(outcome.get("success"))
+
+    def _connect_until_deadline(
+        self,
+        ip: str,
+        username: str,
+        password: str,
+        deadline: float,
+        cancelled: threading.Event,
+    ) -> bool:
         """
         Establishes an SSH connection to the target device with exponential backoff retries.
         Supports custom ports specified in the format IP:PORT (e.g. 127.0.0.1:2222).
@@ -246,18 +384,30 @@ class SSHSession:
             except ValueError:
                 pass
 
-        known_hosts_path = _get_known_hosts_path()
+        known_hosts_path = _get_known_hosts_path(deadline=deadline)
 
         for attempt in range(retries + 1):
+            if cancelled.is_set():
+                raise SSHConnectionDeadlineExceeded("SSH connection deadline exceeded.")
+            remaining = _remaining_seconds(deadline)
+            client = paramiko.SSHClient()
             try:
-                self.client = paramiko.SSHClient()
+                with self._state_lock:
+                    abandoned = cancelled.is_set()
+                    if not abandoned:
+                        self.client = client
+                if abandoned:
+                    self._discard_client(client)
+                    raise SSHConnectionDeadlineExceeded(
+                        "SSH connection deadline exceeded."
+                    )
 
                 # Treat load, verification and persistence as one serialized
                 # trust transaction. Otherwise a concurrent explicit clear can
                 # be undone by a connection that loaded the previous key.
-                with _known_hosts_lock(known_hosts_path):
+                with _known_hosts_lock(known_hosts_path, deadline=deadline):
                     try:
-                        self.client.load_host_keys(known_hosts_path)
+                        client.load_host_keys(known_hosts_path)
                     except FileNotFoundError:
                         pass  # Defensive: the path is normally created above.
 
@@ -265,18 +415,33 @@ class SSHSession:
                     # For known hosts, paramiko always validates the key against
                     # load_host_keys() entries regardless of policy, so a key change
                     # (MITM indicator) raises BadHostKeyException unconditionally.
-                    self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-                    self.client.connect(
-                        target_ip, port=port, username=username,
-                        password=password, timeout=5
+                    phase_timeout = min(5.0, remaining)
+                    client.connect(
+                        target_ip,
+                        port=port,
+                        username=username,
+                        password=password,
+                        timeout=phase_timeout,
+                        banner_timeout=phase_timeout,
+                        auth_timeout=phase_timeout,
+                        channel_timeout=phase_timeout,
                     )
+                    if cancelled.is_set() or time.monotonic() >= deadline:
+                        raise SSHConnectionDeadlineExceeded(
+                            "SSH connection deadline exceeded."
+                        )
 
                     # A connection is not accepted if its TOFU identity cannot
                     # be persisted durably for the next verification.
                     _persist_host_keys_atomically(
-                        self.client, known_hosts_path, lock_held=True
+                        client, known_hosts_path, lock_held=True
                     )
+                    if cancelled.is_set() or time.monotonic() >= deadline:
+                        raise SSHConnectionDeadlineExceeded(
+                            "SSH connection deadline exceeded."
+                        )
 
                 return True
 
@@ -288,18 +453,26 @@ class SSHSession:
                     "If this is a freshly re-flashed Pi, remove the old entry from "
                     f"{known_hosts_path} and reconnect."
                 )
-                if self.client is not None:
-                    self.client.close()
-                self.client = None
+                self._discard_client(client)
                 raise e
+
+            except SSHConnectionDeadlineExceeded:
+                self._discard_client(client)
+                raise
 
             except Exception as e:
                 print(f"SSH connection attempt {attempt + 1}/{retries + 1} failed to {ip}: {e}")
-                if self.client is not None:
-                    self.client.close()
-                self.client = None
+                self._discard_client(client)
+                if cancelled.is_set():
+                    raise SSHConnectionDeadlineExceeded(
+                        "SSH connection deadline exceeded."
+                    ) from e
                 if attempt < retries:
-                    time.sleep(delay)
+                    remaining = _remaining_seconds(deadline)
+                    if cancelled.wait(min(delay, remaining)):
+                        raise SSHConnectionDeadlineExceeded(
+                            "SSH connection deadline exceeded."
+                        ) from e
                     delay = min(delay * 2, max_delay)
                 else:
                     return False
@@ -388,19 +561,8 @@ class SSHSession:
         """
         Safely tears down active channels and connections.
         """
-        self.running = False
-        if self.channel:
-            try:
-                self.channel.close()
-            except Exception:
-                pass
-        if self.client:
-            try:
-                self.client.close()
-            except Exception:
-                pass
-        self.channel = None
-        self.client = None
+        channel, client = self._detach_transport()
+        self._close_transport_objects(channel, client)
 
     def get_sftp(self):
         """Returns an open paramiko SFTP client, or None if not connected."""

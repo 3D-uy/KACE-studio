@@ -32,6 +32,7 @@ from backend.remote_power_config import RemotePowerConfigError, parse_remote_pow
 from backend.workflow_events import KaceWorkflowEventParser
 from backend.bootstrap_events import BootstrapEventParser
 from backend.resources import bundled_path, verify_runtime_resources
+from backend.app_paths import application_cache_dir
 from backend.image_manifest import ImageManifest
 from backend.prebaked_preflight import load_custom_attestation
 import mimetypes
@@ -352,8 +353,8 @@ class Api:
             }
             image_exists = os.path.isfile(image_path) if is_custom else True
             image_size = os.path.getsize(image_path) if image_exists and is_custom else None
-            cache_parent = os.path.dirname(os.path.abspath(__file__))
-            cache_free_bytes = shutil.disk_usage(cache_parent).free
+            cache_dir = application_cache_dir()
+            cache_free_bytes = shutil.disk_usage(cache_dir).free
             provisioning = validate_provisioning(
                 image_type=image_type,
                 image_path=image_path,
@@ -658,8 +659,7 @@ class Api:
         Downloads, caches, verifies, and decompresses as needed.
         Returns the path to the ready-to-flash .img file.
         """
-        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
-        os.makedirs(cache_dir, exist_ok=True)
+        cache_dir = application_cache_dir()
         if image_type not in {ImageType.MAINSAILOS_PREBAKED, ImageType.FLUIDDPI_PREBAKED}:
             raise ValueError(f"Unsupported automatic pre-baked image type: {image_type.value}")
         return self._resolve_manifest_image(image_type.value, os_arch, cache_dir)
@@ -802,8 +802,7 @@ class Api:
         Downloads, caches, verifies, and decompresses as needed.
         Returns the path to the ready-to-flash .img file.
         """
-        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
-        os.makedirs(cache_dir, exist_ok=True)
+        cache_dir = application_cache_dir()
         return self._resolve_manifest_image(ImageType.RASPIOS_VANILLA.value, os_arch, cache_dir)
 
     def _resolve_custom_image(self, image_path: str) -> str:

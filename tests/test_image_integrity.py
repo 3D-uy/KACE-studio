@@ -116,7 +116,7 @@ def test_partial_cached_image_without_sidecar_is_reextracted(api, tmp_path, monk
     target = cache / "fixture.img"
     target.write_bytes(content[:4096])
 
-    monkeypatch.setattr(main, "__file__", str(tmp_path / "main.py"))
+    monkeypatch.setattr(main, "application_cache_dir", lambda: cache)
     entry = SimpleNamespace(
         image_type=ImageType.MAINSAILOS_PREBAKED.value,
         architecture="32bit",

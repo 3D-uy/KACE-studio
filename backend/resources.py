@@ -9,6 +9,8 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from backend.app_paths import verify_application_cache_contract
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_CONTRACT_NAME = "release-contract.json"
@@ -81,3 +83,4 @@ def verify_runtime_resources() -> None:
         raise ResourceContractError("Bundled bootstrap does not match release contract.")
     if not bundled_path("web/index.html").is_file():
         raise ResourceContractError("Bundled frontend entrypoint is missing.")
+    verify_application_cache_contract()

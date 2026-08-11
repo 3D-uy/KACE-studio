@@ -48,7 +48,7 @@ The `main` branch and CI artifacts are development outputs, not a stable compati
 ## Features
 
 - Guided desktop flow built with PyWebView and a local HTML/CSS/JavaScript interface.
-- Official image discovery, download, checksum handling, cache reuse, and atomic `.part` publication.
+- Official image discovery, download, checksum handling, per-user cache reuse under `%LOCALAPPDATA%\KACE Studio\cache`, and atomic `.part` publication.
 - Complete ZIP and XZ extraction checks before a raw image becomes flashable.
 - Custom-image support limited to uncompressed `.img` files with mandatory externally supplied SHA-256 sidecars. Custom pre-baked images additionally require an image-bound capability attestation.
 - Minimum raw-image plausibility and destination-capacity checks.
@@ -191,6 +191,7 @@ CI does not publish a release, sign the executable, or flash physical media.
 - A custom image classified as pre-baked must also have `<image>.img.kace-attestation.json`. The `kace-studio-prebaked-attestation/v1` document binds `image_sha256` to the selected raw image and declares a supported `family`, `version`, full `source_commit`, required systemd `services`, and provisioning `capabilities`. Automatic pre-baked entries carry the same attestation in `image-manifest.json`, additionally bind the pinned archive checksum, and are checked against the upstream raw-image checksum before flashing. Missing, incompatible, or mismatched attestations stop before any block write.
 - The current removable-target policy accepts supported USB, SD, and MMC paths after system/boot and identity checks. External USB HDD/SSD devices remain high-risk even with reinforced confirmation.
 - Network discovery depends on local routing, firewall rules, SSH availability, and Moonraker port visibility.
+- The complete SSH trust/connect/retry transaction has a 30-second wall-clock deadline. Set `KACE_STUDIO_SSH_CONNECT_DEADLINE_S` to a positive finite number of seconds to override it; invalid values fail before a network attempt.
 - Studio can provision the dashboard choices implemented by the KACE bootstrap. Upstream images and installers can change independently.
 - Automated tests do not prove electrical, storage, or printer safety on real hardware.
 

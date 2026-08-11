@@ -90,13 +90,15 @@ def test_clear_host_key_holds_lock_for_read_modify_write(tmp_path, monkeypatch):
     events = []
 
     @contextmanager
-    def observed_lock(path):
+    def observed_lock(path, **_kwargs):
         events.append(("enter", path))
         yield
         events.append(("exit", path))
 
     monkeypatch.setattr(ssh_client, "_known_hosts_lock", observed_lock)
-    monkeypatch.setattr(ssh_client, "_get_known_hosts_path", lambda: str(known_hosts))
+    monkeypatch.setattr(
+        ssh_client, "_get_known_hosts_path", lambda **_kwargs: str(known_hosts)
+    )
     real_atomic_write = ssh_client._atomic_write_known_hosts
 
     def observed_write(path, content):
@@ -124,7 +126,7 @@ def test_ssh_trust_transaction_holds_lock_through_connect_and_publish(tmp_path, 
     events = []
 
     @contextmanager
-    def observed_lock(path):
+    def observed_lock(path, **_kwargs):
         nonlocal lock_depth
         assert path == str(known_hosts)
         lock_depth += 1
@@ -155,7 +157,9 @@ def test_ssh_trust_transaction_holds_lock_through_connect_and_publish(tmp_path, 
         assert lock_depth == 1
         events.append("persist")
 
-    monkeypatch.setattr(ssh_client, "_get_known_hosts_path", lambda: str(known_hosts))
+    monkeypatch.setattr(
+        ssh_client, "_get_known_hosts_path", lambda **_kwargs: str(known_hosts)
+    )
     monkeypatch.setattr(ssh_client, "_known_hosts_lock", observed_lock)
     monkeypatch.setattr(ssh_client.paramiko, "SSHClient", FakeClient)
     monkeypatch.setattr(ssh_client.paramiko, "AutoAddPolicy", lambda: object())
