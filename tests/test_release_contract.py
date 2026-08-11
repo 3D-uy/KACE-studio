@@ -101,6 +101,9 @@ def test_reproducible_build_excludes_host_windows_runtime_and_normalizes_text():
     assert "api-ms-win-" in spec
     assert "ucrtbase.dll" in spec
     assert "a.binaries =" in spec
+    assert "INSTALL_ENVIRONMENT_METADATA_SUFFIXES" in spec
+    assert ".dist-info/RECORD" in spec
+    assert "a.datas =" in spec
     for pattern in ("*.json", "*.js", "*.css", "*.html"):
         assert f"{pattern} text eol=lf" in attributes
 

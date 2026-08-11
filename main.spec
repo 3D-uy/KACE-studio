@@ -86,6 +86,18 @@ a.binaries = [
         or Path(entry[0]).name.lower().startswith(HOST_WINDOWS_RUNTIME_PREFIXES)
     )
 ]
+
+# Wheel RECORD files describe the installation environment. In particular,
+# console-script launcher hashes include the absolute Python installation path,
+# so they are not application inputs and differ across independent builders.
+INSTALL_ENVIRONMENT_METADATA_SUFFIXES = ('.dist-info/RECORD',)
+a.datas = [
+    entry
+    for entry in a.datas
+    if not str(entry[0]).replace('\\', '/').endswith(
+        INSTALL_ENVIRONMENT_METADATA_SUFFIXES
+    )
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(
