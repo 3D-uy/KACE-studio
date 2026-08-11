@@ -51,7 +51,7 @@ def test_release_verification_rejects_unchecksummed_image_manifest(tmp_path):
     manifest.write_text(
         json.dumps(
             {
-                "schema": "kace-studio-image-manifest/v1",
+                "schema": "kace-studio-image-manifest/v2",
                 "images": [
                     {
                         "image_type": "raspios_vanilla",

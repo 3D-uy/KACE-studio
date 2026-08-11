@@ -25,7 +25,7 @@ def test_manifest_rejects_an_entry_without_a_checksum(tmp_path):
     path.write_text(
         json.dumps(
             {
-                "schema": "kace-studio-image-manifest/v1",
+                "schema": "kace-studio-image-manifest/v2",
                 "images": [
                     {
                         "image_type": "raspios_vanilla",

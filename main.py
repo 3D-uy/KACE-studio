@@ -33,7 +33,7 @@ from backend.workflow_events import KaceWorkflowEventParser
 from backend.bootstrap_events import BootstrapEventParser
 from backend.resources import bundled_path, verify_runtime_resources
 from backend.image_manifest import ImageManifest
-from backend.prebaked_preflight import load_custom_preflight
+from backend.prebaked_preflight import load_custom_attestation
 import mimetypes
 
 HTTP_TIMEOUT_SECONDS = 30
@@ -598,6 +598,9 @@ class Api:
             "version": entry.version,
             "archive_sha256": entry.sha256,
             "image_sha256": image_sha256,
+            "attested_image_sha256": (
+                entry.attestation.image_sha256 if entry.attestation is not None else ""
+            ),
         }
 
     def _image_provenance_is_valid(
@@ -614,6 +617,8 @@ class Api:
             return False
         if provenance != self._image_provenance_payload(entry, image_sha256):
             return False
+        if entry.attestation is not None and image_sha256 != entry.attestation.image_sha256:
+            return False
         if verify_image:
             actual_sha256 = self._compute_sha256(
                 image_path, "Verifying pre-baked image identity"
@@ -629,7 +634,7 @@ class Api:
             "FLASHING", 0, "Validating pre-baked image services and capabilities..."
         )
         if provisioning.image_type is ImageType.CUSTOM_PREBAKED:
-            return load_custom_preflight(image_path)
+            return load_custom_attestation(image_path)
         if provisioning.image_type not in {
             ImageType.MAINSAILOS_PREBAKED,
             ImageType.FLUIDDPI_PREBAKED,
@@ -639,13 +644,13 @@ class Api:
         entry = ImageManifest.load_bundled().resolve(
             provisioning.image_type.value, provisioning.os_arch
         )
-        if entry.preflight is None:
-            raise ValueError("Pinned pre-baked image has no preflight contract.")
+        if entry.attestation is None:
+            raise ValueError("Pinned pre-baked image has no image attestation.")
         if not self._image_provenance_is_valid(image_path, entry, verify_image=True):
             raise ValueError(
-                "Pre-baked image provenance does not match its pinned archive, version, and checksum."
+                "Pre-baked image does not match its pinned, image-bound attestation."
             )
-        return entry.preflight
+        return entry.attestation
 
     def _resolve_prebaked_image(self, image_type: ImageType, os_arch: str) -> str:
         """
@@ -688,6 +693,16 @@ class Api:
             image_sha256 = self._decompress_archive(
                 cached_archive, target_img, "Decompressing OS image"
             )
+            if (
+                entry.attestation is not None
+                and image_sha256.lower() != entry.attestation.image_sha256
+            ):
+                self._remove_file_if_present(target_img)
+                self._remove_file_if_present(target_img + ".sha256")
+                self._remove_file_if_present(self._image_provenance_path(target_img))
+                raise ValueError(
+                    "Decompressed image SHA-256 does not match its trusted attestation."
+                )
             self._write_json_atomically(
                 self._image_provenance_path(target_img),
                 self._image_provenance_payload(entry, image_sha256),
@@ -792,44 +807,47 @@ class Api:
         return self._resolve_manifest_image(ImageType.RASPIOS_VANILLA.value, os_arch, cache_dir)
 
     def _resolve_custom_image(self, image_path: str) -> str:
-        """
-        Validates a custom OS image path and verifies its SHA-256 integrity
-        if a matching .sha256 sidecar file exists.
-        Returns the validated image path.
-        """
+        """Validate a custom raw image against a mandatory external SHA-256."""
         if not os.path.exists(image_path):
             raise ValueError(f"Custom image file not found: {image_path}")
         if not image_path.lower().endswith(".img"):
             raise ValueError("Custom images must be uncompressed .img files.")
 
-        # Check for matching .sha256 file next to the custom image
         custom_sha_path = image_path + ".sha256"
         custom_stem_sha_path = os.path.join(
             os.path.dirname(image_path),
-            os.path.splitext(os.path.basename(image_path))[0] + ".sha256"
+            os.path.splitext(os.path.basename(image_path))[0] + ".sha256",
         )
+        checksum_paths = [
+            path for path in (custom_sha_path, custom_stem_sha_path) if os.path.isfile(path)
+        ]
+        if not checksum_paths:
+            raise ValueError(
+                "Custom images require an external SHA-256 sidecar: "
+                "<image>.img.sha256 or <image>.sha256."
+            )
 
-        expected_custom_sha = ""
-        if os.path.exists(custom_sha_path):
-            with open(custom_sha_path, "r", encoding="utf-8") as f:
-                expected_custom_sha = f.read().strip().split()[0]
-        elif os.path.exists(custom_stem_sha_path):
-            with open(custom_stem_sha_path, "r", encoding="utf-8") as f:
-                expected_custom_sha = f.read().strip().split()[0]
+        expected_checksums = set()
+        for checksum_path in checksum_paths:
+            try:
+                with open(checksum_path, "r", encoding="utf-8") as checksum_file:
+                    checksum_tokens = checksum_file.read().strip().split()
+            except (OSError, UnicodeError) as exc:
+                raise ValueError("Custom image external SHA-256 is unreadable.") from exc
+            if not checksum_tokens or not re.fullmatch(r"[0-9a-fA-F]{64}", checksum_tokens[0]):
+                raise ValueError("Custom image external SHA-256 is invalid.")
+            expected_checksums.add(checksum_tokens[0].lower())
+        if len(expected_checksums) != 1:
+            raise ValueError("Custom image external SHA-256 sidecars disagree.")
 
-        if expected_custom_sha:
-            self.set_device_state("FLASHING", 0, "Verifying custom image integrity...")
-            calculated_custom_sha = self._compute_sha256(image_path, "Verifying custom image")
-            if calculated_custom_sha.lower() != expected_custom_sha.lower():
-                raise ValueError(
-                    f"Custom image integrity check failed: SHA256 mismatch.\n"
-                    f"Expected: {expected_custom_sha}\nCalculated: {calculated_custom_sha}"
-                )
-        else:
-            # No checksum file — calculate and log to verify readability
-            self.set_device_state("FLASHING", 0, "Calculating custom image checksum...")
-            calculated_custom_sha = self._compute_sha256(image_path, "Reading custom image")
-            print(f"Custom image SHA256: {calculated_custom_sha}", file=sys.stderr)
+        expected_custom_sha = expected_checksums.pop()
+        self.set_device_state("FLASHING", 0, "Verifying custom image integrity...")
+        calculated_custom_sha = self._compute_sha256(image_path, "Verifying custom image")
+        if calculated_custom_sha.lower() != expected_custom_sha:
+            raise ValueError(
+                f"Custom image integrity check failed: SHA256 mismatch.\n"
+                f"Expected: {expected_custom_sha}\nCalculated: {calculated_custom_sha}"
+            )
 
         self._validate_raw_image(image_path)
         return image_path

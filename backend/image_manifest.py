@@ -10,13 +10,13 @@ from urllib.parse import unquote, urlparse
 
 from backend.resources import bundled_path
 from backend.prebaked_preflight import (
-    PrebakedContract,
-    PrebakedPreflightError,
-    parse_prebaked_contract,
+    PrebakedAttestation,
+    PrebakedAttestationError,
+    parse_prebaked_attestation,
 )
 
 
-SCHEMA = "kace-studio-image-manifest/v1"
+SCHEMA = "kace-studio-image-manifest/v2"
 SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 SUPPORTED_ARCHITECTURES = {"32bit", "64bit"}
 SUPPORTED_IMAGE_TYPES = {"raspios_vanilla", "mainsailos_prebaked", "fluiddpi_prebaked"}
@@ -33,7 +33,7 @@ class ImageManifestEntry:
     version: str
     url: str
     sha256: str
-    preflight: PrebakedContract | None = None
+    attestation: PrebakedAttestation | None = None
 
     @property
     def filename(self) -> str:
@@ -85,15 +85,17 @@ class ImageManifest:
                 raise ManifestError(f"Image manifest entry {index} has an unsupported image URL.")
             if not isinstance(sha256, str) or not SHA256.fullmatch(sha256):
                 raise ManifestError(f"Image manifest entry {index} requires a valid sha256.")
-            preflight = None
+            attestation = None
             if image_type.endswith("_prebaked"):
                 try:
-                    preflight = parse_prebaked_contract(
-                        raw.get("preflight"),
+                    attestation = parse_prebaked_attestation(
+                        raw.get("attestation"),
                         image_type=image_type,
                         expected_version=version.strip(),
+                        expected_architecture=architecture,
+                        expected_archive_sha256=sha256,
                     )
-                except PrebakedPreflightError as exc:
+                except PrebakedAttestationError as exc:
                     raise ManifestError(
                         f"Image manifest entry {index} has an invalid {exc}."
                     ) from exc
@@ -108,7 +110,7 @@ class ImageManifest:
                     version=version.strip(),
                     url=url,
                     sha256=sha256.lower(),
-                    preflight=preflight,
+                    attestation=attestation,
                 )
             )
         return cls(tuple(entries))

@@ -124,6 +124,7 @@ def test_partial_cached_image_without_sidecar_is_reextracted(api, tmp_path, monk
         url="https://invalid/fixture.zip",
         filename="fixture.zip",
         sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        attestation=SimpleNamespace(image_sha256=hashlib.sha256(content).hexdigest()),
     )
     manifest = SimpleNamespace(resolve=lambda *_args: entry)
     monkeypatch.setattr(main.ImageManifest, "load_bundled", lambda: manifest)
@@ -173,14 +174,37 @@ def test_custom_compressed_images_are_rejected_before_writer(api, tmp_path, monk
     assert not writer_called
 
 
+def test_custom_raw_image_requires_external_checksum(api, tmp_path):
+    image = tmp_path / "custom.img"
+    image.write_bytes(raw_image())
+
+    with pytest.raises(ValueError, match="external SHA-256"):
+        api._resolve_custom_image(str(image))
+
+
+def test_custom_raw_image_rejects_incorrect_external_checksum(api, tmp_path):
+    image = tmp_path / "custom.img"
+    image.write_bytes(raw_image())
+    (tmp_path / "custom.img.sha256").write_text("0" * 64 + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="SHA256 mismatch"):
+        api._resolve_custom_image(str(image))
+
+
 def test_custom_raw_image_requires_plausible_partition_table(api, tmp_path):
     invalid = tmp_path / "invalid.img"
     invalid.write_bytes(b"not a disk image" * 100)
+    (tmp_path / "invalid.img.sha256").write_text(
+        hashlib.sha256(invalid.read_bytes()).hexdigest() + "\n", encoding="utf-8"
+    )
     with pytest.raises(ValueError, match="MBR/GPT"):
         api._resolve_custom_image(str(invalid))
 
     valid = tmp_path / "valid.img"
     valid.write_bytes(raw_image())
+    (tmp_path / "valid.img.sha256").write_text(
+        hashlib.sha256(valid.read_bytes()).hexdigest() + "\n", encoding="utf-8"
+    )
     assert api._resolve_custom_image(str(valid)) == str(valid)
 
 
