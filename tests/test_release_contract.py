@@ -75,6 +75,8 @@ def test_ci_uses_locked_inputs_and_immutable_actions():
     assert "python scripts/release.py verify-remote-installer" in workflow
     assert "windows-latest" not in workflow
     assert "ubuntu-latest" not in workflow
+    assert 'python-version: ["3.11.9", "3.12.10"]' in workflow
+    assert 'python-version: "3.12.10"' in workflow
     action_refs = re.findall(r"uses:\s*[^@\s]+@([^\s]+)", workflow)
     assert action_refs
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
