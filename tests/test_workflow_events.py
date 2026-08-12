@@ -48,6 +48,8 @@ def test_repeated_and_out_of_order_sequences_are_ignored_per_workflow():
 @pytest.mark.parametrize("bad_line", [
     "=== KACE_WORKFLOW_EVENT: not-json ===\n",
     "=== KACE_WORKFLOW_EVENT: {} ===\n",
+    '=== KACE_WORKFLOW_EVENT: {"schema":3,"workflow_id":"x","sequence":1,"state":"DONE"} ===\n',
+    '=== KACE_WORKFLOW_EVENT: {"schema":2,"workflow_kind":"other","workflow_id":"x","sequence":1,"state":"DONE"} ===\n',
     '=== KACE_WORKFLOW_EVENT: {"workflow_id":"x","sequence":true,"state":"DONE"} ===\n',
     '=== KACE_WORKFLOW_EVENT: {"workflow_id":"","sequence":1,"state":"DONE"} ===\n',
     '=== KACE_WORKFLOW_EVENT: {"workflow_id":"x","sequence":0,"state":"DONE"} ===\n',
@@ -151,6 +153,124 @@ def test_firmware_deployment_events_preserve_method_artifact_and_instructions():
     assert "Final filename:" in app_js
     assert "KACE_FIRMWARE_DEPLOYMENT_STEPS" in app_js
     assert "downloadKaceFirmwareArtifact" in app_js
+
+
+def test_mcu_identity_confirmation_states_are_observationally_rendered():
+    parser = KaceWorkflowEventParser()
+    event = {
+        "schema": 1,
+        "workflow_id": "install-flow",
+        "sequence": 12,
+        "state": "AWAITING_MCU_CONFIRMATION",
+        "detail": "physical MCU identity requires explicit confirmation",
+        "data": {
+            "identity_assessment": {
+                "verdict": "AMBIGUOUS",
+                "score": 80,
+                "automatic_threshold": 90,
+                "reasons": ["reported serial changed"],
+            },
+            "manually_confirmed": False,
+        },
+    }
+    line = f"{PREFIX}{json.dumps(event)} ===\n"
+
+    assert parser.feed(line) == [event]
+    app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    assert "AWAITING_MCU_CONFIRMATION: [3, 4]" in app_js
+    assert "MCU_IDENTITY_CONFIRMED: [4, 5]" in app_js
+    assert "MCU identity evidence:" in app_js
+    assert "physically confirmed by the operator" in app_js
+
+
+def test_simulated_kace_transcripts_keep_terminal_semantics_observational():
+    parser = KaceWorkflowEventParser()
+
+    def encoded(workflow_id, sequence, state, *, schema=1, kind=None):
+        event = {
+            "schema": schema,
+            "workflow_id": workflow_id,
+            "sequence": sequence,
+            "state": state,
+            "detail": f"simulated {state.lower()}",
+        }
+        if kind is not None:
+            event["workflow_kind"] = kind
+        return f"{PREFIX}{json.dumps(event)} ===\n", event
+
+    success_states = [
+        "MONITOR_ARMED", "MCU_ABSENT", "MCU_PRESENT", "MOONRAKER_ONLINE",
+        "KLIPPER_READY", "MCU_REGISTERED", "VERIFYING_FIRMWARE",
+        "FIRMWARE_VERIFIED", "APPLYING_CONFIG", "DONE",
+    ]
+    transcript = "ordinary SSH output\n"
+    expected_success = None
+    for sequence, state in enumerate(success_states, 1):
+        line, expected_success = encoded("install-success", sequence, state)
+        transcript += line
+    timeout_line, timeout_event = encoded("install-timeout", 4, "TIMEOUT")
+    action_line, action_event = encoded(
+        "prepare-only",
+        3,
+        "ACTION_REQUIRED",
+        schema=2,
+        kind="firmware_deployment",
+    )
+    transcript += timeout_line + action_line
+
+    # Replay arbitrary SSH chunk boundaries, including a stale event after the
+    # authoritative terminal transcript.
+    accepted = []
+    widths = (1, 7, 19, 3, 41)
+    offset = 0
+    index = 0
+    while offset < len(transcript):
+        width = widths[index % len(widths)]
+        accepted.extend(parser.feed(transcript[offset:offset + width]))
+        offset += width
+        index += 1
+    stale, _ = encoded("install-success", 2, "MCU_ABSENT")
+    assert parser.feed(stale) == []
+
+    assert parser.workflows["install-success"].event == expected_success
+    assert parser.workflows["install-timeout"].event == timeout_event
+    assert parser.workflows["prepare-only"].event == action_event
+    assert accepted[-1] == action_event
+
+    app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    assert "'TIMEOUT'" in app_js
+    assert "tracker.classList.toggle('success', isDone);" in app_js
+    assert "tracker.classList.toggle('action-required', isActionRequired);" in app_js
+    assert "isDone || isActionRequired" not in app_js
+
+    # Reconnect recovery remains a read-only SSH/SFTP projection of KACE's
+    # persisted manifest; it cannot advance or rewrite the workflow.
+    from main import Api
+
+    persisted = {
+        "schema": 1,
+        "workflow_kind": "firmware_deployment",
+        "workflow_id": "prepare-only",
+        "sequence": 3,
+        "state": "ACTION_REQUIRED",
+        "deployment": {
+            "deployment_id": "prepare-only",
+            "final_filename": "klipper.uf2",
+            "staged_path": "/home/kace/kace/deploy/prepare-only/klipper.uf2",
+        },
+    }
+
+    class ReadOnlySsh:
+        calls = []
+
+        def read_text_file(self, path):
+            self.calls.append(path)
+            return json.dumps(persisted)
+
+    api = Api()
+    api._ssh = ReadOnlySsh()
+    assert api.get_firmware_deployment_manifest() == persisted
+    assert api._ssh.calls == ["kace/deployment-manifest.json"]
 
 
 def test_manifest_reader_is_home_relative_and_size_limited():

@@ -7,6 +7,8 @@ import tempfile
 import uuid
 import re
 from backend.sha512_crypt import hash_password
+from backend.provisioning import ImageType, WifiSecurity, validate_provisioning
+from backend.resources import resolve_bootstrap_source as _resolve_bootstrap_resource
 
 # Set KACE_DEBUG=1 in the environment to enable verbose path/status logging.
 # Do NOT enable in packaged/production builds — logs leak filesystem paths.
@@ -71,6 +73,165 @@ def _copy_bootstrap_atomically(source_path: str, destination_path: str, version_
         except FileNotFoundError:
             pass
         raise
+
+
+_FIRST_RUN_PENDING_STATE = """schema=kace-first-run/v1
+status=pending
+attempts=0
+exit_code=0
+"""
+
+
+def _build_retryable_first_run(label: str, body: str) -> str:
+    """Wrap an idempotent first-run body in durable bounded-retry state."""
+    header = r'''#!/bin/bash
+# KACE Studio retryable first-run workflow (__LABEL__).
+
+set -Eeuo pipefail
+MAX_ATTEMPTS=3
+BOOT_MNT="${KACE_FIRST_RUN_BOOT_MNT:-}"
+if [ -n "$BOOT_MNT" ] && [ -d "$BOOT_MNT" ]; then
+    : # Explicit mount override used by diagnostics and recovery tooling.
+elif [ -d "/boot/firmware" ] && mountpoint -q /boot/firmware 2>/dev/null; then
+    BOOT_MNT="/boot/firmware"
+elif [ -d "/boot" ] && mountpoint -q /boot 2>/dev/null; then
+    BOOT_MNT="/boot"
+fi
+[ -n "$BOOT_MNT" ] || { echo "Boot partition is not mounted." >&2; exit 1; }
+
+STATE_FILE="$BOOT_MNT/kace-firstrun.state"
+LOG_FILE="$BOOT_MNT/kace-firstrun.log"
+CMDLINE="$BOOT_MNT/cmdline.txt"
+CLEAN_WIFI_ON_SUCCESS=false
+ATTEMPTS=0
+umask 077
+exec >>"$LOG_FILE" 2>&1
+
+state_value() {
+    local key="$1"
+    [ -f "$STATE_FILE" ] || return 0
+    sed -n "s/^${key}=//p" "$STATE_FILE" | tail -n 1
+}
+
+write_state() {
+    local status="$1"
+    local exit_code="$2"
+    local temporary="${STATE_FILE}.tmp.$$"
+    {
+        echo "schema=kace-first-run/v1"
+        echo "status=$status"
+        echo "attempts=$ATTEMPTS"
+        echo "exit_code=$exit_code"
+        echo "updated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$temporary"
+    sync "$temporary" 2>/dev/null || true
+    mv -f "$temporary" "$STATE_FILE"
+}
+
+remove_trigger_atomically() {
+    [ -f "$CMDLINE" ] || return 0
+    local temporary="${CMDLINE}.tmp.$$"
+    sed -E \
+        -e 's/(^| )systemd[.]run=[^ ]*//g' \
+        -e 's/(^| )systemd[.]run_success_action=[^ ]*//g' \
+        -e 's/(^| )systemd[.]run_failure_action=[^ ]*//g' \
+        -e 's/(^| )systemd[.]unit=kernel-command-line[.]target//g' \
+        -e 's/  +/ /g' \
+        -e 's/^ //; s/ $//' "$CMDLINE" > "$temporary"
+    printf '\n' >> "$temporary"
+    sync "$temporary" 2>/dev/null || true
+    mv -f "$temporary" "$CMDLINE"
+}
+
+cleanup_wifi_credentials() {
+    rm -f \
+        "$BOOT_MNT/wpa_supplicant.conf" \
+        "$BOOT_MNT/headless_nm.txt" \
+        "$BOOT_MNT/network-config" \
+        "$BOOT_MNT/system-connections/preconfigured-wifi.nmconnection"
+}
+
+finalize_first_run() {
+    local exit_code=$?
+    trap - EXIT
+    set +e
+    if [ "$exit_code" -eq 0 ]; then
+        if write_state complete 0; then
+            if [ "$CLEAN_WIFI_ON_SUCCESS" = "true" ]; then
+                cleanup_wifi_credentials
+            fi
+            if remove_trigger_atomically; then
+                rm -f "$BOOT_MNT/kace-firstrun-error.log"
+            else
+                exit_code=74
+                echo "Could not remove first-run trigger; it will be retried." >&2
+            fi
+        else
+            exit_code=74
+            echo "Could not persist completed first-run state; retaining the trigger." >&2
+        fi
+    else
+        write_state failed "$exit_code"
+        echo "KACE __LABEL__ first-run failed at $(date -u) with exit code $exit_code" \
+            > "$BOOT_MNT/kace-firstrun-error.log"
+        if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
+            echo "Retry limit reached; automatic trigger disabled. Run firstrun.sh manually after repair."
+            remove_trigger_atomically
+        fi
+    fi
+    sync
+    exit "$exit_code"
+}
+
+if [ "$(state_value status)" = "complete" ]; then
+    echo "KACE __LABEL__ first-run already completed."
+    remove_trigger_atomically
+    exit 0
+fi
+
+previous_attempts="$(state_value attempts)"
+case "$previous_attempts" in
+    ''|*[!0-9]*) ATTEMPTS=0 ;;
+    *) ATTEMPTS="$previous_attempts" ;;
+esac
+if [ "$ATTEMPTS" -ge "$MAX_ATTEMPTS" ]; then
+    write_state failed 75
+    remove_trigger_atomically
+    echo "KACE __LABEL__ first-run retry limit already reached." >&2
+    exit 75
+fi
+
+ATTEMPTS=$((ATTEMPTS + 1))
+write_state running 0
+trap finalize_first_run EXIT
+echo "Starting KACE __LABEL__ first-run attempt $ATTEMPTS/$MAX_ATTEMPTS at $(date -u)."
+'''.replace("__LABEL__", label)
+    return header + "\n" + body.strip() + "\n"
+
+
+def _first_run_network_import_body(wifi_configured: bool) -> str:
+    if not wifi_configured:
+        return ""
+    return r'''
+# Import the staged NetworkManager profile and verify it before deleting any
+# credential-bearing files from the boot partition.
+NM_SRC="$BOOT_MNT/system-connections/preconfigured-wifi.nmconnection"
+NM_DIR="/etc/NetworkManager/system-connections"
+NM_DST="$NM_DIR/preconfigured-wifi.nmconnection"
+[ -f "$NM_SRC" ] || { echo "Staged NetworkManager profile is missing." >&2; exit 1; }
+mkdir -p "$NM_DIR"
+install -o root -g root -m 600 "$NM_SRC" "$NM_DST"
+cmp -s "$NM_SRC" "$NM_DST" || { echo "NetworkManager profile verification failed." >&2; exit 1; }
+CLEAN_WIFI_ON_SUCCESS=true
+'''
+
+
+def _write_first_run_artifacts(boot_path: str, script_content: str) -> str:
+    state_path = os.path.join(boot_path, "kace-firstrun.state")
+    script_path = os.path.join(boot_path, "firstrun.sh")
+    _write_text_atomically(state_path, _FIRST_RUN_PENDING_STATE)
+    _write_text_atomically(script_path, script_content)
+    return script_path
 
 # Subprocess flags to run silent processes on Windows (CREATE_NO_WINDOW)
 SUBPROCESS_FLAGS = {}
@@ -176,6 +337,18 @@ def _sha256_file(file_path: str) -> str:
         for chunk in iter(lambda: source.read(4 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def resolve_bootstrap_source() -> str:
+    """Return the exact bootstrap resource used by injection in every runtime."""
+    return str(_resolve_bootstrap_resource())
+
+
+def bootstrap_preflight_facts() -> tuple[str, bool, str]:
+    """Collect read-only facts consumed by the pure provisioning validator."""
+    source_path = resolve_bootstrap_source()
+    exists = os.path.isfile(source_path)
+    return source_path, exists, _sha256_file(source_path) if exists else ""
 
 # Maps timezone names to ISO 3166-1 alpha-2 WiFi regulatory country codes
 # We build this dynamically using pytz to support ALL timezones in the world.
@@ -565,7 +738,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
     finally:
         ctypes.windll.kernel32.CloseHandle(hProcess)
 
-def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, is_prebaked: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True) -> bool:
+def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, image_type: ImageType | str = ImageType.RASPIOS_VANILLA, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, wifi_security: WifiSecurity | str = WifiSecurity.WPA2) -> bool:
     """
     Injects SSH enablement, User credentials, WiFi configuration (wpa_supplicant + NetworkManager),
     and hostname parameters directly to the FAT32 boot partition.
@@ -573,23 +746,51 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
     # SEC FIX: Runtime guard replacing assert (assert is disabled with -O).
     if not isinstance(disk_number, int):
         raise TypeError(f"disk_number must be an integer, got {type(disk_number).__name__}")
-    # Pre-flight: server-side validation of username (mirrors client-side regex in app.js)
-    _USERNAME_RE = re.compile(r'^[a-z_][a-z0-9_-]*$')
-    if not username or not _USERNAME_RE.match(username):
-        raise ValueError(
-            "Invalid username. Must start with a lowercase letter or underscore "
-            "and contain only lowercase letters, numbers, hyphens, or underscores."
-        )
 
-    if not isinstance(power_relay, bool):
-        raise TypeError("power_relay must be a boolean")
-    if power_relay:
-        if not isinstance(power_device, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", power_device):
-            raise ValueError("Invalid power device name.")
-        if isinstance(power_gpio, bool) or not isinstance(power_gpio, int) or not 0 <= power_gpio <= 999:
-            raise ValueError("GPIO must be an integer between 0 and 999.")
-        if not isinstance(power_active_low, bool) or not isinstance(restart_klipper_when_powered, bool):
-            raise TypeError("Power relay options must be booleans.")
+    _, bootstrap_exists, bootstrap_sha256 = bootstrap_preflight_facts()
+    provisioning = validate_provisioning(
+        image_type=image_type,
+        image_path="",
+        hostname=hostname,
+        wifi_ssid=wifi_ssid,
+        wifi_password=wifi_password,
+        wifi_security=wifi_security,
+        ssh_password=ssh_password,
+        dashboard_ui=dashboard_ui,
+        timezone=timezone,
+        pi_model=pi_model,
+        os_arch=os_arch,
+        ssh_enabled=ssh_enabled,
+        crowsnest=crowsnest,
+        username=username,
+        password_auth=password_auth,
+        power_relay=power_relay,
+        power_device=power_device,
+        power_gpio=power_gpio,
+        power_active_low=power_active_low,
+        restart_klipper_when_powered=restart_klipper_when_powered,
+        bootstrap_exists=bootstrap_exists,
+        bootstrap_sha256=bootstrap_sha256,
+    )
+    hostname = provisioning.hostname
+    wifi_ssid = provisioning.wifi_ssid
+    wifi_password = provisioning.wifi_password
+    wifi_security = provisioning.wifi_security
+    ssh_password = provisioning.ssh_password
+    dashboard_ui = provisioning.dashboard_ui
+    timezone = provisioning.timezone
+    pi_model = provisioning.pi_model
+    os_arch = provisioning.os_arch
+    ssh_enabled = provisioning.ssh_enabled
+    crowsnest = provisioning.crowsnest
+    username = provisioning.username
+    password_auth = provisioning.password_auth
+    is_prebaked = provisioning.image_type.is_prebaked
+    power_relay = provisioning.power_relay
+    power_device = provisioning.power_device
+    power_gpio = provisioning.power_gpio
+    power_active_low = provisioning.power_active_low
+    restart_klipper_when_powered = provisioning.restart_klipper_when_powered
 
     # Sanitize free-text fields: strip characters that could inject extra lines
     # into key=value config files or corrupt YAML structure.
@@ -640,8 +841,7 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         if ssh_enabled:
             ssh_file = ssh_marker_paths[0]
             try:
-                with open(ssh_file, "w") as f:
-                    pass # Writes empty file to enable SSH
+                _write_text_atomically(ssh_file, "")
                 if not os.path.exists(ssh_file):
                     raise IOError(f"SSH enablement file not found at: {ssh_file}")
             except Exception as e:
@@ -650,8 +850,7 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
                 
             ssh_txt_file = ssh_marker_paths[1]
             try:
-                with open(ssh_txt_file, "w") as f:
-                    pass
+                _write_text_atomically(ssh_txt_file, "")
                 if not os.path.exists(ssh_txt_file):
                     raise IOError(f"SSH txt enablement file not found at: {ssh_txt_file}")
             except Exception as e:
@@ -671,8 +870,7 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         hashed_pw = hash_password(ssh_password)
         userconf_file = os.path.join(boot_path, "userconf.txt")
         try:
-            with open(userconf_file, "w", newline="\n") as f:
-                f.write(f"{username}:{hashed_pw}\n")
+            _write_text_atomically(userconf_file, f"{username}:{hashed_pw}\n")
             if not os.path.exists(userconf_file):
                 raise IOError(f"userconf.txt file not found at: {userconf_file}")
             with open(userconf_file, "r", encoding="utf-8") as f_check:
@@ -693,7 +891,18 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
             # C2: Use pre-computed PBKDF2 hex PSK — never store plain text password.
             # When psk= is a 64-char hex string (no quotes), wpa_supplicant treats it as the
             # raw WPA-PSK key, which is cryptographically equivalent but not reversible.
-            wpa_psk_hex = _compute_wpa_psk(wifi_ssid, wifi_password)
+            wpa_psk_hex = ""
+            if wifi_security is WifiSecurity.WPA2:
+                wpa_psk_hex = (
+                    wifi_password.lower()
+                    if re.fullmatch(r"[0-9A-Fa-f]{64}", wifi_password)
+                    else _compute_wpa_psk(wifi_ssid, wifi_password)
+                )
+            wpa_security = (
+                f"    psk={wpa_psk_hex}\n    key_mgmt=WPA-PSK"
+                if wifi_security is WifiSecurity.WPA2
+                else "    key_mgmt=NONE"
+            )
             wpa_conf = os.path.join(boot_path, "wpa_supplicant.conf")
             wpa_content = f"""ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
@@ -701,19 +910,19 @@ country={country_code}
 
 network={{
     ssid="{clean_wpa_ssid}"
-    psk={wpa_psk_hex}
-    key_mgmt=WPA-PSK
+{wpa_security}
 }}
 """
             try:
-                with open(wpa_conf, "w", newline="\n") as f:
-                    f.write(wpa_content)
+                _write_text_atomically(wpa_conf, wpa_content)
                 if not os.path.exists(wpa_conf):
                     raise IOError(f"wpa_supplicant.conf not found at: {wpa_conf}")
                 with open(wpa_conf, "r", encoding="utf-8") as f_check:
                     c = f_check.read()
-                if clean_wpa_ssid not in c or wpa_psk_hex not in c:
-                    raise ValueError("wpa_supplicant.conf content is missing SSID or PSK credentials.")
+                if clean_wpa_ssid not in c or (
+                    wifi_security is WifiSecurity.WPA2 and wpa_psk_hex not in c
+                ):
+                    raise ValueError("wpa_supplicant.conf content is missing the requested network.")
                 _dbg(f"Successfully verified wpa_supplicant.conf write at {wpa_conf}")
             except Exception as e:
                 print(f"[ERROR] Failed writing or verifying wpa_supplicant.conf: {e}", file=sys.stderr)
@@ -730,6 +939,16 @@ network={{
             # instead of the plaintext password. NetworkManager treats a 64-char hex string
             # in the psk field as a raw WPA-PSK key, which is cryptographically equivalent
             # but not reversible to the original password.
+            nm_security = (
+                f"""[wifi-security]
+auth-alg=open
+key-mgmt=wpa-psk
+psk={wpa_psk_hex}
+
+"""
+                if wifi_security is WifiSecurity.WPA2
+                else ""
+            )
             nm_content = f"""[connection]
 id=preconfigured-wifi
 uuid={conn_uuid}
@@ -740,12 +959,7 @@ interface-name=wlan0
 mode=infrastructure
 ssid={clean_nm_ssid}
 
-[wifi-security]
-auth-alg=open
-key-mgmt=wpa-psk
-psk={wpa_psk_hex}
-
-[ipv4]
+{nm_security}[ipv4]
 method=auto
 
 [ipv6]
@@ -753,14 +967,15 @@ method=auto
 addr-gen-mode=default-or-eui64
 """
             try:
-                with open(nm_file, "w", newline="\n") as f:
-                    f.write(nm_content)
+                _write_text_atomically(nm_file, nm_content)
                 if not os.path.exists(nm_file):
                     raise IOError(f"preconfigured-wifi.nmconnection connection profile not found at: {nm_file}")
                 with open(nm_file, "r", encoding="utf-8") as f_check:
                     c = f_check.read()
-                if clean_nm_ssid not in c or wpa_psk_hex not in c:
-                    raise ValueError("preconfigured-wifi.nmconnection is missing SSID or PSK credentials.")
+                if clean_nm_ssid not in c or (
+                    wifi_security is WifiSecurity.WPA2 and wpa_psk_hex not in c
+                ):
+                    raise ValueError("preconfigured-wifi.nmconnection is missing the requested network.")
                 _dbg(f"Successfully verified NetworkManager connection profile at {nm_file}")
             except Exception as e:
                 print(f"[ERROR] Failed writing or verifying NetworkManager connection profile: {e}", file=sys.stderr)
@@ -776,8 +991,7 @@ addr-gen-mode=default-or-eui64
                 if "systemd.hostname" not in content:
                     # Append parameter
                     content = f"{content} systemd.hostname={clean_hostname}"
-                    with open(cmdline_file, "w", newline="\n") as f:
-                        f.write(content + "\n")
+                    _write_text_atomically(cmdline_file, content + "\n")
                     # Verification check
                     with open(cmdline_file, "r", encoding="utf-8") as f_check:
                         c = f_check.read()
@@ -863,8 +1077,7 @@ enabled = {"true" if ssh_enabled else "false"}
 password_authentication = {"true" if password_auth else "false"}
 """
         try:
-            with open(custom_toml_path, "w", newline="\n") as f:
-                f.write(toml_content)
+            _write_text_atomically(custom_toml_path, toml_content)
             if not os.path.exists(custom_toml_path):
                 raise IOError(f"custom.toml not found at: {custom_toml_path}")
             with open(custom_toml_path, "r", encoding="utf-8") as f_check:
@@ -916,8 +1129,7 @@ password_authentication = {"true" if password_auth else "false"}
                     # Ensure WiFi regulatory domain is set
                     if "cfg80211.ieee80211_regdom" not in cmdline_content:
                         cmdline_content = f"{cmdline_content} cfg80211.ieee80211_regdom={country_code}"
-                    with open(cmdline_path, "w", newline="\n") as f:
-                        f.write(cmdline_content + "\n")
+                    _write_text_atomically(cmdline_path, cmdline_content + "\n")
                     _dbg(f"Cleaned cmdline.txt for prebaked image (removed ds=nocloud, ensured regdom)")
                 except Exception as e:
                     print(f"[ERROR] Failed cleaning cmdline.txt for prebaked image: {e}", file=sys.stderr)
@@ -941,8 +1153,7 @@ password_authentication = {"true" if password_auth else "false"}
                     f'REGDOMAIN="{country_code}"\n'
                 )
                 try:
-                    with open(headless_nm_path, "w", newline="\n") as f:
-                        f.write(headless_content)
+                    _write_text_atomically(headless_nm_path, headless_content)
                     if not os.path.exists(headless_nm_path):
                         raise IOError(f"headless_nm.txt not found at: {headless_nm_path}")
                     with open(headless_nm_path, "r", encoding="utf-8") as f_check:
@@ -965,55 +1176,7 @@ password_authentication = {"true" if password_auth else "false"}
             ssh_enabled_str = "true" if ssh_enabled else "false"
             pw_auth_str = "true" if ssh_enabled and password_auth else "false"
 
-            firstrun_content = f"""#!/bin/bash
-# KACE Studio prebaked firstboot credentials setup.
-# Renames the pre-existing printer user to the target username, moves their
-# home directory, creates a compatibility symlink so Python venv shebangs
-# keep working, then patches User=/Group= in the known service unit files.
-
-cleanup() {{
-    local exit_code=$?
-    local target_mnt="$BOOT_MNT"
-    if [ -z "$target_mnt" ]; then
-        if [ -f "/boot/firmware/cmdline.txt" ]; then
-            target_mnt="/boot/firmware"
-        elif [ -f "/boot/cmdline.txt" ]; then
-            target_mnt="/boot"
-        fi
-    fi
-
-    if [ -n "$target_mnt" ]; then
-        if [ $exit_code -ne 0 ]; then
-            echo "KACE prebaked firstrun failed at $(date) with exit code $exit_code" > "$target_mnt/kace-firstrun-error.log"
-        fi
-        CMDLINE="$target_mnt/cmdline.txt"
-        if [ -f "$CMDLINE" ]; then
-            # [^ ]* is safe here because cmdline.txt now uses a plain unquoted path
-            # (no embedded spaces) so the pattern matches the full token correctly.
-            sed -i 's| systemd[.]run=[^ ]*||g; s| systemd[.]run_success_action=[^ ]*||g; s| systemd[.]run_failure_action=[^ ]*||g; s| systemd[.]unit=kernel-command-line[.]target||g' "$CMDLINE"
-        fi
-        rm -f "$target_mnt/firstrun.sh"
-        rm -f "$target_mnt/.kace-firstrun-done"
-        sync
-    fi
-}}
-trap cleanup EXIT
-
-set -e
-
-# Detect boot partition mount point (Bookworm+: /boot/firmware, legacy: /boot)
-BOOT_MNT=""
-if [ -d "/boot/firmware" ] && mountpoint -q /boot/firmware 2>/dev/null; then
-    BOOT_MNT="/boot/firmware"
-elif [ -d "/boot" ] && mountpoint -q /boot 2>/dev/null; then
-    BOOT_MNT="/boot"
-fi
-
-# Idempotency guard
-if [ -n "$BOOT_MNT" ] && [ -f "$BOOT_MNT/.kace-firstrun-done" ]; then
-    exit 0
-fi
-
+            firstrun_body = f"""
 HASHED_PW='{hashed_pw}'
 TARGET_USER='{username}'
 SSH_ENABLED='{ssh_enabled_str}'
@@ -1097,15 +1260,11 @@ else
         systemctl disable --now sshd >/dev/null 2>&1 || true
 fi
 
-if [ -n "$BOOT_MNT" ]; then
-    touch "$BOOT_MNT/.kace-firstrun-done"
-fi
-
-exit 0
+{_first_run_network_import_body(bool(wifi_ssid))}
 """
+            firstrun_content = _build_retryable_first_run("prebaked", firstrun_body)
             try:
-                with open(firstrun_path, "w", newline="\n", encoding="utf-8") as f:
-                    f.write(firstrun_content)
+                firstrun_path = _write_first_run_artifacts(boot_path, firstrun_content)
                 if not os.path.exists(firstrun_path):
                     raise IOError(f"firstrun.sh not found at: {firstrun_path}")
 
@@ -1135,8 +1294,7 @@ exit 0
                             f" systemd.run_failure_action=reboot"
                             f" systemd.unit=kernel-command-line.target"
                         )
-                        with open(cmdline_path, "w", newline="\n") as f:
-                            f.write(cmdline_content + "\n")
+                        _write_text_atomically(cmdline_path, cmdline_content + "\n")
                         
                         # Verification check for cmdline.txt patch
                         with open(cmdline_path, "r", encoding="utf-8") as f_check:
@@ -1173,8 +1331,7 @@ enable_ssh: {"true" if ssh_enabled else "false"}
 ssh_pwauth: {"true" if effective_password_auth else "false"}
 """
             try:
-                with open(userdata_path, "w", newline="\n") as f:
-                    f.write(userdata_content)
+                _write_text_atomically(userdata_path, userdata_content)
                 if not os.path.exists(userdata_path):
                     raise IOError(f"user-data not found at: {userdata_path}")
                 with open(userdata_path, "r", encoding="utf-8") as f_check:
@@ -1193,7 +1350,11 @@ ssh_pwauth: {"true" if effective_password_auth else "false"}
             network_config_path = os.path.join(boot_path, "network-config")
             if wifi_ssid:
                 yaml_ssid = _yaml_quote(wifi_ssid)
-                yaml_password = _yaml_quote(wifi_password)
+                access_point_options = (
+                    f"\n          password: {_yaml_quote(wifi_password)}"
+                    if wifi_security is WifiSecurity.WPA2
+                    else ""
+                )
                 network_content = f"""network:
   version: 2
   ethernets:
@@ -1205,8 +1366,7 @@ ssh_pwauth: {"true" if effective_password_auth else "false"}
       dhcp4: true
       regulatory-domain: "{country_code}"
       access-points:
-        {yaml_ssid}:
-          password: {yaml_password}
+        {yaml_ssid}:{access_point_options}
       optional: true
 """
             else:
@@ -1218,8 +1378,7 @@ ssh_pwauth: {"true" if effective_password_auth else "false"}
       optional: true
 """
             try:
-                with open(network_config_path, "w", newline="\n") as f:
-                    f.write(network_content)
+                _write_text_atomically(network_config_path, network_content)
                 if not os.path.exists(network_config_path):
                     raise IOError(f"network-config not found at: {network_config_path}")
                 with open(network_config_path, "r", encoding="utf-8") as f_check:
@@ -1237,8 +1396,7 @@ ssh_pwauth: {"true" if effective_password_auth else "false"}
             metadata_path = os.path.join(boot_path, "meta-data")
             metadata_content = f"instance-id: kace-{instance_uuid}\n"
             try:
-                with open(metadata_path, "w", newline="\n") as f:
-                    f.write(metadata_content)
+                _write_text_atomically(metadata_path, metadata_content)
                 if not os.path.exists(metadata_path):
                     raise IOError(f"meta-data not found at: {metadata_path}")
                 with open(metadata_path, "r", encoding="utf-8") as f_check:
@@ -1258,8 +1416,7 @@ ssh_pwauth: {"true" if effective_password_auth else "false"}
                         cmdline_content = f.read().strip()
                     if "ds=nocloud" not in cmdline_content:
                         cmdline_content = f"{cmdline_content} cfg80211.ieee80211_regdom={country_code} ds=nocloud;i=kace-{instance_uuid}"
-                        with open(cmdline_path, "w", newline="\n") as f:
-                            f.write(cmdline_content + "\n")
+                        _write_text_atomically(cmdline_path, cmdline_content + "\n")
                         with open(cmdline_path, "r", encoding="utf-8") as f_check:
                             c = f_check.read()
                         if f"ds=nocloud;i=kace-{instance_uuid}" not in c:
@@ -1279,65 +1436,12 @@ ssh_pwauth: {"true" if effective_password_auth else "false"}
             # handles networking on the second boot after firstrun triggers a
             # reboot.
             if wifi_ssid:
-                firstrun_path = os.path.join(boot_path, "firstrun.sh")
-                firstrun_content = """#!/bin/bash
-# KACE Studio first-run network configuration
-# Copies the pre-configured NetworkManager WiFi profile from the boot
-# partition into the system directory so NetworkManager can use it.
-# This script runs once via systemd.run= in cmdline.txt and then
-# removes itself and its cmdline.txt trigger.
-
-cleanup() {
-    local exit_code=$?
-    local target_mnt="$BOOT_MNT"
-    if [ -z "$target_mnt" ]; then
-        if [ -f "/boot/firmware/cmdline.txt" ]; then
-            target_mnt="/boot/firmware"
-        elif [ -f "/boot/cmdline.txt" ]; then
-            target_mnt="/boot"
-        fi
-    fi
-
-    if [ -n "$target_mnt" ]; then
-        if [ $exit_code -ne 0 ]; then
-            echo "KACE vanilla firstrun failed at $(date) with exit code $exit_code" > "$target_mnt/kace-firstrun-error.log"
-        fi
-        CMDLINE="$target_mnt/cmdline.txt"
-        if [ -f "$CMDLINE" ]; then
-            # [^ ]* is safe here because cmdline.txt now uses a plain unquoted path
-            # (no embedded spaces) so the pattern matches the full token correctly.
-            sed -i 's| systemd[.]run=[^ ]*||g; s| systemd[.]run_success_action=[^ ]*||g; s| systemd[.]run_failure_action=[^ ]*||g; s| systemd[.]unit=kernel-command-line[.]target||g' "$CMDLINE"
-        fi
-        rm -f "$target_mnt/firstrun.sh"
-        sync
-    fi
-}
-trap cleanup EXIT
-
-set -e
-
-# Detect boot partition mount point (Bookworm+: /boot/firmware, legacy: /boot)
-BOOT_MNT=""
-if [ -d "/boot/firmware" ] && mountpoint -q /boot/firmware 2>/dev/null; then
-    BOOT_MNT="/boot/firmware"
-elif [ -d "/boot" ] && mountpoint -q /boot 2>/dev/null; then
-    BOOT_MNT="/boot"
-fi
-
-if [ -n "$BOOT_MNT" ]; then
-    NM_SRC="$BOOT_MNT/system-connections/preconfigured-wifi.nmconnection"
-    NM_DST="/etc/NetworkManager/system-connections/preconfigured-wifi.nmconnection"
-
-    if [ -f "$NM_SRC" ] && [ -d "/etc/NetworkManager/system-connections" ]; then
-        cp "$NM_SRC" "$NM_DST"
-        chmod 600 "$NM_DST"
-        chown root:root "$NM_DST"
-    fi
-fi
-"""
+                firstrun_content = _build_retryable_first_run(
+                    "vanilla-network",
+                    _first_run_network_import_body(True),
+                )
                 try:
-                    with open(firstrun_path, "w", newline="\n", encoding="utf-8") as f:
-                        f.write(firstrun_content)
+                    firstrun_path = _write_first_run_artifacts(boot_path, firstrun_content)
                     if not os.path.exists(firstrun_path):
                         raise IOError(f"firstrun.sh not found at: {firstrun_path}")
                     _dbg(f"Successfully wrote firstrun.sh at {firstrun_path}")
@@ -1363,8 +1467,7 @@ fi
                                 f" systemd.run_failure_action=reboot"
                                 f" systemd.unit=kernel-command-line.target"
                             )
-                            with open(cmdline_path, "w", newline="\n") as f:
-                                f.write(cmdline_content + "\n")
+                            _write_text_atomically(cmdline_path, cmdline_content + "\n")
                             _dbg(f"Appended systemd.run trigger for firstrun.sh to cmdline.txt")
                     except Exception as e:
                         print(f"[ERROR] Failed appending systemd.run to cmdline.txt: {e}", file=sys.stderr)
@@ -1374,19 +1477,7 @@ fi
         try:
             current_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(current_dir)
-            if hasattr(sys, '_MEIPASS'):
-                local_bootstrap_src = os.path.join(sys._MEIPASS, "bootstrap.sh")
-            else:
-                # Developer source run: prefer the authoritative script from the sibling
-                # KACE repository if it is checked out alongside KACE-studio. This avoids
-                # deploying the test-generated mock stub (which tests may leave on disk).
-                sibling_path = os.path.abspath(
-                    os.path.join(project_root, "..", "KACE", "scripts", "bootstrap.sh")
-                )
-                if os.path.isfile(sibling_path):
-                    local_bootstrap_src = sibling_path
-                else:
-                    local_bootstrap_src = os.path.join(project_root, "bootstrap.sh")
+            local_bootstrap_src = resolve_bootstrap_source()
 
             if os.path.exists(local_bootstrap_src):
                 git_hash = ""
@@ -1413,7 +1504,7 @@ fi
                     raise IOError(f"bootstrap.sh not found at: {dest_bootstrap_path}")
                 _dbg(f"Successfully verified bootstrap.sh local copy at {dest_bootstrap_path}")
             else:
-                print(f"[WARNING] Local bootstrap.sh source not found at: {local_bootstrap_src}", file=sys.stderr)
+                raise FileNotFoundError("Pinned bootstrap.sh resource is missing.")
         except Exception as e:
             print(f"[ERROR] Failed copying bootstrap.sh: {e}", file=sys.stderr)
             raise e

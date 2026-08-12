@@ -2,21 +2,45 @@ import os
 import sys
 import json
 import re
+import shutil
+import tempfile
 import threading
+import time
+import uuid
 import webview
 
 # Adjust path to allow absolute imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from backend.imager import list_drives, flash_drive, inject_config, _normalize_disk_identity
+from backend.imager import (
+    list_drives,
+    flash_drive,
+    inject_config,
+    _normalize_disk_identity,
+    bootstrap_preflight_facts,
+)
+from backend.provisioning import (
+    ImageType,
+    ProvisioningData,
+    ProvisioningValidationError,
+    validate_provisioning,
+)
 from backend.ejector import request_safe_eject
 from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
 from backend.power_controller import MoonrakerPowerController, PowerControllerError
+from backend.remote_power_config import RemotePowerConfigError, parse_remote_power_config
 from backend.workflow_events import KaceWorkflowEventParser
+from backend.bootstrap_events import BootstrapEventParser
+from backend.resources import bundled_path, verify_runtime_resources
+from backend.app_paths import application_cache_dir
+from backend.image_manifest import ImageManifest
+from backend.prebaked_preflight import load_custom_attestation
 import mimetypes
 
 HTTP_TIMEOUT_SECONDS = 30
+PYWEBVIEW_SMOKE_TIMEOUT_SECONDS = 30
+IMAGE_PROVENANCE_SCHEMA = "kace-studio-image-provenance/v1"
 
 # Prevent Windows registry pollution from overriding MIME types
 mimetypes.add_type('application/javascript', '.js')
@@ -133,8 +157,13 @@ class Api:
         self._power_controller = None
         self._power_target = None
         self._power_lock = threading.Lock()
+        self._remote_power_authority = None
         self._ssh_lock = threading.Lock()
         self._ssh_gen = 0
+        self._ssh_attempt_gen = 0
+        self._bootstrap_lock = threading.Lock()
+        self._bootstrap_active = False
+        self._bootstrap_workflow_id = None
         self._window = None
         # L8 FIX: Use threading.Event for cross-thread cancel signalling.
         self._flash_cancel_event = threading.Event()
@@ -148,6 +177,52 @@ class Api:
 
     def set_window(self, window):
         self._window = window
+
+    def _forward_bootstrap_event(self, event: dict, ssh_generation: int) -> None:
+        """Project an authoritative bootstrap event and update the run guard."""
+        with self._ssh_lock:
+            if ssh_generation != self._ssh_gen:
+                return
+
+        workflow_id = event["workflow_id"]
+        event_name = event["event"]
+        with self._bootstrap_lock:
+            expected = self._bootstrap_workflow_id
+            if expected is not None and workflow_id != expected:
+                return
+            if event_name in ("workflow_started", "stage_started"):
+                self._bootstrap_active = True
+                self._bootstrap_workflow_id = workflow_id
+            elif BootstrapEventParser.is_terminal(event):
+                self._bootstrap_active = False
+                self._bootstrap_workflow_id = None
+
+        if self._window is not None:
+            try:
+                self._window.evaluate_js(
+                    f"window.updateBootstrapEvent({json.dumps(event)});"
+                )
+            except Exception as exc:
+                print(f"[KACE] Could not forward bootstrap event: {exc}")
+
+    def _interrupt_bootstrap(self, reason: str) -> bool:
+        """Close an active local projection when SSH ends without a terminal event."""
+        with self._bootstrap_lock:
+            if not self._bootstrap_active:
+                return False
+            workflow_id = self._bootstrap_workflow_id or "pending-bootstrap"
+            self._bootstrap_active = False
+            self._bootstrap_workflow_id = None
+
+        if self._window is not None:
+            try:
+                self._window.evaluate_js(
+                    "window.updateBootstrapInterrupted("
+                    f"{json.dumps(workflow_id)}, {json.dumps(reason)});"
+                )
+            except Exception as exc:
+                print(f"[KACE] Could not forward bootstrap interruption: {exc}")
+        return True
 
     def _sanitize_error(self, e: Exception) -> str:
         """
@@ -170,6 +245,16 @@ class Api:
             msg
         )
         return msg
+
+    @staticmethod
+    def _ssh_session_is_active(session) -> bool:
+        checker = getattr(session, "is_connected", None)
+        if not callable(checker):
+            return False
+        try:
+            return checker() is True
+        except Exception:
+            return False
 
     def set_device_state(self, state: str, progress: int = 0, message: str = ""):
         """
@@ -237,7 +322,7 @@ class Api:
             )
         return result
 
-    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
+    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, image_type: str = ImageType.RASPIOS_VANILLA.value, wifi_security: str = "wpa2"):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
         """
@@ -260,6 +345,51 @@ class Api:
 
         drive_identity = selected_snapshot
 
+        # Gather read-only environmental facts, then validate the entire request
+        # before creating a worker, resolving/downloading an image, or writing disk.
+        try:
+            _, bootstrap_exists, bootstrap_sha256 = bootstrap_preflight_facts()
+            is_custom = image_type in {
+                ImageType.CUSTOM_VANILLA.value,
+                ImageType.CUSTOM_PREBAKED.value,
+            }
+            image_exists = os.path.isfile(image_path) if is_custom else True
+            image_size = os.path.getsize(image_path) if image_exists and is_custom else None
+            cache_dir = application_cache_dir()
+            cache_free_bytes = shutil.disk_usage(cache_dir).free
+            provisioning = validate_provisioning(
+                image_type=image_type,
+                image_path=image_path,
+                hostname=hostname,
+                wifi_ssid=wifi_ssid,
+                wifi_password=wifi_password,
+                wifi_security=wifi_security,
+                ssh_password=ssh_password,
+                dashboard_ui=dashboard_ui,
+                timezone=timezone,
+                pi_model=pi_model,
+                os_arch=os_arch,
+                ssh_enabled=ssh_enabled,
+                crowsnest=crowsnest,
+                username=username,
+                password_auth=password_auth,
+                power_relay=power_relay,
+                power_device=power_device,
+                power_gpio=power_gpio,
+                power_active_low=power_active_low,
+                restart_klipper_when_powered=restart_klipper_when_powered,
+                bootstrap_exists=bootstrap_exists,
+                bootstrap_sha256=bootstrap_sha256,
+                validate_media=True,
+                image_exists=image_exists,
+                image_size_bytes=image_size,
+                target_size_bytes=selected_snapshot.get("size_bytes"),
+                cache_free_bytes=cache_free_bytes,
+            )
+        except (OSError, ProvisioningValidationError, ValueError) as exc:
+            self.set_device_state("ERROR", 0, f"Provisioning preflight failed: {self._sanitize_error(exc)}")
+            return False
+
         with self._flash_lock:
             if self._flash_active:
                 self.set_device_state("ERROR", 0, "A flash operation is already running.")
@@ -269,7 +399,7 @@ class Api:
         try:
             thread = threading.Thread(
                 target=self._flash_worker,
-                args=(drive_id, image_path, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui, timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth, drive_identity, power_relay, power_device, power_gpio, power_active_low, restart_klipper_when_powered),
+                args=(drive_id, provisioning, drive_identity),
                 daemon=True
             )
             thread.start()
@@ -437,156 +567,152 @@ class Api:
         """Wrapper for backward compatibility."""
         return self._decompress_archive(cached_xz, target_img, status_prefix)
 
-    def _get_latest_github_release_asset(self, repo: str, os_arch: str) -> tuple:
-        """
-        Queries the GitHub API to find the latest release asset matching the architecture.
-        Returns (download_url, filename, sha256_url).
-        """
-        import urllib.request
-        import json
-        import ssl
-        
-        url = f"https://api.github.com/repos/{repo}/releases/latest"
-        req = urllib.request.Request(
-            url,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
-        ssl_ctx = ssl.create_default_context()
-        
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            
-        assets = data.get("assets", [])
-        if not assets:
-            raise ValueError(f"No assets found in the latest release of {repo}")
-            
-        # Filter for image files (.img.xz or .zip)
-        valid_assets = [a for a in assets if a["name"].lower().endswith((".img.xz", ".zip"))]
-        if not valid_assets:
-            raise ValueError(f"No .img.xz or .zip assets found in the latest release of {repo}")
-            
-        # Match architecture
-        arch_terms = ["arm64", "64bit", "64"] if os_arch == "64bit" else ["armhf", "32bit", "32"]
-        
-        selected_asset = None
-        
-        # 1. Look for raspberry_pi/rpi AND arch
-        for asset in valid_assets:
-            name_lower = asset["name"].lower()
-            if ("raspberry_pi" in name_lower or "-rpi" in name_lower) and any(term in name_lower for term in arch_terms):
-                selected_asset = asset
-                break
-                
-        # 2. Look for just arch
-        if not selected_asset:
-            for asset in valid_assets:
-                name_lower = asset["name"].lower()
-                if any(term in name_lower for term in arch_terms):
-                    selected_asset = asset
-                    break
-                    
-        # 3. Look for raspberry_pi/rpi (no arch constraint)
-        if not selected_asset:
-            for asset in valid_assets:
-                name_lower = asset["name"].lower()
-                if "raspberry_pi" in name_lower or "-rpi" in name_lower:
-                    selected_asset = asset
-                    break
-                    
-        # 4. Fallback to first valid asset
-        if not selected_asset:
-            selected_asset = valid_assets[0]
-            
-        download_url = selected_asset["browser_download_url"]
-        filename = selected_asset["name"]
-        
-        # Check if there is a matching .sha256 or .xz.sha256 in assets
-        sha256_url = ""
-        for asset in assets:
-            if asset["name"] == filename + ".sha256":
-                sha256_url = asset["browser_download_url"]
-                break
-                
-        return download_url, filename, sha256_url
+    @staticmethod
+    def _image_provenance_path(image_path: str) -> str:
+        return image_path + ".provenance.json"
 
-    def _resolve_prebaked_image(self, dashboard_ui: str, os_arch: str) -> str:
+    @staticmethod
+    def _write_json_atomically(path: str, payload: dict) -> None:
+        directory = os.path.dirname(os.path.abspath(path))
+        os.makedirs(directory, exist_ok=True)
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=f".{os.path.basename(path)}.", suffix=".part", dir=directory
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
+                json.dump(payload, output, sort_keys=True, separators=(",", ":"))
+                output.write("\n")
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary_path, path)
+        except Exception:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+    @staticmethod
+    def _image_provenance_payload(entry, image_sha256: str) -> dict:
+        return {
+            "schema": IMAGE_PROVENANCE_SCHEMA,
+            "image_type": entry.image_type,
+            "architecture": entry.architecture,
+            "version": entry.version,
+            "archive_sha256": entry.sha256,
+            "image_sha256": image_sha256,
+            "attested_image_sha256": (
+                entry.attestation.image_sha256 if entry.attestation is not None else ""
+            ),
+        }
+
+    def _image_provenance_is_valid(
+        self, image_path: str, entry, *, verify_image: bool = False
+    ) -> bool:
+        provenance_path = self._image_provenance_path(image_path)
+        checksum_path = image_path + ".sha256"
+        try:
+            with open(provenance_path, "r", encoding="utf-8") as source:
+                provenance = json.load(source)
+            with open(checksum_path, "r", encoding="utf-8") as source:
+                image_sha256 = source.read().strip().split()[0].lower()
+        except (OSError, UnicodeError, json.JSONDecodeError, IndexError):
+            return False
+        if provenance != self._image_provenance_payload(entry, image_sha256):
+            return False
+        if entry.attestation is not None and image_sha256 != entry.attestation.image_sha256:
+            return False
+        if verify_image:
+            actual_sha256 = self._compute_sha256(
+                image_path, "Verifying pre-baked image identity"
+            )
+            return actual_sha256.lower() == image_sha256
+        return True
+
+    def _preflight_prebaked_image(
+        self, image_path: str, provisioning: ProvisioningData
+    ):
+        """Validate an immutable release/custom capability contract before disk writes."""
+        self.set_device_state(
+            "FLASHING", 0, "Validating pre-baked image services and capabilities..."
+        )
+        if provisioning.image_type is ImageType.CUSTOM_PREBAKED:
+            return load_custom_attestation(image_path)
+        if provisioning.image_type not in {
+            ImageType.MAINSAILOS_PREBAKED,
+            ImageType.FLUIDDPI_PREBAKED,
+        }:
+            raise ValueError("Pre-baked preflight received a non-pre-baked image type.")
+
+        entry = ImageManifest.load_bundled().resolve(
+            provisioning.image_type.value, provisioning.os_arch
+        )
+        if entry.attestation is None:
+            raise ValueError("Pinned pre-baked image has no image attestation.")
+        if not self._image_provenance_is_valid(image_path, entry, verify_image=True):
+            raise ValueError(
+                "Pre-baked image does not match its pinned, image-bound attestation."
+            )
+        return entry.attestation
+
+    def _resolve_prebaked_image(self, image_type: ImageType, os_arch: str) -> str:
         """
-        Resolves the pre-baked OS image (MainsailOS or FluiddPi).
-        Queries GitHub API, downloads, caches, verifies, and decompresses as needed.
+        Resolves an immutable, checksummed pre-baked image manifest entry.
+        Downloads, caches, verifies, and decompresses as needed.
         Returns the path to the ready-to-flash .img file.
         """
-        import urllib.request
-        import ssl
-        
-        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        
-        repo = "mainsail-crew/MainsailOS" if dashboard_ui in ("mainsail", "both") else "fluidd-core/FluiddPi"
-        
-        self.set_device_state("FLASHING", 0, f"Querying latest release for {repo}...")
-        
-        try:
-            download_url, filename, sha256_url = self._get_latest_github_release_asset(repo, os_arch)
-        except Exception as e:
-            print(f"Error fetching latest release from GitHub API: {e}", file=sys.stderr)
-            # Fallback values if GitHub API rate limits or fails
-            if repo == "mainsail-crew/MainsailOS":
-                # Static fallback URLs for MainsailOS
-                version = "3.0.0"
-                arch_suffix = "arm64" if os_arch == "64bit" else "armhf"
-                filename = f"2026-05-06-MainsailOS-raspberry_pi-{arch_suffix}-trixie-{version}.img.xz"
-                download_url = f"https://github.com/mainsail-crew/MainsailOS/releases/download/{version}/{filename}"
-                sha256_url = download_url + ".sha256"
-            else:
-                # Static fallback URLs for FluiddPi
-                version = "v1.19.0"
-                filename = f"fluiddpi-rpi-lite-{version}.zip"
-                download_url = f"https://github.com/fluidd-core/FluiddPI/releases/download/{version}/{filename}"
-                sha256_url = ""
-                
-        cached_archive = os.path.join(cache_dir, filename)
+        cache_dir = application_cache_dir()
+        if image_type not in {ImageType.MAINSAILOS_PREBAKED, ImageType.FLUIDDPI_PREBAKED}:
+            raise ValueError(f"Unsupported automatic pre-baked image type: {image_type.value}")
+        return self._resolve_manifest_image(image_type.value, os_arch, cache_dir)
+
+    def _resolve_manifest_image(self, image_type: str, os_arch: str, cache_dir: str) -> str:
+        entry = ImageManifest.load_bundled().resolve(image_type, os_arch)
+        self.set_device_state(
+            "FLASHING", 0, f"Resolving pinned {image_type} image {entry.version}..."
+        )
+        cached_archive = os.path.join(cache_dir, entry.filename)
         cached_archive_sha = cached_archive + ".sha256"
-        
-        base_name = filename.replace(".xz", "").replace(".zip", "")
+        base_name = entry.filename.replace(".xz", "").replace(".zip", "")
         if not base_name.endswith(".img"):
             base_name += ".img"
         target_img = os.path.join(cache_dir, base_name)
-        
-        # Fetch remote SHA256 if available
-        remote_sha256 = ""
-        if sha256_url:
-            self.set_device_state("FLASHING", 0, "Checking checksum of latest online release...")
-            try:
-                ssl_ctx = ssl.create_default_context()
-                sha_req = urllib.request.Request(
-                    sha256_url,
-                    headers={'User-Agent': 'Mozilla/5.0'}
-                )
-                with urllib.request.urlopen(sha_req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as sha_response:
-                    sha_content = sha_response.read().decode('utf-8').strip()
-                    remote_sha256 = sha_content.split()[0]
-            except Exception as net_err:
-                print(f"Network checksum warning: {net_err}. Using cache if available.", file=sys.stderr)
-                
         self._check_cancelled()
-        
-        # Cache entries are reusable only when an atomically-published checksum
-        # sidecar matches the complete file.
-        archive_valid = self._cached_file_is_valid(cached_archive, remote_sha256)
+
+        archive_valid = self._cached_file_is_valid(cached_archive, entry.sha256)
         image_valid = self._cached_file_is_valid(target_img, raw_image=True)
-        need_download = not archive_valid and (not image_valid or bool(remote_sha256))
-        need_decompress = not image_valid
-            
-        # Download stage
+        provenance_valid = image_valid and self._image_provenance_is_valid(target_img, entry)
+        need_download = not archive_valid
+        need_decompress = not provenance_valid
+
         if need_download:
-            self._download_os_image(download_url, cached_archive, cached_archive_sha, remote_sha256, download_url, os_arch)
+            self._download_os_image(
+                entry.url, cached_archive, cached_archive_sha, entry.sha256, entry.url, os_arch
+            )
             need_decompress = True
-            
-        # Decompression stage
+
         if need_decompress:
-            self._decompress_archive(cached_archive, target_img, "Decompressing OS image")
+            image_sha256 = self._decompress_archive(
+                cached_archive, target_img, "Decompressing OS image"
+            )
+            if (
+                entry.attestation is not None
+                and image_sha256.lower() != entry.attestation.image_sha256
+            ):
+                self._remove_file_if_present(target_img)
+                self._remove_file_if_present(target_img + ".sha256")
+                self._remove_file_if_present(self._image_provenance_path(target_img))
+                raise ValueError(
+                    "Decompressed image SHA-256 does not match its trusted attestation."
+                )
+            self._write_json_atomically(
+                self._image_provenance_path(target_img),
+                self._image_provenance_payload(entry, image_sha256),
+            )
 
         self._validate_raw_image(target_img)
+        if not self._image_provenance_is_valid(target_img, entry):
+            raise ValueError("Prepared image provenance verification failed.")
         return target_img
 
     def _download_os_image(self, download_url: str, cached_xz: str, cached_xz_sha: str, remote_sha256: str, redirected_url: str, arch_suffix: str):
@@ -596,6 +722,8 @@ class Api:
         import time as _time
         import urllib.request
 
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", str(remote_sha256 or "")):
+            raise ValueError("Automatic image downloads require a pinned SHA-256 checksum.")
         if not redirected_url:
             raise ValueError("Cannot resolve download URL and no cached image is available.")
 
@@ -656,7 +784,7 @@ class Api:
 
             self.set_device_state("FLASHING", 0, "Verifying downloaded archive integrity...")
             calculated_sha256 = self._compute_sha256(archive_part, "Verifying archive integrity")
-            if remote_sha256 and calculated_sha256.lower() != remote_sha256.lower():
+            if calculated_sha256.lower() != remote_sha256.lower():
                 raise ValueError(
                     f"Integrity check failed: SHA256 mismatch.\nExpected: {remote_sha256}\nCalculated: {calculated_sha256}"
                 )
@@ -676,129 +804,80 @@ class Api:
         Downloads, caches, verifies, and decompresses as needed.
         Returns the path to the ready-to-flash .img file.
         """
-        import urllib.request
-
-        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
-        os.makedirs(cache_dir, exist_ok=True)
-
-        arch_suffix = "arm64" if os_arch == "64bit" else "armhf"
-        target_img = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}.img")
-        cached_xz = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}.img.xz")
-        cached_xz_sha = os.path.join(cache_dir, f"raspios_lite_{arch_suffix}.img.xz.sha256")
-
-        # Check for legacy fallback (raspios_lite.img in current dir)
-        local_legacy = os.path.join(os.path.dirname(os.path.abspath(__file__)), "raspios_lite.img")
-        if os.path.exists(local_legacy):
-            target_img = local_legacy
-
-        # Fetch remote SHA256 to check if cache is valid
-        self.set_device_state("FLASHING", 0, "Checking for latest official Raspberry Pi OS Lite release online...")
-        download_url = f"https://downloads.raspberrypi.org/raspios_lite_{arch_suffix}_latest"
-
-        req = urllib.request.Request(
-            download_url,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
-
-        remote_sha256 = ""
-        redirected_url = ""
-        # L6 FIX: Explicit SSL context for certificate validation on all remote requests.
-        import ssl
-        ssl_ctx = ssl.create_default_context()
-        try:
-            with urllib.request.urlopen(req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as response:
-                redirected_url = response.geturl()
-
-            sha_url = redirected_url + ".sha256"
-            sha_req = urllib.request.Request(
-                sha_url,
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            )
-            with urllib.request.urlopen(sha_req, context=ssl_ctx, timeout=HTTP_TIMEOUT_SECONDS) as sha_response:
-                sha_content = sha_response.read().decode('utf-8').strip()
-                remote_sha256 = sha_content.split()[0]
-        except Exception as net_err:
-            print(f"Network check warning: {net_err}. Using cache if available.", file=sys.stderr)
-
-        self._check_cancelled()
-
-        archive_valid = self._cached_file_is_valid(cached_xz, remote_sha256)
-        image_valid = self._cached_file_is_valid(target_img, raw_image=True)
-        need_download = not archive_valid and (not image_valid or bool(remote_sha256))
-        need_decompress = not image_valid
-
-        # Download stage
-        if need_download:
-            self._download_os_image(download_url, cached_xz, cached_xz_sha, remote_sha256, redirected_url, arch_suffix)
-            need_decompress = True
-
-        # Decompression stage
-        if need_decompress:
-            self._decompress_xz(cached_xz, target_img, "Decompressing OS image")
-
-        self._validate_raw_image(target_img)
-        return target_img
+        cache_dir = application_cache_dir()
+        return self._resolve_manifest_image(ImageType.RASPIOS_VANILLA.value, os_arch, cache_dir)
 
     def _resolve_custom_image(self, image_path: str) -> str:
-        """
-        Validates a custom OS image path and verifies its SHA-256 integrity
-        if a matching .sha256 sidecar file exists.
-        Returns the validated image path.
-        """
+        """Validate a custom raw image against a mandatory external SHA-256."""
         if not os.path.exists(image_path):
             raise ValueError(f"Custom image file not found: {image_path}")
         if not image_path.lower().endswith(".img"):
             raise ValueError("Custom images must be uncompressed .img files.")
 
-        # Check for matching .sha256 file next to the custom image
         custom_sha_path = image_path + ".sha256"
         custom_stem_sha_path = os.path.join(
             os.path.dirname(image_path),
-            os.path.splitext(os.path.basename(image_path))[0] + ".sha256"
+            os.path.splitext(os.path.basename(image_path))[0] + ".sha256",
         )
+        checksum_paths = [
+            path for path in (custom_sha_path, custom_stem_sha_path) if os.path.isfile(path)
+        ]
+        if not checksum_paths:
+            raise ValueError(
+                "Custom images require an external SHA-256 sidecar: "
+                "<image>.img.sha256 or <image>.sha256."
+            )
 
-        expected_custom_sha = ""
-        if os.path.exists(custom_sha_path):
-            with open(custom_sha_path, "r", encoding="utf-8") as f:
-                expected_custom_sha = f.read().strip().split()[0]
-        elif os.path.exists(custom_stem_sha_path):
-            with open(custom_stem_sha_path, "r", encoding="utf-8") as f:
-                expected_custom_sha = f.read().strip().split()[0]
+        expected_checksums = set()
+        for checksum_path in checksum_paths:
+            try:
+                with open(checksum_path, "r", encoding="utf-8") as checksum_file:
+                    checksum_tokens = checksum_file.read().strip().split()
+            except (OSError, UnicodeError) as exc:
+                raise ValueError("Custom image external SHA-256 is unreadable.") from exc
+            if not checksum_tokens or not re.fullmatch(r"[0-9a-fA-F]{64}", checksum_tokens[0]):
+                raise ValueError("Custom image external SHA-256 is invalid.")
+            expected_checksums.add(checksum_tokens[0].lower())
+        if len(expected_checksums) != 1:
+            raise ValueError("Custom image external SHA-256 sidecars disagree.")
 
-        if expected_custom_sha:
-            self.set_device_state("FLASHING", 0, "Verifying custom image integrity...")
-            calculated_custom_sha = self._compute_sha256(image_path, "Verifying custom image")
-            if calculated_custom_sha.lower() != expected_custom_sha.lower():
-                raise ValueError(
-                    f"Custom image integrity check failed: SHA256 mismatch.\n"
-                    f"Expected: {expected_custom_sha}\nCalculated: {calculated_custom_sha}"
-                )
-        else:
-            # No checksum file — calculate and log to verify readability
-            self.set_device_state("FLASHING", 0, "Calculating custom image checksum...")
-            calculated_custom_sha = self._compute_sha256(image_path, "Reading custom image")
-            print(f"Custom image SHA256: {calculated_custom_sha}", file=sys.stderr)
+        expected_custom_sha = expected_checksums.pop()
+        self.set_device_state("FLASHING", 0, "Verifying custom image integrity...")
+        calculated_custom_sha = self._compute_sha256(image_path, "Verifying custom image")
+        if calculated_custom_sha.lower() != expected_custom_sha:
+            raise ValueError(
+                f"Custom image integrity check failed: SHA256 mismatch.\n"
+                f"Expected: {expected_custom_sha}\nCalculated: {calculated_custom_sha}"
+            )
 
         self._validate_raw_image(image_path)
         return image_path
 
     # ── Flash Worker Orchestrator ─────────────────────────────────────────
 
-    def _flash_worker(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str, pi_model: str, os_arch: str, ssh_enabled: bool, crowsnest: bool, username: str, password_auth: bool, drive_identity: dict = None, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True):
+    def _flash_worker(self, drive_id: int, provisioning: ProvisioningData, drive_identity: dict = None):
         try:
             self.set_device_state("FLASHING", 0, "Initializing physical block-writing...")
 
             # Stage 1: Resolve image path (download/cache/verify)
-            image_path_original = image_path
-            if image_path in ("default_prebaked", "prebaked"):
-                image_path = self._resolve_prebaked_image(dashboard_ui, os_arch)
-            elif image_path == "default_lite":
-                image_path = self._resolve_default_image(os_arch)
+            image_path = provisioning.image_path
+            if provisioning.image_type in {
+                ImageType.MAINSAILOS_PREBAKED,
+                ImageType.FLUIDDPI_PREBAKED,
+            }:
+                image_path = self._resolve_prebaked_image(
+                    provisioning.image_type, provisioning.os_arch
+                )
+            elif provisioning.image_type is ImageType.RASPIOS_VANILLA:
+                image_path = self._resolve_default_image(provisioning.os_arch)
             else:
                 image_path = self._resolve_custom_image(image_path)
 
             self._check_cancelled()
             self._validate_raw_image(image_path)
+            if provisioning.image_type.is_prebaked:
+                self._preflight_prebaked_image(image_path, provisioning)
+                self._check_cancelled()
 
             # Stage 2: Flash image to drive
             self.set_device_state("FLASHING", 0, "Writing blocks to SD card...")
@@ -814,14 +893,26 @@ class Api:
             # Stage 3: Inject boot configuration files
             self.set_device_state("FLASHING", 95, "Injecting system configuration files...")
             inject_success = inject_config(
-                drive_id, hostname, wifi_ssid, wifi_password, ssh_password, dashboard_ui,
-                timezone, pi_model, os_arch, ssh_enabled, crowsnest, username, password_auth,
-                is_prebaked=(image_path_original in ("default_prebaked", "prebaked")),
-                power_relay=power_relay,
-                power_device=power_device,
-                power_gpio=power_gpio,
-                power_active_low=power_active_low,
-                restart_klipper_when_powered=restart_klipper_when_powered,
+                drive_id,
+                provisioning.hostname,
+                provisioning.wifi_ssid,
+                provisioning.wifi_password,
+                provisioning.ssh_password,
+                provisioning.dashboard_ui,
+                provisioning.timezone,
+                provisioning.pi_model,
+                provisioning.os_arch,
+                provisioning.ssh_enabled,
+                provisioning.crowsnest,
+                provisioning.username,
+                provisioning.password_auth,
+                image_type=provisioning.image_type,
+                power_relay=provisioning.power_relay,
+                power_device=provisioning.power_device,
+                power_gpio=provisioning.power_gpio,
+                power_active_low=provisioning.power_active_low,
+                restart_klipper_when_powered=provisioning.restart_klipper_when_powered,
+                wifi_security=provisioning.wifi_security,
             )
 
             if inject_success:
@@ -875,36 +966,70 @@ class Api:
         if not ip or not _IP_HOST_RE.match(ip.strip()):
             return {"status": "failed", "message": "Invalid IP address or hostname format."}
 
+        candidate = SSHSession()
         with self._ssh_lock:
-            self._ssh.close()
-            self._ssh_gen += 1
-            current_gen = self._ssh_gen
+            self._ssh_attempt_gen += 1
+            attempt_gen = self._ssh_attempt_gen
 
         self.set_device_state("CONNECTING", 50, f"Establishing SSH connection to {ip}...")
         
         import paramiko
         try:
-            success = self._ssh.connect(ip, username, password)
+            success = candidate.connect(ip, username, password)
         except paramiko.BadHostKeyException as host_key_err:
+            candidate.close()
             with self._ssh_lock:
-                if current_gen == self._ssh_gen:
-                    self.set_device_state("ERROR", 0, f"SSH Host Key Mismatch for {ip}.")
+                current_attempt = attempt_gen == self._ssh_attempt_gen
+                retained = current_attempt and self._ssh_session_is_active(self._ssh)
+            if not current_attempt:
+                return {"status": "failed", "message": "Connection superseded by a newer attempt."}
+            if retained:
+                self.set_device_state("SSH_READY", 100, "New SSH host key was rejected; existing session retained.")
+            else:
+                self.set_device_state("ERROR", 0, f"SSH Host Key Mismatch for {ip}.")
             return {"status": "host_key_mismatch", "message": str(host_key_err)}
         except Exception as conn_err:
+            candidate.close()
             sanitized_msg = self._sanitize_error(conn_err)
             with self._ssh_lock:
-                if current_gen == self._ssh_gen:
-                    self.set_device_state("ERROR", 0, f"SSH connection failed: {sanitized_msg}")
+                current_attempt = attempt_gen == self._ssh_attempt_gen
+                retained = current_attempt and self._ssh_session_is_active(self._ssh)
+            if not current_attempt:
+                return {"status": "failed", "message": "Connection superseded by a newer attempt."}
+            if retained:
+                self.set_device_state("SSH_READY", 100, "New SSH connection failed; existing session retained.")
+            else:
+                self.set_device_state("ERROR", 0, f"SSH connection failed: {sanitized_msg}")
             return {"status": "failed", "message": sanitized_msg}
 
         if success:
             with self._ssh_lock:
-                if current_gen != self._ssh_gen:
-                    return {"status": "failed", "message": "Connection superseded by a newer attempt."}
+                if attempt_gen != self._ssh_attempt_gen:
+                    superseded = True
+                    previous_session = None
+                    current_gen = None
+                else:
+                    superseded = False
+                    previous_session = self._ssh
+                    self._ssh = candidate
+                    self._ssh_gen += 1
+                    current_gen = self._ssh_gen
+
+            if superseded:
+                candidate.close()
+                return {"status": "failed", "message": "Connection superseded by a newer attempt."}
+
+            self._interrupt_bootstrap("SSH session was replaced before bootstrap completed.")
+            previous_session.close()
+            with self._power_lock:
+                self._remote_power_authority = None
+                self._power_controller = None
+                self._power_target = None
 
             # Reachability (including an open Moonraker port) is not evidence
             # that a KACE installation workflow completed successfully.
             self.set_device_state("SSH_READY", 100, f"SSH session connected to {ip}.")
+            remote_power = self._refresh_remote_power_authority()
                 
             # Write-coalescing buffer: collect rapid-fire SSH data chunks and flush
             # them as a single evaluate_js call every 15ms. This prevents interactive
@@ -928,6 +1053,9 @@ class Api:
                     print(f"[KACE] Could not forward workflow event: {exc}")
 
             workflow_parser = KaceWorkflowEventParser(forward_workflow_event)
+            bootstrap_parser = BootstrapEventParser(
+                lambda event: self._forward_bootstrap_event(event, current_gen)
+            )
             
             def flush_write_buffer():
                 with buffer_lock:
@@ -947,6 +1075,7 @@ class Api:
                         return
 
                 workflow_parser.feed(text)
+                bootstrap_parser.feed(text)
                 
                 flush_now = False
                 with buffer_lock:
@@ -974,22 +1103,85 @@ class Api:
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen:
                         return
+                interrupted = self._interrupt_bootstrap(
+                    "SSH disconnected before bootstrap emitted a terminal event."
+                )
+                if interrupted:
+                    self.set_device_state(
+                        "BOOTSTRAP_INTERRUPTED",
+                        0,
+                        "SSH disconnected before bootstrap completed.",
+                    )
+                else:
                     # Stale callbacks should not clear the status
                     self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
                 
-            self._ssh.run_command_stream("bash", on_data, on_close, cols=cols, rows=rows)
-            return {"status": "success"}
+            candidate.run_command_stream("bash", on_data, on_close, cols=cols, rows=rows)
+            return {"status": "success", "power_config": remote_power}
         else:
+            candidate.close()
             with self._ssh_lock:
-                if current_gen == self._ssh_gen:
-                    self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
+                current_attempt = attempt_gen == self._ssh_attempt_gen
+                retained = current_attempt and self._ssh_session_is_active(self._ssh)
+            if not current_attempt:
+                return {"status": "failed", "message": "Connection superseded by a newer attempt."}
+            if retained:
+                self.set_device_state("SSH_READY", 100, "New SSH connection failed; existing session retained.")
+            else:
+                self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
             return {"status": "failed", "message": "Verify user password or network path."}
+
+    def start_bootstrap(self, dashboard_ui: str) -> dict:
+        """Start exactly one guarded bootstrap command on the active SSH PTY."""
+        if dashboard_ui not in {"mainsail", "fluidd", "both"}:
+            return {"status": "failed", "message": "Invalid dashboard selection."}
+
+        workflow_id = f"bootstrap-{uuid.uuid4().hex}"
+        with self._bootstrap_lock:
+            if self._bootstrap_active:
+                return {
+                    "status": "busy",
+                    "message": "A bootstrap workflow is already active.",
+                    "workflow_id": self._bootstrap_workflow_id,
+                }
+            self._bootstrap_active = True
+            self._bootstrap_workflow_id = workflow_id
+
+        missing_event = {
+            "protocol": "kace-bootstrap/v1",
+            "event": "workflow_failed",
+            "workflow_id": workflow_id,
+            "sequence": 1,
+            "stage": "INIT",
+            "code": "BOOTSTRAP_NOT_FOUND",
+            "exit_code": 1,
+        }
+        missing_marker = (
+            "=== KACE_BOOTSTRAP_EVENT: "
+            f"{json.dumps(missing_event, separators=(',', ':'))} ==="
+        )
+        command = (
+            f"if [ -f /boot/firmware/bootstrap.sh ]; then "
+            f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' bash /boot/firmware/bootstrap.sh --dashboard {dashboard_ui}; "
+            f"elif [ -f /boot/bootstrap.sh ]; then "
+            f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' bash /boot/bootstrap.sh --dashboard {dashboard_ui}; "
+            f"else printf '%s\\n' '{missing_marker}'; fi\n"
+        )
+
+        self.set_device_state("BOOTSTRAPPING", 0, "Starting KACE bootstrap.")
+        if not self._ssh.send_input(command):
+            with self._bootstrap_lock:
+                self._bootstrap_active = False
+                self._bootstrap_workflow_id = None
+            self.set_device_state("SSH_READY", 100, "Bootstrap could not be sent to SSH.")
+            return {"status": "failed", "message": "SSH terminal is not ready."}
+        return {"status": "started", "workflow_id": workflow_id}
 
     def send_ssh_input(self, data: str):
         """
         Channels keystrokes/data from frontend terminal to paramiko SSH channel.
         """
-        self._ssh.send_input(data)
+        return self._ssh.send_input(data)
 
     def resize_ssh_pty(self, cols: int, rows: int):
         """
@@ -1001,9 +1193,16 @@ class Api:
         """
         Closes current SSH session.
         """
+        self._interrupt_bootstrap("SSH session was closed before bootstrap completed.")
         with self._ssh_lock:
-            self._ssh.close()
+            previous_session = self._ssh
+            self._ssh = SSHSession()
+            self._ssh_attempt_gen += 1
             self._ssh_gen += 1
+        previous_session.close()
+        # Keep the last schema that was successfully read from this device.
+        # Moonraker power control is independent of the interactive SSH session;
+        # dropping this authority would silently fall back to stale local hints.
         return True
 
     def clear_stored_host_key(self, ip: str) -> bool:
@@ -1011,8 +1210,7 @@ class Api:
         Removes stored host keys for the target IP from the known_hosts file.
         """
         from backend.ssh_client import clear_host_key
-        clear_host_key(ip)
-        return True
+        return clear_host_key(ip)
 
 
     def download_file(self, remote_path: str) -> bool:
@@ -1055,13 +1253,52 @@ class Api:
             return None
         return manifest
 
+    def _read_remote_power_config(self) -> dict:
+        reader = getattr(self._ssh, "read_text_file_result", None)
+        if not callable(reader):
+            return {"status": "error", "config": None, "detail": "SSH file reader is unavailable"}
+        status, raw = reader(".config/kace/power.json", max_bytes=64 * 1024)
+        if status == "absent":
+            return {"status": "absent", "config": None, "detail": "No remote KACE power configuration exists"}
+        if status != "ok" or not isinstance(raw, str):
+            return {"status": "error", "config": None, "detail": "Remote power configuration could not be read"}
+        try:
+            config = parse_remote_power_config(raw)
+        except RemotePowerConfigError as exc:
+            return {"status": "invalid", "config": None, "detail": str(exc)}
+        return {"status": "configured", "config": config, "detail": ""}
+
+    def _refresh_remote_power_authority(self) -> dict:
+        result = self._read_remote_power_config()
+        with self._power_lock:
+            self._remote_power_authority = result
+            self._power_controller = None
+            self._power_target = None
+        return result
+
+    def get_remote_power_config(self) -> dict:
+        """Refresh the authoritative remote schema after SSH/bootstrap changes."""
+        return self._refresh_remote_power_authority()
+
+    def _resolve_power_device(self, suggested_device: str) -> str:
+        authority = self._remote_power_authority
+        if authority is None or authority.get("status") == "absent":
+            return suggested_device
+        if authority.get("status") != "configured":
+            raise PowerControllerError(authority.get("detail") or "Remote power configuration is unavailable")
+        config = authority.get("config")
+        if not isinstance(config, dict) or config.get("enabled") is not True:
+            raise PowerControllerError("Remote KACE power configuration is disabled")
+        return config.get("device")
+
     def _run_power_action(self, host: str, device: str, action: str) -> dict:
         """Run one Moonraker-only power action without depending on SSH/KACE."""
         try:
             with self._power_lock:
-                target = (host.strip() if isinstance(host, str) else host, device)
+                resolved_device = self._resolve_power_device(device)
+                target = (host.strip() if isinstance(host, str) else host, resolved_device)
                 if self._power_controller is None or self._power_target != target:
-                    self._power_controller = MoonrakerPowerController(host, device)
+                    self._power_controller = MoonrakerPowerController(host, resolved_device)
                     self._power_target = target
                 controller = self._power_controller
                 if action == "status":
@@ -1179,20 +1416,16 @@ class Api:
             print(f"Error saving preferences: {e}", file=sys.stderr)
             return False
 
-def main():
+def _create_application_window(*, smoke_mode: bool = False):
     api = Api()
-    if hasattr(sys, '_MEIPASS'):
-        current_dir = sys._MEIPASS
-    else:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-    web_dir = os.path.join(current_dir, "web")
-    html_path = os.path.join(web_dir, "index.html")
+    web_dir = bundled_path("web")
+    html_path = web_dir / "index.html"
     
     if not os.path.exists(html_path):
         print(f"Error: Frontend assets not found at {html_path}", file=sys.stderr)
         sys.exit(1)
         
-    wsgi_app = KaceWsgiApp(web_dir, api)
+    wsgi_app = KaceWsgiApp(str(web_dir), api)
     
     window = webview.create_window(
         title="KACE Studio Desktop Launcher",
@@ -1202,14 +1435,80 @@ def main():
         height=700,
         resizable=True,
         min_size=(900, 600),
-        background_color="#0b0f19"
+        background_color="#0b0f19",
+        # On Windows, a window created with hidden=True does not initialize
+        # WebView2 until it is shown. Put smoke windows off-screen instead; the
+        # probe hides them immediately after the native window is initialized.
+        hidden=False,
+        focus=not smoke_mode,
+        x=-32_000 if smoke_mode else None,
+        y=-32_000 if smoke_mode else None,
     )
     api.set_window(window)
+    return window
+
+
+def _run_smoke_probe(window, result: dict, timeout_seconds: float) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        if not window.events.shown.wait(max(0.0, deadline - time.monotonic())):
+            raise TimeoutError("PyWebView did not initialize a native window before the deadline")
+        if not window.events.loaded.wait(max(0.0, deadline - time.monotonic())):
+            raise TimeoutError("PyWebView did not load the Studio frontend before the deadline")
+        window.hide()
+        observed = window.evaluate_js(
+            """(() => ({
+                title: document.title,
+                ready: document.readyState === 'complete',
+                root: Boolean(document.querySelector('.app-container')),
+                bridge: Boolean(window.pywebview && window.pywebview.api &&
+                    typeof window.pywebview.api.get_preferences === 'function')
+            }))()"""
+        )
+        expected = {
+            "title": "KACE Studio",
+            "ready": True,
+            "root": True,
+            "bridge": True,
+        }
+        if observed != expected:
+            raise RuntimeError(f"PyWebView runtime contract mismatch: {observed!r}")
+        result["ok"] = True
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        window.destroy()
+
+
+def run_pywebview_smoke_test(timeout_seconds: float = PYWEBVIEW_SMOKE_TIMEOUT_SECONDS) -> None:
+    """Load the real frontend and JS bridge in an off-screen native window."""
+    verify_runtime_resources()
+    window = _create_application_window(smoke_mode=True)
+    result: dict = {}
+    webview.start(_run_smoke_probe, args=(window, result, timeout_seconds))
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error", "PyWebView closed before the smoke probe completed"))
+
+
+def main():
+    window = _create_application_window()
     webview.start()
 
 if __name__ == "__main__":
     # Elevated disk flashing mode trigger
-    if len(sys.argv) > 1 and sys.argv[1] == "--write-disk":
+    if len(sys.argv) > 1 and sys.argv[1] == "--verify-package":
+        verify_runtime_resources()
+        print("KACE Studio packaged resource contract passed.")
+        sys.exit(0)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--smoke-test":
+        try:
+            run_pywebview_smoke_test()
+        except Exception as exc:
+            if sys.stderr is not None:
+                print(f"KACE Studio PyWebView smoke failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+        sys.exit(0)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--write-disk":
         from backend.kace_writer import main as writer_main
         # Shift args to remove program name and the write-disk trigger
         sys.argv = sys.argv[1:]

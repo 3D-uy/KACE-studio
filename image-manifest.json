@@ -1,0 +1,75 @@
+{
+  "schema": "kace-studio-image-manifest/v2",
+  "images": [
+    {
+      "image_type": "raspios_vanilla",
+      "architecture": "32bit",
+      "version": "2026-06-18",
+      "url": "https://downloads.raspberrypi.org/raspios_lite_armhf/images/raspios_lite_armhf-2026-06-19/2026-06-18-raspios-trixie-armhf-lite.img.xz",
+      "sha256": "ea4e84c501d6dd4f4b1d04eb84df133a03f90a05ee2e8ab849185c17c2b0707b"
+    },
+    {
+      "image_type": "raspios_vanilla",
+      "architecture": "64bit",
+      "version": "2026-06-18",
+      "url": "https://downloads.raspberrypi.org/raspios_lite_arm64/images/raspios_lite_arm64-2026-06-19/2026-06-18-raspios-trixie-arm64-lite.img.xz",
+      "sha256": "acff736ca7945e3b305f07cda4abdb870910e12634991da69783611756e381b3"
+    },
+    {
+      "image_type": "mainsailos_prebaked",
+      "architecture": "32bit",
+      "version": "3.0.0",
+      "url": "https://github.com/mainsail-crew/MainsailOS/releases/download/3.0.0/2026-05-06-MainsailOS-raspberry_pi-armhf-trixie-3.0.0.img.xz",
+      "sha256": "00065697ef89eb66b001ef8e774f30609cdfdbb634125cf5a1726468ffe2aa55",
+      "attestation": {
+        "schema": "kace-studio-prebaked-attestation/v1",
+        "family": "mainsailos",
+        "version": "3.0.0",
+        "source_commit": "77ff5c1eb2731f53440ff2f251b379e1916964ba",
+        "source_url": "https://github.com/mainsail-crew/MainsailOS/tree/77ff5c1eb2731f53440ff2f251b379e1916964ba",
+        "archive_sha256": "00065697ef89eb66b001ef8e774f30609cdfdbb634125cf5a1726468ffe2aa55",
+        "image_sha256": "d96dba4342af5bfaeee30d767d98a9946a55efab7f93002083aa61a63ad29939",
+        "image_checksum_url": "https://github.com/mainsail-crew/MainsailOS/releases/download/3.0.0/2026-05-06-MainsailOS-raspberry_pi-armhf-trixie-3.0.0.img.sha256",
+        "services": [
+          "headless_nm.service",
+          "klipper.service",
+          "moonraker.service"
+        ],
+        "capabilities": [
+          "boot_firmware_mount",
+          "networkmanager_boot_profile",
+          "printer_data_layout",
+          "systemd_first_boot"
+        ]
+      }
+    },
+    {
+      "image_type": "mainsailos_prebaked",
+      "architecture": "64bit",
+      "version": "3.0.0",
+      "url": "https://github.com/mainsail-crew/MainsailOS/releases/download/3.0.0/2026-05-06-MainsailOS-raspberry_pi-arm64-trixie-3.0.0.img.xz",
+      "sha256": "a4610653b041b80c8283ec7c3ae629fcf700c09f894a156624ef44d8eda15339",
+      "attestation": {
+        "schema": "kace-studio-prebaked-attestation/v1",
+        "family": "mainsailos",
+        "version": "3.0.0",
+        "source_commit": "77ff5c1eb2731f53440ff2f251b379e1916964ba",
+        "source_url": "https://github.com/mainsail-crew/MainsailOS/tree/77ff5c1eb2731f53440ff2f251b379e1916964ba",
+        "archive_sha256": "a4610653b041b80c8283ec7c3ae629fcf700c09f894a156624ef44d8eda15339",
+        "image_sha256": "2616affb20ee47a1334577713a5542f04015b64e0667c9f071eba68449a65e5a",
+        "image_checksum_url": "https://github.com/mainsail-crew/MainsailOS/releases/download/3.0.0/2026-05-06-MainsailOS-raspberry_pi-arm64-trixie-3.0.0.img.sha256",
+        "services": [
+          "headless_nm.service",
+          "klipper.service",
+          "moonraker.service"
+        ],
+        "capabilities": [
+          "boot_firmware_mount",
+          "networkmanager_boot_profile",
+          "printer_data_layout",
+          "systemd_first_boot"
+        ]
+      }
+    }
+  ]
+}

@@ -5,33 +5,63 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      release_candidate:
+        description: Require signing secrets and run all publication-blocking gates
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
-env:
-  KACE_BOOTSTRAP_REF: 5ea7af1345a5c00e1e17627da6c11c20c75493f5
-  KACE_BOOTSTRAP_SHA256: eb8104963c082178118d3efddedc35b8d4fae104c5c76c730341c1dd37ce92bd
-
 jobs:
+  lint-shell:
+    name: Validate Critical Shell Contract
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Install pinned ShellCheck
+      env:
+        SHELLCHECK_VERSION: v0.11.0
+        SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+      run: |
+        archive="shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+        curl --fail --silent --show-error --location \
+          "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/${archive}" \
+          --output "${RUNNER_TEMP}/${archive}"
+        echo "${SHELLCHECK_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check --strict
+        tar -xJf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+        echo "${RUNNER_TEMP}/shellcheck-${SHELLCHECK_VERSION}" >> "${GITHUB_PATH}"
+
+    - name: Validate bundled bootstrap syntax and semantics
+      run: |
+        bash -n bootstrap.sh
+        shellcheck --severity=warning bootstrap.sh
+
   test:
     name: Run Tests
+    needs: lint-shell
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
-        python-version: ["3.11", "3.12"]
+        os: [windows-2025, ubuntu-24.04]
+        python-version: ["3.11.9", "3.12.10"]
 
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v4
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
+        cache-dependency-path: requirements.lock
 
     - name: Install System Dependencies (Linux)
       if: runner.os == 'Linux'
@@ -43,64 +73,217 @@ jobs:
 
     - name: Install Dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install -r requirements-dev.txt
+        python -m pip install --require-hashes -r requirements.lock
 
     - name: Reject developer-local paths
       run: python scripts/check_portability.py
 
     - name: Fetch and verify pinned KACE bootstrap
-      run: |
-        python -c "import os, urllib.request; ref=os.environ['KACE_BOOTSTRAP_REF']; urllib.request.urlretrieve(f'https://raw.githubusercontent.com/3D-uy/KACE/{ref}/scripts/bootstrap.sh', 'bootstrap.sh')"
-        python -c "import hashlib, os, pathlib; actual=hashlib.sha256(pathlib.Path('bootstrap.sh').read_bytes()).hexdigest(); expected=os.environ['KACE_BOOTSTRAP_SHA256']; assert actual == expected, f'bootstrap.sh SHA-256 mismatch: {actual} != {expected}'"
+      run: python scripts/release.py fetch-bootstrap && python scripts/release.py verify-remote-installer
+
+    - name: Verify immutable release inputs
+      run: python scripts/release.py verify-inputs
 
     - name: Run Backend Tests
-      run: |
-        python -m pytest -v > pytest_run.log 2>&1
-        cat pytest_run.log
+      run: python -m pytest -v --junitxml=pytest-results.xml
 
     - name: Upload logs on failure
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: pytest-logs-${{ matrix.os }}-py${{ matrix.python-version }}
-        path: pytest_run.log
+        path: pytest-results.xml
         if-no-files-found: warn
         retention-days: 7
 
   build-windows:
     name: Build Windows Executable
     needs: test
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v4
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
       with:
-        python-version: "3.12"
+        python-version: "3.12.10"
         cache: 'pip'
+        cache-dependency-path: requirements.lock
 
     - name: Install Dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install -r requirements-dev.txt
+        python -m pip install --require-hashes -r requirements.lock
 
     - name: Fetch and verify pinned KACE bootstrap
+      run: python scripts/release.py fetch-bootstrap && python scripts/release.py verify-remote-installer
+
+    - name: Verify immutable release inputs
+      run: python scripts/release.py verify-inputs
+
+    - name: Fix reproducible build environment
+      shell: pwsh
       run: |
-        python -c "import os, urllib.request; ref=os.environ['KACE_BOOTSTRAP_REF']; urllib.request.urlretrieve(f'https://raw.githubusercontent.com/3D-uy/KACE/{ref}/scripts/bootstrap.sh', 'bootstrap.sh')"
-        python -c "import hashlib, os, pathlib; actual=hashlib.sha256(pathlib.Path('bootstrap.sh').read_bytes()).hexdigest(); expected=os.environ['KACE_BOOTSTRAP_SHA256']; assert actual == expected, f'bootstrap.sh SHA-256 mismatch: {actual} != {expected}'"
+        $PSNativeCommandUseErrorActionPreference = $true
+        "PYTHONHASHSEED=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Build Executable with PyInstaller
+      shell: pwsh
       run: |
-        pyinstaller --clean -y main.spec
+        $PSNativeCommandUseErrorActionPreference = $true
+        python -m PyInstaller --clean -y main.spec
+        Copy-Item dist\KACE-studio.exe build\KACE-studio.repro-reference.exe
+        python -m PyInstaller --clean -y main.spec
 
-    - name: Upload Build Artifact
-      uses: actions/upload-artifact@v4
+    - name: Require deterministic repeated build
+      run: python scripts/release.py verify-rebuild build/KACE-studio.repro-reference.exe dist/KACE-studio.exe
+
+    - name: Verify bundled bytes, PE metadata, and write primary manifest
+      shell: pwsh
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $true
+        python scripts/release.py verify-bundle dist/KACE-studio.exe
+        python scripts/release.py verify-metadata dist/KACE-studio.exe
+        dist\KACE-studio.exe --verify-package
+        python scripts/smoke_executable.py dist/KACE-studio.exe --timeout 45
+        python scripts/release.py write-manifest dist/KACE-studio.exe dist/KACE-studio.release.json --reproducible-reference build/KACE-studio.repro-reference.exe
+
+    - name: Upload primary unsigned build evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: KACE-studio-Windows
-        path: dist/KACE-studio.exe
+        name: KACE-studio-Windows-primary-${{ github.sha }}
+        path: |
+          dist/KACE-studio.exe
+          dist/KACE-studio.release.json
+        if-no-files-found: error
+
+  independent-windows-builder:
+    name: Independent Windows Rebuild
+    needs: build-windows
+    runs-on: windows-2025
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Set up Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      with:
+        python-version: "3.12.10"
+        cache: 'pip'
+        cache-dependency-path: requirements.lock
+
+    - name: Install Dependencies
+      run: python -m pip install --require-hashes -r requirements.lock
+
+    - name: Fetch and verify immutable inputs
+      run: python scripts/release.py fetch-bootstrap && python scripts/release.py verify-remote-installer && python scripts/release.py verify-inputs
+
+    - name: Fix reproducible build environment
+      shell: pwsh
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $true
+        "PYTHONHASHSEED=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Build independently from the same commit
+      run: python -m PyInstaller --clean -y main.spec
+
+    - name: Download primary build evidence
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      with:
+        name: KACE-studio-Windows-primary-${{ github.sha }}
+        path: primary
+
+    - name: Require byte-identical independent build
+      shell: pwsh
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $true
+        python scripts/release.py write-independent-attestation primary/KACE-studio.release.json primary/KACE-studio.exe dist/KACE-studio.exe dist/KACE-studio.independent-build.json
+        python scripts/release.py attach-independent-attestation primary/KACE-studio.release.json dist/KACE-studio.independent-build.json dist/KACE-studio.release.json
+        python scripts/release.py verify-metadata dist/KACE-studio.exe
+        dist\KACE-studio.exe --verify-package
+        python scripts/smoke_executable.py dist/KACE-studio.exe --timeout 45
+
+    - name: Upload independently reproduced unsigned artifact
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: KACE-studio-Windows-${{ github.sha }}
+        path: dist/
+        if-no-files-found: error
+
+  signed-release-gates:
+    name: Signed Release Gates
+    needs: independent-windows-builder
+    if: github.event_name == 'workflow_dispatch' && inputs.release_candidate
+    runs-on: windows-2025
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Set up Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      with:
+        python-version: "3.12.10"
+        cache: 'pip'
+        cache-dependency-path: requirements.lock
+
+    - name: Install Dependencies
+      run: python -m pip install --require-hashes -r requirements.lock
+
+    - name: Fetch and verify immutable inputs
+      run: python scripts/release.py fetch-bootstrap && python scripts/release.py verify-remote-installer && python scripts/release.py verify-inputs
+
+    - name: Download independently reproduced unsigned artifact
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      with:
+        name: KACE-studio-Windows-${{ github.sha }}
+        path: dist/candidate
+
+    - name: Require signing identity and certificate secrets
+      shell: pwsh
+      env:
+        WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+        WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        KACE_SIGNING_CERT_SHA256: ${{ secrets.KACE_SIGNING_CERT_SHA256 }}
+      run: |
+        if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_PFX_BASE64)) { throw 'WINDOWS_SIGNING_PFX_BASE64 is required' }
+        if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_PFX_PASSWORD)) { throw 'WINDOWS_SIGNING_PFX_PASSWORD is required' }
+        if ($env:KACE_SIGNING_CERT_SHA256 -notmatch '^[0-9a-f]{64}$') { throw 'KACE_SIGNING_CERT_SHA256 must be a lowercase SHA-256' }
+
+    - name: Sign release candidate with SHA-256 and trusted timestamp
+      shell: pwsh
+      env:
+        WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+        WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $true
+        $pfxPath = Join-Path $env:RUNNER_TEMP 'kace-studio-signing.pfx'
+        [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_PFX_BASE64))
+        try {
+          $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          if ($null -eq $signTool) { throw 'signtool.exe is unavailable' }
+          & $signTool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /f $pfxPath /p $env:WINDOWS_SIGNING_PFX_PASSWORD dist\candidate\KACE-studio.exe
+          if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE" }
+        } finally {
+          Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+        }
+
+    - name: Finalize manifest and enforce all release gates
+      shell: pwsh
+      env:
+        KACE_SIGNING_CERT_SHA256: ${{ secrets.KACE_SIGNING_CERT_SHA256 }}
+      run: |
+        $PSNativeCommandUseErrorActionPreference = $true
+        python scripts/release.py finalize-signed-manifest dist/candidate/KACE-studio.release.json dist/candidate/KACE-studio.exe dist/candidate/KACE-studio.independent-build.json dist/candidate/KACE-studio.signed.release.json --expected-certificate-sha256 $env:KACE_SIGNING_CERT_SHA256
+        python scripts/release.py verify-release-gates dist/candidate/KACE-studio.exe dist/candidate/KACE-studio.signed.release.json dist/candidate/KACE-studio.independent-build.json --expected-certificate-sha256 $env:KACE_SIGNING_CERT_SHA256
+
+    - name: Upload signed release candidate evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: KACE-studio-Windows-signed-${{ github.sha }}
+        path: |
+          dist/candidate/KACE-studio.exe
+          dist/candidate/KACE-studio.signed.release.json
+          dist/candidate/KACE-studio.independent-build.json
         if-no-files-found: error

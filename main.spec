@@ -1,11 +1,68 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import json
+from pathlib import Path
+
+from PyInstaller.utils.win32.versioninfo import (
+    FixedFileInfo,
+    StringFileInfo,
+    StringStruct,
+    StringTable,
+    VarFileInfo,
+    VarStruct,
+    VSVersionInfo,
+)
+
+
+contract = json.loads((Path(SPECPATH) / 'release-contract.json').read_text(encoding='utf-8'))
+metadata = contract['windows_metadata']
+numeric_version = tuple(metadata['numeric_version'])
+version_info = VSVersionInfo(
+    ffi=FixedFileInfo(
+        filevers=numeric_version,
+        prodvers=numeric_version,
+        mask=0x3F,
+        flags=0x0,
+        OS=0x40004,
+        fileType=0x1,
+        subtype=0x0,
+        date=(0, 0),
+    ),
+    kids=[
+        StringFileInfo(
+            [
+                StringTable(
+                    '040904B0',
+                    [
+                        StringStruct(key, metadata[key])
+                        for key in (
+                            'CompanyName',
+                            'FileDescription',
+                            'FileVersion',
+                            'InternalName',
+                            'OriginalFilename',
+                            'ProductName',
+                            'ProductVersion',
+                        )
+                    ],
+                )
+            ]
+        ),
+        VarFileInfo([VarStruct('Translation', [1033, 1200])]),
+    ],
+)
+
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('web', 'web'), ('bootstrap.sh', '.')],  # Includes vendor/fonts, vendor/xterm, vendor/fontawesome
+    datas=[
+        ('web', 'web'),
+        ('bootstrap.sh', '.'),
+        ('image-manifest.json', '.'),
+        ('release-contract.json', '.'),
+    ],  # Includes vendor/fonts, vendor/xterm, vendor/fontawesome
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -14,6 +71,33 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# The Windows 10+ UCRT/API-set DLLs come from the runner image, not the locked
+# Python/dependency inputs. Bundling them makes two otherwise identical builds
+# differ whenever GitHub rolls out a new Windows image. Use the OS copies so the
+# unsigned artifact is derived only from the controlled toolchain.
+HOST_WINDOWS_RUNTIME_PREFIXES = ('api-ms-win-', 'ext-ms-win-')
+HOST_WINDOWS_RUNTIME_BINARIES = {'ucrtbase.dll'}
+a.binaries = [
+    entry
+    for entry in a.binaries
+    if not (
+        Path(entry[0]).name.lower() in HOST_WINDOWS_RUNTIME_BINARIES
+        or Path(entry[0]).name.lower().startswith(HOST_WINDOWS_RUNTIME_PREFIXES)
+    )
+]
+
+# Wheel RECORD files describe the installation environment. In particular,
+# console-script launcher hashes include the absolute Python installation path,
+# so they are not application inputs and differ across independent builders.
+INSTALL_ENVIRONMENT_METADATA_SUFFIXES = ('.dist-info/RECORD',)
+a.datas = [
+    entry
+    for entry in a.datas
+    if not str(entry[0]).replace('\\', '/').endswith(
+        INSTALL_ENVIRONMENT_METADATA_SUFFIXES
+    )
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -36,4 +120,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='web/KACE-studio.ico',
+    version=version_info,
 )

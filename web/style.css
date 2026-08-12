@@ -1069,6 +1069,11 @@ body {
     color: var(--success-color);
 }
 
+.kace-workflow-tracker.action-required .kace-workflow-status {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
 .kace-workflow-tracker.error .kace-workflow-status {
     border-color: var(--danger-color);
     color: var(--danger-color);

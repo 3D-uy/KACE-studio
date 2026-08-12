@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import main
+from backend.provisioning import ImageType, validate_provisioning
 
 
 def raw_image(size: int = 1024 * 1024) -> bytes:
@@ -115,14 +116,20 @@ def test_partial_cached_image_without_sidecar_is_reextracted(api, tmp_path, monk
     target = cache / "fixture.img"
     target.write_bytes(content[:4096])
 
-    monkeypatch.setattr(main, "__file__", str(tmp_path / "main.py"))
-    monkeypatch.setattr(
-        api,
-        "_get_latest_github_release_asset",
-        lambda _repo, _arch: ("https://invalid/fixture.zip", "fixture.zip", ""),
+    monkeypatch.setattr(main, "application_cache_dir", lambda: cache)
+    entry = SimpleNamespace(
+        image_type=ImageType.MAINSAILOS_PREBAKED.value,
+        architecture="32bit",
+        version="fixture-v1",
+        url="https://invalid/fixture.zip",
+        filename="fixture.zip",
+        sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        attestation=SimpleNamespace(image_sha256=hashlib.sha256(content).hexdigest()),
     )
+    manifest = SimpleNamespace(resolve=lambda *_args: entry)
+    monkeypatch.setattr(main.ImageManifest, "load_bundled", lambda: manifest)
 
-    resolved = api._resolve_prebaked_image("fluidd", "64bit")
+    resolved = api._resolve_prebaked_image(ImageType.MAINSAILOS_PREBAKED, "32bit")
     assert resolved == str(target)
     assert target.read_bytes() == content
     assert api._cached_file_is_valid(str(target), raw_image=True)
@@ -140,22 +147,94 @@ def test_custom_compressed_images_are_rejected_before_writer(api, tmp_path, monk
         raise AssertionError("raw writer must not be called")
 
     monkeypatch.setattr(main, "flash_drive", forbidden_writer)
-    api._flash_worker(
-        99, str(custom), "host", "ssid", "wifi", "ssh", "mainsail",
-        "UTC", "pi4", "64bit", True, False, "kace", True,
-    )
+    identity = {
+        "number": 99,
+        "friendly_name": "Test SD",
+        "size_bytes": 32 * 1024**3,
+        "bus_type": "USB",
+        "is_system": False,
+        "is_boot": False,
+        "serial_number": "SERIAL",
+        "unique_id": "UNIQUE",
+        "path": r"\\?\usbstor#test",
+        "media_type": "Unspecified",
+    }
+    api._drive_snapshots[99] = identity
+    assert api.start_flash(
+        99,
+        str(custom),
+        "host",
+        "",
+        "",
+        "validpass123",
+        "mainsail",
+        drive_identity=identity,
+        image_type=ImageType.CUSTOM_VANILLA.value,
+    ) is False
     assert not writer_called
+
+
+def test_custom_raw_image_requires_external_checksum(api, tmp_path):
+    image = tmp_path / "custom.img"
+    image.write_bytes(raw_image())
+
+    with pytest.raises(ValueError, match="external SHA-256"):
+        api._resolve_custom_image(str(image))
+
+
+def test_custom_raw_image_rejects_incorrect_external_checksum(api, tmp_path):
+    image = tmp_path / "custom.img"
+    image.write_bytes(raw_image())
+    (tmp_path / "custom.img.sha256").write_text("0" * 64 + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="SHA256 mismatch"):
+        api._resolve_custom_image(str(image))
 
 
 def test_custom_raw_image_requires_plausible_partition_table(api, tmp_path):
     invalid = tmp_path / "invalid.img"
     invalid.write_bytes(b"not a disk image" * 100)
+    (tmp_path / "invalid.img.sha256").write_text(
+        hashlib.sha256(invalid.read_bytes()).hexdigest() + "\n", encoding="utf-8"
+    )
     with pytest.raises(ValueError, match="MBR/GPT"):
         api._resolve_custom_image(str(invalid))
 
     valid = tmp_path / "valid.img"
     valid.write_bytes(raw_image())
+    (tmp_path / "valid.img.sha256").write_text(
+        hashlib.sha256(valid.read_bytes()).hexdigest() + "\n", encoding="utf-8"
+    )
     assert api._resolve_custom_image(str(valid)) == str(valid)
+
+
+def test_custom_prebaked_family_reaches_injection_without_vanilla_inference(
+    api, tmp_path, monkeypatch
+):
+    image = tmp_path / "custom.img"
+    image.write_bytes(raw_image())
+    provisioning = validate_provisioning(
+        image_type=ImageType.CUSTOM_PREBAKED,
+        image_path=str(image),
+        hostname="printer-one",
+        wifi_ssid="",
+        wifi_password="",
+        ssh_password="validpass123",
+        dashboard_ui="mainsail",
+    )
+    captured = {}
+    monkeypatch.setattr(api, "_resolve_custom_image", lambda path: path)
+    monkeypatch.setattr(api, "_validate_raw_image", lambda _path: 1024)
+    monkeypatch.setattr(api, "_preflight_prebaked_image", lambda *_args: None)
+    monkeypatch.setattr(main, "flash_drive", lambda *_args: (True, ""))
+
+    def fake_inject(*_args, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(main, "inject_config", fake_inject)
+    api._flash_worker(99, provisioning, {"number": 99})
+    assert captured["image_type"] is ImageType.CUSTOM_PREBAKED
 
 
 def test_cancelled_download_removes_part_and_preserves_canonical(api, tmp_path, monkeypatch):
@@ -193,7 +272,9 @@ def test_cancelled_download_removes_part_and_preserves_canonical(api, tmp_path, 
     monkeypatch.setattr(api, "_check_cancelled", cancel_after_first_chunk)
 
     with pytest.raises(ValueError, match="synthetic cancellation"):
-        api._download_os_image("unused", str(cached), str(checksum), "", "https://invalid", "arm64")
+        api._download_os_image(
+            "unused", str(cached), str(checksum), "0" * 64, "https://invalid", "arm64"
+        )
 
     assert cached.read_bytes() == b"previous archive"
     assert checksum.read_text(encoding="utf-8") == "previous checksum\n"

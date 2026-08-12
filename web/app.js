@@ -18,6 +18,7 @@ let printerPowerStatus = 'init';
 let printerPowerAvailable = false;
 let printerPowerRequestActive = false;
 let printerPowerPollTimer = null;
+let remotePowerAuthority = null;
 
 let userPreferences = { theme: 'dark', kace_auto_scan: true, form_state: {} };
 
@@ -183,14 +184,30 @@ function refreshDrives() {
 
 function toggleImageSource(value) {
     const wrapper = document.getElementById('custom-image-wrapper');
+    const typeWrapper = document.getElementById('custom-image-type-wrapper');
     const pathInput = document.getElementById('custom-image-path');
     if (value === 'custom') {
         wrapper.style.display = 'flex';
+        if (typeWrapper) typeWrapper.style.display = 'block';
     } else {
         wrapper.style.display = 'none';
+        if (typeWrapper) typeWrapper.style.display = 'none';
         pathInput.value = '';
         clearInputError('custom-image-path');
     }
+}
+
+function toggleWifiSecurity() {
+    const isOpen = document.getElementById('wifi-security-select').value === 'open';
+    ['wifi-password', 'wifi-password-confirm'].forEach(id => {
+        const input = document.getElementById(id);
+        if (!input) return;
+        input.disabled = isOpen;
+        if (isOpen) {
+            input.value = '';
+            clearInputError(id);
+        }
+    });
 }
 
 function browseLocalImage() {
@@ -285,6 +302,7 @@ function validateSshPasswords() {
 }
 
 function validateWifiPasswords() {
+    const wifiSecurity = document.getElementById('wifi-security-select').value;
     const wifiPassword = document.getElementById('wifi-password').value;
     const wifiPasswordConfirm = document.getElementById('wifi-password-confirm').value;
 
@@ -292,7 +310,7 @@ function validateWifiPasswords() {
     clearInputError('wifi-password-confirm');
 
     // If confirmation is introduced and does not match, show error immediately
-    if (wifiPasswordConfirm && wifiPassword !== wifiPasswordConfirm) {
+    if (wifiSecurity !== 'open' && wifiPasswordConfirm && wifiPassword !== wifiPasswordConfirm) {
         showInputError('wifi-password-confirm', "Wi-Fi passwords do not match.");
         return false;
     }
@@ -388,8 +406,8 @@ function openFormatModal() {
 
     const password = document.getElementById('ssh-password').value;
     const passwordConfirm = document.getElementById('ssh-password-confirm').value;
-    if (!password) {
-        showInputError('ssh-password', `An SSH password must be specified for user '${username || 'kace'}'.`);
+    if (password.length < 8) {
+        showInputError('ssh-password', `The account password for '${username || 'kace'}' must contain at least 8 characters.`);
         hasErrors = true;
         if (!errTab) errTab = 'credentials-tab';
     }
@@ -401,6 +419,7 @@ function openFormatModal() {
 
     // Step 8: WiFi credentials check
     const wifiSsid = document.getElementById('wifi-ssid').value.trim();
+    const wifiSecurity = document.getElementById('wifi-security-select').value;
     const wifiPassword = document.getElementById('wifi-password').value;
     const wifiPasswordConfirm = document.getElementById('wifi-password-confirm').value;
 
@@ -410,7 +429,20 @@ function openFormatModal() {
             hasErrors = true;
             if (!errTab) errTab = 'credentials-tab';
         }
-        if (wifiPassword !== wifiPasswordConfirm) {
+        if (new TextEncoder().encode(wifiSsid).length > 32) {
+            showInputError('wifi-ssid', "SSID must be at most 32 UTF-8 bytes.");
+            hasErrors = true;
+            if (!errTab) errTab = 'credentials-tab';
+        }
+        const validWpaPassword = wifiSecurity === 'open' ||
+            (wifiPassword.length >= 8 && wifiPassword.length <= 63) ||
+            /^[0-9A-Fa-f]{64}$/.test(wifiPassword);
+        if (!validWpaPassword) {
+            showInputError('wifi-password', "WPA passphrases must contain 8-63 characters or 64 hexadecimal digits.");
+            hasErrors = true;
+            if (!errTab) errTab = 'credentials-tab';
+        }
+        if (wifiSecurity !== 'open' && wifiPassword !== wifiPasswordConfirm) {
             showInputError('wifi-password-confirm', "Wi-Fi passwords do not match.");
             hasErrors = true;
             if (!errTab) errTab = 'credentials-tab';
@@ -569,6 +601,7 @@ function startFlashing() {
     // WiFi setup
     const wifiSsid = document.getElementById('wifi-ssid').value;
     const wifiPassword = document.getElementById('wifi-password').value;
+    const wifiSecurity = document.getElementById('wifi-security-select').value;
 
     // Services
     const sshEnabled = document.getElementById('ssh-enable').checked;
@@ -598,10 +631,13 @@ function startFlashing() {
     // Image configuration
     const imageSource = document.getElementById('image-source-select').value;
     let imagePath = "default_prebaked";
+    let imageType = dashboardUi === 'fluidd' ? 'fluiddpi_prebaked' : 'mainsailos_prebaked';
     if (imageSource === 'custom') {
         imagePath = document.getElementById('custom-image-path').value;
+        imageType = document.getElementById('custom-image-type').value;
     } else if (imageSource === 'raspios_lite') {
         imagePath = "default_lite";
+        imageType = 'raspios_vanilla';
     }
 
     // Show progress elements
@@ -641,7 +677,9 @@ function startFlashing() {
             powerDevice,
             powerGpio,
             powerActiveLow,
-            restartKlipperWhenPowered
+            restartKlipperWhenPowered,
+            imageType,
+            wifiSecurity
         ).then(res => {
             if (!res) {
                 window.updateDeviceState("ERROR", 0, "Flashing aborted or failed.");
@@ -744,9 +782,20 @@ window.updateDeviceState = function (state, progress, message) {
             updateConnectionStatus(true);
             if (term) term.write(`\x1b[1;32m[Status] ${message}\x1b[0m\r\n`);
             break;
-        case 'BOOTSTRAPPED':
+        case 'BOOTSTRAPPING':
             updateConnectionStatus(true);
+            if (term) term.write(`\x1b[1;36m[Status] ${message}\x1b[0m\r\n`);
+            break;
+        case 'BOOTSTRAPPED':
             if (term) term.write(`\x1b[1;32m[Status] ${message}\x1b[0m\r\n`);
+            break;
+        case 'BOOTSTRAP_FAILED':
+        case 'BOOTSTRAP_CANCELLED':
+            if (term) term.write(`\x1b[1;31m[Bootstrap] ${message}\x1b[0m\r\n`);
+            break;
+        case 'BOOTSTRAP_INTERRUPTED':
+            updateConnectionStatus(false);
+            if (term) term.write(`\x1b[1;31m[Bootstrap] ${message}\x1b[0m\r\n`);
             break;
         case 'ERROR':
             flashBtn.disabled = false;
@@ -787,7 +836,7 @@ function updateTrackerBar(state) {
         { id: 'step-flashing', states: ['FLASHING'] },
         { id: 'step-booting', states: ['FLASHED', 'BOOTING'] },
         { id: 'step-discovered', states: ['DISCOVERED', 'CONNECTING'] },
-        { id: 'step-ssh', states: ['SSH_READY'] },
+        { id: 'step-ssh', states: ['SSH_READY', 'BOOTSTRAPPING', 'BOOTSTRAP_FAILED', 'BOOTSTRAP_CANCELLED'] },
         { id: 'step-bootstrapped', states: ['BOOTSTRAPPED'] }
     ];
 
@@ -1165,6 +1214,10 @@ function performSshLogin(username, password) {
                 connectedUsername = username;
                 term.write("\x1b[1;32m[KACE Workspace] SSH connection established successfully.\x1b[0m\r\n");
                 updateConnectionStatus(true);
+                applyRemotePowerConfig(res && res.power_config ? res.power_config : {
+                    status: 'error',
+                    detail: 'SSH connected but remote power configuration was not returned',
+                });
                 loginState = 'DISCONNECTED';
 
                 // Synchronize terminal dimensions with the remote PTY
@@ -1221,6 +1274,8 @@ function performSshLogin(username, password) {
 function connectToDevice(ip, name) {
     currentDeviceIp = ip;
     currentDeviceName = name;
+    // A remote schema is authoritative only for the device it was read from.
+    remotePowerAuthority = null;
     startPowerPolling();
 
     const terminalNav = document.getElementById('terminal-nav-btn');
@@ -1358,9 +1413,19 @@ function initTerminal() {
                 term.write("y\r\n[KACE Workspace] Clearing stored host key...\r\n");
                 loginState = 'CONNECTING';
                 if (window.pywebview && window.pywebview.api) {
-                    window.pywebview.api.clear_stored_host_key(currentDeviceIp).then(() => {
-                        promptTerminalLogin();
-                    });
+                    window.pywebview.api.clear_stored_host_key(currentDeviceIp)
+                        .then((cleared) => {
+                            if (!cleared) {
+                                term.write("[KACE Workspace] Could not safely update SSH trust storage. Connection remains blocked.\r\n");
+                                loginState = 'PROMPTING_HOST_KEY_MISMATCH';
+                                return;
+                            }
+                            promptTerminalLogin();
+                        })
+                        .catch(() => {
+                            term.write("[KACE Workspace] SSH trust storage failed. Connection remains blocked.\r\n");
+                            loginState = 'PROMPTING_HOST_KEY_MISMATCH';
+                        });
                 } else {
                     promptTerminalLogin();
                 }
@@ -1377,6 +1442,9 @@ function initTerminal() {
 
 let bootstrapBuffer = "";
 let bootstrapFailureHandled = false;
+let bootstrapActive = false;
+let bootstrapAuthoritativeSeen = false;
+const bootstrapEventCursors = new Map();
 
 // Read-only projection of KACE's state machine. Studio never advances these
 // states and never infers success from SSH/process/Moonraker reachability.
@@ -1385,6 +1453,7 @@ const KACE_INSTALLATION_STEPS = [
     'Waiting for controller transition',
     'MCU disconnected',
     'Waiting for MCU to return',
+    'Confirming MCU identity',
     'MCU detected',
     'Moonraker connected',
     'Klipper ready',
@@ -1404,7 +1473,7 @@ const KACE_FIRMWARE_DEPLOYMENT_STEPS = [
 
 const KACE_TERMINAL_ERRORS = new Set([
     'ABORTED', 'CANCELLED', 'FAILED_FLASH', 'FAILED_MONITOR', 'FAILED_UPLOAD',
-    'CONFIG_ERROR', 'FAILED_PRECONDITION',
+    'CONFIG_ERROR', 'FAILED_PRECONDITION', 'TIMEOUT',
 ]);
 
 const kaceWorkflowViews = new Map();
@@ -1430,26 +1499,34 @@ function kaceWorkflowDefinition(kind) {
         BACKUP: [-1, 0],
         COPYING_FIRMWARE: [-1, 0],
         FIRMWARE_COPIED: [0, 1],
+        MEDIA_PREPARED: [0, 1],
         MONITOR_ARMED: [0, 1],
+        AWAITING_POWER_CYCLE: [0, 1],
+        AWAITING_MEDIA_INSTALLATION: [0, 1],
+        AWAITING_BOOTLOADER: [0, 1],
+        FLASHING: [0, 1],
         AWAITING_DISCONNECT: [0, 1],
         MCU_ABSENT: [2, 3],
         AWAITING_RECONNECT: [2, 3],
-        MCU_PRESENT: [4, 5],
-        WAITING_MOONRAKER: [4, 5],
-        MOONRAKER_ONLINE: [5, 6],
-        WAITING_KLIPPER_READY: [5, 6],
-        KLIPPER_READY: [6, 7],
-        WAITING_MCU_REGISTRATION: [6, 7],
-        MCU_REGISTERED: [7, 8],
-        VERIFYING_FIRMWARE: [7, 8],
-        FIRMWARE_VERIFIED: [8, 9],
-        APPLYING_CONFIG: [8, 9],
-        VERIFYING_UPLOAD: [8, 9],
-        FIRMWARE_RESTART: [8, 9],
-        VERIFYING_CONFIG: [8, 9],
-        ROLLING_BACK: [8, 9],
-        VERIFYING_ROLLBACK: [8, 9],
-        DONE: [10, -1],
+        AWAITING_REENUMERATION: [2, 3],
+        AWAITING_MCU_CONFIRMATION: [3, 4],
+        MCU_IDENTITY_CONFIRMED: [4, 5],
+        MCU_PRESENT: [5, 6],
+        WAITING_MOONRAKER: [5, 6],
+        MOONRAKER_ONLINE: [6, 7],
+        WAITING_KLIPPER_READY: [6, 7],
+        KLIPPER_READY: [7, 8],
+        WAITING_MCU_REGISTRATION: [7, 8],
+        MCU_REGISTERED: [8, 9],
+        VERIFYING_FIRMWARE: [8, 9],
+        FIRMWARE_VERIFIED: [9, 10],
+        APPLYING_CONFIG: [9, 10],
+        VERIFYING_UPLOAD: [9, 10],
+        FIRMWARE_RESTART: [9, 10],
+        VERIFYING_CONFIG: [9, 10],
+        ROLLING_BACK: [9, 10],
+        VERIFYING_ROLLBACK: [9, 10],
+        DONE: [11, -1],
         },
     };
 }
@@ -1476,7 +1553,8 @@ function renderKaceWorkflow(view) {
     const [completedThrough, currentIndex] = kaceWorkflowPosition(view, positionState);
 
     tracker.style.display = 'block';
-    tracker.classList.toggle('success', isDone || isActionRequired);
+    tracker.classList.toggle('success', isDone);
+    tracker.classList.toggle('action-required', isActionRequired);
     tracker.classList.toggle('error', isError);
     const method = view.data && typeof view.data.method === 'string' ? view.data.method : '';
     title.textContent = view.kind === 'firmware_deployment'
@@ -1500,6 +1578,20 @@ function renderKaceWorkflow(view) {
                     detailLines.push(`${index + 1}. ${instruction.text}`);
                 }
             });
+        }
+        const identity = view.data.identity_assessment;
+        if (identity && typeof identity === 'object') {
+            if (Number.isInteger(identity.score) && Number.isInteger(identity.automatic_threshold)) {
+                detailLines.push(`MCU identity evidence: ${identity.score}/${identity.automatic_threshold}`);
+            }
+            if (Array.isArray(identity.reasons)) {
+                identity.reasons.forEach(reason => {
+                    if (typeof reason === 'string') detailLines.push(`Identity: ${reason}`);
+                });
+            }
+        }
+        if (view.data.manually_confirmed === true) {
+            detailLines.push('MCU identity physically confirmed by the operator');
         }
     }
     detail.textContent = detailLines.join('\n');
@@ -1536,7 +1628,10 @@ window.updateKaceWorkflowEvent = function (event) {
     const workflowId = event.workflow_id;
     const sequence = event.sequence;
     const state = event.state;
-    if (typeof workflowId !== 'string' || !workflowId ||
+    const schema = event.schema;
+    if ((schema !== 1 && schema !== 2) ||
+        (schema === 2 && event.workflow_kind !== 'firmware_deployment') ||
+        typeof workflowId !== 'string' || !workflowId ||
         !Number.isInteger(sequence) || sequence < 1 ||
         typeof state !== 'string' || !state) return false;
 
@@ -1567,6 +1662,7 @@ function restoreKaceDeploymentManifest(manifest) {
         !manifest.deployment || typeof manifest.deployment !== 'object') return false;
     const deployment = manifest.deployment;
     return window.updateKaceWorkflowEvent({
+        schema: 2,
         workflow_kind: 'firmware_deployment',
         workflow_id: manifest.workflow_id || deployment.deployment_id,
         sequence: Number.isInteger(manifest.sequence) && manifest.sequence > 0
@@ -1645,6 +1741,112 @@ function setBootstrapStage(stageId) {
     }
 }
 
+function completeBootstrapSuccess(message) {
+    bootstrapActive = false;
+    BOOTSTRAP_STAGES.forEach(stage => {
+        const el = document.getElementById('bstage-' + stage.id);
+        if (el) { el.classList.remove('active'); el.classList.add('done'); }
+    });
+    const label = document.getElementById('bootstrap-stage-label');
+    if (label) label.textContent = '✔ Bootstrap complete!';
+    const connSubtitle = document.getElementById('connection-subtitle');
+    if (connSubtitle) {
+        connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap and KACE wizard completed successfully.</span>';
+    }
+    const finishBtn = document.getElementById('finish-btn');
+    if (finishBtn) {
+        finishBtn.disabled = false;
+        finishBtn.classList.add('active');
+    }
+    window.updateDeviceState('BOOTSTRAPPED', 100, message || 'Bootstrap completed successfully.');
+    if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.get_remote_power_config()
+            .then(result => applyRemotePowerConfig(result))
+            .catch(error => applyRemotePowerConfig({ status: 'error', detail: String(error) }));
+    }
+    setTimeout(() => {
+        const tracker = document.getElementById('bootstrap-progress-tracker');
+        if (tracker && tracker.style.display !== 'none') {
+            tracker.style.display = 'none';
+            setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 50);
+        }
+    }, 1500);
+}
+
+function completeBootstrapTerminal(state, message) {
+    bootstrapActive = false;
+    bootstrapFailureHandled = true;
+    const label = document.getElementById('bootstrap-stage-label');
+    if (label) label.textContent = `✖ ${message}`;
+    const connSubtitle = document.getElementById('connection-subtitle');
+    if (connSubtitle) {
+        connSubtitle.textContent = message;
+        connSubtitle.style.color = 'var(--danger-color)';
+    }
+    const finishBtn = document.getElementById('finish-btn');
+    if (finishBtn) {
+        finishBtn.disabled = true;
+        finishBtn.classList.remove('active');
+    }
+    const bootstrapBtn = document.getElementById('bootstrap-btn');
+    if (bootstrapBtn) bootstrapBtn.disabled = !sshConnected || state === 'BOOTSTRAP_INTERRUPTED';
+    window.updateDeviceState(state, 0, message);
+}
+
+window.updateBootstrapEvent = function (event) {
+    if (!event || event.protocol !== 'kace-bootstrap/v1') return false;
+    const workflowId = event.workflow_id;
+    const sequence = event.sequence;
+    const eventName = event.event;
+    if (typeof workflowId !== 'string' || !workflowId ||
+        !Number.isInteger(sequence) || sequence < 1 ||
+        typeof eventName !== 'string') return false;
+    const previousSequence = bootstrapEventCursors.get(workflowId) || 0;
+    if (sequence <= previousSequence) return false;
+    bootstrapEventCursors.set(workflowId, sequence);
+    bootstrapAuthoritativeSeen = true;
+
+    if (eventName === 'workflow_started') {
+        bootstrapActive = true;
+        const bootstrapBtn = document.getElementById('bootstrap-btn');
+        if (bootstrapBtn) bootstrapBtn.disabled = true;
+        return true;
+    }
+    if (eventName === 'stage_started') {
+        bootstrapActive = true;
+        setBootstrapStage(event.stage);
+        return true;
+    }
+    if (eventName === 'workflow_succeeded') {
+        completeBootstrapSuccess('Bootstrap and KACE wizard completed successfully.');
+        return true;
+    }
+    if (eventName === 'workflow_cancelled') {
+        completeBootstrapTerminal(
+            'BOOTSTRAP_CANCELLED',
+            `Bootstrap cancelled${event.code ? ` (${event.code})` : ''}.`,
+        );
+        return true;
+    }
+    if (eventName === 'workflow_failed') {
+        completeBootstrapTerminal(
+            'BOOTSTRAP_FAILED',
+            `Bootstrap failed${event.code ? ` at ${event.code}` : ''}.`,
+        );
+        return true;
+    }
+    return false;
+};
+
+window.updateBootstrapInterrupted = function (workflowId, reason) {
+    bootstrapAuthoritativeSeen = true;
+    completeBootstrapTerminal(
+        'BOOTSTRAP_INTERRUPTED',
+        reason || `Bootstrap ${workflowId || ''} was interrupted.`,
+    );
+    return true;
+};
+
 function parseBootstrapProgress(data) {
     bootstrapBuffer += data;
     if (bootstrapBuffer.length > 8000) {
@@ -1654,65 +1856,24 @@ function parseBootstrapProgress(data) {
     // Scan for === STAGE: ID === markers emitted by bootstrap.sh
     const markerRe = /=== STAGE: ([A-Z_]+) ===/g;
     let match;
-    while ((match = markerRe.exec(bootstrapBuffer)) !== null) {
-        setBootstrapStage(match[1]);
+    if (!bootstrapAuthoritativeSeen) {
+        while ((match = markerRe.exec(bootstrapBuffer)) !== null) {
+            setBootstrapStage(match[1]);
+        }
     }
 
     const failureMatch = bootstrapBuffer.match(/=== KACE_BOOTSTRAP_ERROR: ([A-Z_]+) ===/);
-    if (failureMatch && !bootstrapFailureHandled) {
-        bootstrapFailureHandled = true;
+    if (!bootstrapAuthoritativeSeen && failureMatch && !bootstrapFailureHandled) {
         const message = failureMatch[1] === 'KACE_INSTALL'
             ? 'Bootstrap failed: KACE could not be installed.'
             : `Bootstrap failed at ${failureMatch[1]}.`;
-        const label = document.getElementById('bootstrap-stage-label');
-        if (label) label.textContent = `✖ ${message}`;
-        const connSubtitle = document.getElementById('connection-subtitle');
-        if (connSubtitle) {
-            connSubtitle.textContent = message;
-            connSubtitle.style.color = 'var(--danger-color)';
-        }
-        const finishBtn = document.getElementById('finish-btn');
-        if (finishBtn) {
-            finishBtn.disabled = true;
-            finishBtn.classList.remove('active');
-        }
-        window.updateDeviceState('ERROR', 0, message);
+        completeBootstrapTerminal('BOOTSTRAP_FAILED', message);
     }
 
     // Detect completion banner
-    if (!bootstrapFailureHandled && bootstrapBuffer.includes('Bootstrap complete! KACE wizard finished successfully.')) {
-        // Mark all stages done
-        BOOTSTRAP_STAGES.forEach(stage => {
-            const el = document.getElementById('bstage-' + stage.id);
-            if (el) { el.classList.remove('active'); el.classList.add('done'); }
-        });
-        const label = document.getElementById('bootstrap-stage-label');
-        if (label) label.textContent = '✔ Bootstrap complete!';
-        const connSubtitle = document.getElementById('connection-subtitle');
-        if (connSubtitle) {
-            connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap and KACE wizard completed successfully.</span>';
-        }
-        updateTrackerBar('BOOTSTRAPPED');
-
-        const finishBtn = document.getElementById('finish-btn');
-        if (finishBtn) {
-            finishBtn.disabled = false;
-            finishBtn.classList.add('active');
-        }
-
-        // Hide the progress tracker and resize terminal to the full height
-        // This ensures the remote interactive TUI (like KACE logo/menus) sees a correct, standard-sized PTY
-        setTimeout(() => {
-            const tracker = document.getElementById('bootstrap-progress-tracker');
-            if (tracker && tracker.style.display !== 'none') {
-                tracker.style.display = 'none';
-                setTimeout(() => {
-                    if (fitAddon) {
-                        fitAddon.fit();
-                    }
-                }, 50);
-            }
-        }, 1500);
+    if (!bootstrapAuthoritativeSeen && !bootstrapFailureHandled &&
+        bootstrapBuffer.includes('Bootstrap complete! KACE wizard finished successfully.')) {
+        completeBootstrapSuccess('Bootstrap completed through the legacy compatibility marker.');
     }
 }
 
@@ -1732,7 +1893,7 @@ function updateConnectionStatus(connected) {
     const connSubtitle = document.getElementById('connection-subtitle');
 
     if (connected) {
-        bootstrapBtn.disabled = false;
+        bootstrapBtn.disabled = bootstrapActive;
         disconnectBtn.style.display = 'block';
         connTitle.textContent = `SSH Workspace — Connected`;
         connSubtitle.textContent = `Active session: ${connectedUsername}@${currentDeviceName} (${currentDeviceIp})`;
@@ -1774,14 +1935,37 @@ function renderPrinterPower(result) {
         (result && result.device ? `${result.device}: ${status}` : `Power: ${status}`);
 }
 
+function applyRemotePowerConfig(result) {
+    remotePowerAuthority = result && typeof result === 'object' ? result : {
+        status: 'error',
+        detail: 'Remote power configuration response is invalid',
+    };
+    refreshPrinterPower();
+}
+
+function selectedPowerDevice() {
+    const suggested = document.getElementById('power-device-name').value.trim();
+    if (remotePowerAuthority === null || remotePowerAuthority.status === 'absent') {
+        return suggested;
+    }
+    if (remotePowerAuthority.status !== 'configured' ||
+        !remotePowerAuthority.config || remotePowerAuthority.config.enabled !== true) {
+        return '';
+    }
+    return remotePowerAuthority.config.device || '';
+}
+
 async function refreshPrinterPower() {
     if (printerPowerRequestActive || !window.pywebview || !window.pywebview.api) return;
-    const powerDevice = document.getElementById('power-device-name').value.trim();
+    const powerDevice = selectedPowerDevice();
     if (!currentDeviceIp || !powerDevice) {
+        const remoteDetail = remotePowerAuthority && remotePowerAuthority.status !== 'absent'
+            ? (remotePowerAuthority.detail || 'Remote KACE power configuration is disabled')
+            : 'POWER_DEVICE is required';
         renderPrinterPower({
             available: false,
             status: 'init',
-            detail: !currentDeviceIp ? 'Select a Moonraker device first' : 'POWER_DEVICE is required',
+            detail: !currentDeviceIp ? 'Select a Moonraker device first' : remoteDetail,
         });
         return;
     }
@@ -1813,7 +1997,7 @@ function stopPowerPolling() {
 }
 
 async function togglePrinterPower() {
-    const powerDevice = document.getElementById('power-device-name').value.trim();
+    const powerDevice = selectedPowerDevice();
     if (!currentDeviceIp || !powerDevice || printerPowerRequestActive || !printerPowerAvailable ||
         !['on', 'off'].includes(printerPowerStatus)) return;
     printerPowerRequestActive = true;
@@ -1843,7 +2027,7 @@ function disconnectSSH() {
 }
 
 function startBootstrap() {
-    if (!sshConnected) return;
+    if (!sshConnected || bootstrapActive) return;
 
     const selectedUi = document.getElementById('bootstrap-ui-select-imager').value || 'mainsail';
 
@@ -1853,6 +2037,12 @@ function startBootstrap() {
         term.write(`\r\n\x1b[1;31m[Error] Invalid dashboard UI selection: ${selectedUi}\x1b[0m\r\n`);
         return;
     }
+
+    bootstrapActive = true;
+    bootstrapAuthoritativeSeen = false;
+    bootstrapEventCursors.clear();
+    const bootstrapBtn = document.getElementById('bootstrap-btn');
+    if (bootstrapBtn) bootstrapBtn.disabled = true;
 
     // Show the stage progress tracker and reset state
     const tracker = document.getElementById('bootstrap-progress-tracker');
@@ -1871,42 +2061,44 @@ function startBootstrap() {
     if (stageLabel) stageLabel.textContent = 'Starting bootstrap...';
 
     term.write(`\r\n\x1b[1;36m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
-    const bootstrapCmd = `if [ -f /boot/firmware/bootstrap.sh ]; then bash /boot/firmware/bootstrap.sh --dashboard ${selectedUi}; elif [ -f /boot/bootstrap.sh ]; then bash /boot/bootstrap.sh --dashboard ${selectedUi}; else echo "ERROR: bootstrap.sh not found on boot partition. Please re-flash the SD card."; exit 1; fi\n`;
-    // H3 FIX: The previous fallback included 'curl | bash' from a remote GitHub URL.
-    // This has been removed: if the bootstrap script is not found on the SD card,
-    // the command now exits with an error instead of silently fetching and executing
-    // arbitrary code from the internet over the authenticated SSH session.
 
     // Reset buffer at start
     bootstrapBuffer = "";
     bootstrapFailureHandled = false;
 
     if (window.pywebview && window.pywebview.api) {
-        // Send the shell command to execute the bootstrap
-        window.pywebview.api.send_ssh_input(bootstrapCmd);
+        window.pywebview.api.start_bootstrap(selectedUi).then(result => {
+            if (!result || !['started', 'busy'].includes(result.status)) {
+                completeBootstrapTerminal(
+                    'BOOTSTRAP_FAILED',
+                    result && result.message ? result.message : 'Bootstrap could not be started.',
+                );
+            }
+        }).catch(error => {
+            completeBootstrapTerminal('BOOTSTRAP_FAILED', `Bootstrap start failed: ${error}`);
+        });
     } else {
-        // Mock terminal output — stage markers match bootstrap.sh log_stage() output
-        const mockSteps = [
-            '=== STAGE: PACKAGES ===',
-            '=== STAGE: KLIPPER ===',
-            '=== STAGE: MOONRAKER ===',
-            '=== STAGE: CONFIGS ===',
-            `=== STAGE: ${selectedUi === 'fluidd' ? 'FLUIDD' : 'MAINSAIL'} ===`,
-            '=== STAGE: CLIENT_CFG ===',
-            '=== STAGE: NGINX ===',
-            '=== STAGE: SERVICES ===',
-            ...(selectedUi === 'both' || Math.random() > 0.5 ? ['=== STAGE: CROWSNEST ==='] : []),
-            '=== STAGE: KACE ===',
-            'Bootstrap complete! KACE wizard finished successfully.',
+        const workflowId = 'mock-bootstrap';
+        const mockStages = [
+            'PACKAGES', 'KLIPPER', 'MOONRAKER', 'CONFIGS',
+            selectedUi === 'fluidd' ? 'FLUIDD' : 'MAINSAIL',
+            'CLIENT_CFG', 'NGINX', 'SERVICES', 'KACE',
         ];
-
-        term.write(`$ ${bootstrapCmd}`);
+        const mockEvents = [
+            { event: 'workflow_started', stage: 'INIT' },
+            ...mockStages.map(stage => ({ event: 'stage_started', stage })),
+            { event: 'workflow_succeeded', stage: 'KACE', code: 'SUCCESS', exit_code: 0 },
+        ].map((event, index) => Object.assign({
+            protocol: 'kace-bootstrap/v1',
+            workflow_id: workflowId,
+            sequence: index + 1,
+            code: '',
+            exit_code: 0,
+        }, event));
         let idx = 0;
         const interval = setInterval(() => {
-            if (idx < mockSteps.length) {
-                const stepText = mockSteps[idx];
-                term.write(`\r\n${stepText}\r\n`);
-                parseBootstrapProgress(stepText);
+            if (idx < mockEvents.length) {
+                window.updateBootstrapEvent(mockEvents[idx]);
                 idx++;
             } else {
                 clearInterval(interval);
@@ -2057,11 +2249,13 @@ const PERSISTED_FIELDS = [
     { id: 'timezone-select', type: 'value' },
     { id: 'os-arch-select', type: 'value' },
     { id: 'image-source-select', type: 'value' },
+    { id: 'custom-image-type', type: 'value' },
     { id: 'pi-model-select', type: 'hidden' },
     { id: 'bootstrap-ui-select-imager', type: 'hidden' },
     { id: 'ssh-enable', type: 'checked' },
     { id: 'crowsnest-enable', type: 'checked' },
     { id: 'ssh-username', type: 'value' },
+    { id: 'wifi-security-select', type: 'value' },
     { id: 'power-relay-enable', type: 'checked' },
     { id: 'power-device-name', type: 'value' },
 ];
@@ -2113,6 +2307,7 @@ function restoreFormState() {
         // Sync image source toggle visibility
         const imageSource = document.getElementById('image-source-select');
         if (imageSource) toggleImageSource(imageSource.value);
+        toggleWifiSecurity();
 
         // Sync custom dropdowns visual states
         document.querySelectorAll('.custom-select-container').forEach(container => {

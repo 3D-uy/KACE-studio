@@ -223,6 +223,51 @@ def test_helper_rejects_changed_image_before_opening_physical_drive(tmp_path, mo
     assert opened is False
 
 
+def test_physical_disk_readback_must_match_the_source_hash():
+    expected = b"written image contents"
+
+    class CorruptDisk:
+        def __init__(self):
+            self.offset = 7
+
+        def seek(self, offset):
+            self.offset = offset
+
+        def read(self, size):
+            chunk = bytearray(expected[self.offset:self.offset + size])
+            self.offset += len(chunk)
+            if chunk:
+                chunk[0] ^= 0xFF
+            return bytes(chunk)
+
+    with pytest.raises(OSError, match="readback.*SHA-256 mismatch"):
+        kace_writer._verify_disk_readback(
+            CorruptDisk(), len(expected), hashlib.sha256(expected).hexdigest(), chunk_size=512
+        )
+
+
+def test_physical_disk_readback_hashes_exact_image_length_not_sector_padding():
+    expected = b"not-sector-aligned"
+    disk_bytes = expected + (b"\x00" * 512)
+
+    class Disk:
+        def __init__(self):
+            self.offset = 19
+
+        def seek(self, offset):
+            self.offset = offset
+
+        def read(self, size):
+            assert size % 512 == 0, "physical disk reads must be sector-aligned"
+            chunk = disk_bytes[self.offset:self.offset + size]
+            self.offset += len(chunk)
+            return chunk
+
+    assert kace_writer._verify_disk_readback(
+        Disk(), len(expected), hashlib.sha256(expected).hexdigest(), chunk_size=512
+    ) == hashlib.sha256(expected).hexdigest()
+
+
 def test_helper_rejects_arbitrary_status_path(tmp_path, monkeypatch):
     image = tmp_path / "image.img"
     image.write_bytes(b"image")
@@ -296,11 +341,11 @@ def test_api_rejects_concurrent_flash_operations(monkeypatch):
 
     monkeypatch.setattr(main.threading, "Thread", InertThread)
     first = api.start_flash(
-        3, "image.img", "host", "", "", "pw", "mainsail",
+        3, "default_lite", "host", "", "", "validpass123", "mainsail",
         drive_identity=selected,
     )
     second = api.start_flash(
-        3, "image.img", "host", "", "", "pw", "mainsail",
+        3, "default_lite", "host", "", "", "validpass123", "mainsail",
         drive_identity=selected,
     )
     assert first is True

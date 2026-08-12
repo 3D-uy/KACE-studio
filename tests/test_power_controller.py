@@ -129,6 +129,120 @@ def test_pywebview_api_power_action_does_not_require_ssh(monkeypatch):
     assert calls == [("init", "192.168.1.20", "main_psu"), ("on", "main_psu")]
 
 
+def test_remote_power_identity_overrides_stale_local_suggestion(monkeypatch):
+    import main
+
+    calls = []
+
+    class FakeController:
+        def __init__(self, host, device):
+            calls.append((host, device))
+            self.device = device
+
+        def get_status(self):
+            return "on"
+
+    monkeypatch.setattr(main, "MoonrakerPowerController", FakeController)
+    api = main.Api()
+    api._remote_power_authority = {
+        "status": "configured",
+        "config": {"enabled": True, "device": "remote_psu"},
+        "detail": "",
+    }
+
+    result = api.get_power_status("192.168.1.20", "stale_local_name")
+
+    assert result["device"] == "remote_psu"
+    assert calls == [("192.168.1.20", "remote_psu")]
+
+
+def test_confirmed_absent_remote_config_allows_local_provisioning_suggestion(monkeypatch):
+    import main
+
+    calls = []
+
+    class FakeController:
+        def __init__(self, host, device):
+            calls.append((host, device))
+            self.device = device
+
+        def get_status(self):
+            return "off"
+
+    monkeypatch.setattr(main, "MoonrakerPowerController", FakeController)
+    api = main.Api()
+    api._remote_power_authority = {
+        "status": "absent",
+        "config": None,
+        "detail": "No remote KACE power configuration exists",
+    }
+
+    assert api.get_power_status("192.168.1.20", "suggested_psu")["status"] == "off"
+    assert calls == [("192.168.1.20", "suggested_psu")]
+
+
+def test_disabled_or_invalid_remote_authority_blocks_local_fallback(monkeypatch):
+    import main
+
+    api = main.Api()
+    api._remote_power_authority = {
+        "status": "configured",
+        "config": {"enabled": False, "device": None},
+        "detail": "",
+    }
+    result = api.power_on("192.168.1.20", "stale_local_name")
+    assert result["ok"] is False
+    assert "disabled" in result["detail"]
+
+    api._remote_power_authority = {
+        "status": "error",
+        "config": None,
+        "detail": "Remote power configuration could not be read",
+    }
+    result = api.power_on("192.168.1.20", "stale_local_name")
+    assert result["ok"] is False
+    assert "could not be read" in result["detail"]
+
+
+def test_disconnect_keeps_remote_power_authority(monkeypatch):
+    import main
+
+    api = main.Api()
+    authority = {
+        "status": "configured",
+        "config": {"enabled": True, "device": "remote_psu"},
+        "detail": "",
+    }
+    api._remote_power_authority = authority
+    monkeypatch.setattr(api, "_interrupt_bootstrap", lambda *_args: None)
+
+    assert api.disconnect_ssh() is True
+    assert api._remote_power_authority is authority
+
+
+def test_api_reads_and_validates_remote_power_schema_over_ssh():
+    import main
+
+    api = main.Api()
+    api._ssh.read_text_file_result = lambda *_args, **_kwargs: (
+        "ok",
+        json.dumps({
+            "schema": "kace-power/v1",
+            "revision": 2,
+            "enabled": True,
+            "device": "remote_psu",
+            "pin": "gpiochip0/gpio20",
+            "active_low": False,
+            "initial_state": "on",
+            "restart_klipper_when_powered": True,
+            "off_when_shutdown": False,
+        }),
+    )
+    result = api.get_remote_power_config()
+    assert result["status"] == "configured"
+    assert result["config"]["device"] == "remote_psu"
+
+
 def test_end_to_end_status_then_power_on_without_ssh_or_kace(monkeypatch):
     import main
 
@@ -200,6 +314,8 @@ def test_power_button_works_for_selected_host_without_ssh_connection():
     assert "['on', 'off', 'init', 'error']" in app
     assert "get_power_status(currentDeviceIp, powerDevice)" in app
     assert "api[action](currentDeviceIp, powerDevice)" in app
+    assert "selectedPowerDevice()" in app
+    assert "applyRemotePowerConfig(res && res.power_config" in app
 
     refresh = app.split("async function refreshPrinterPower", 1)[1].split(
         "function startPowerPolling", 1
@@ -220,7 +336,16 @@ def test_power_button_works_for_selected_host_without_ssh_connection():
     assert "stopPowerPolling()" not in connection_state
 
 
-def test_power_button_never_falls_back_to_printer_device_name():
+def test_power_button_uses_remote_authority_after_ssh_without_hardcoded_fallback():
     app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
-    line = next(line for line in app.splitlines() if "const powerDevice =" in line)
-    assert "printer" not in line
+    resolver = app.split("function selectedPowerDevice", 1)[1].split(
+        "async function refreshPrinterPower", 1
+    )[0]
+    assert "remotePowerAuthority.config.device" in resolver
+    assert "sshConnected" not in resolver
+    assert "'printer'" not in resolver and '"printer"' not in resolver
+
+    disconnect = app.split("function disconnectSSH", 1)[1].split(
+        "function startBootstrap", 1
+    )[0]
+    assert "remotePowerAuthority = null" not in disconnect

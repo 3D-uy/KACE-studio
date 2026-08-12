@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -12,10 +13,13 @@ from pathlib import Path
 
 import pytest
 
+from backend.provisioning import EXPECTED_BOOTSTRAP_SHA256
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / "bootstrap.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+RELEASE_CONTRACT = ROOT / "release-contract.json"
 AUTHORITATIVE_BOOTSTRAP = ROOT.parent / "KACE" / "scripts" / "bootstrap.sh"
 
 
@@ -30,26 +34,27 @@ def _find_bash() -> str | None:
 
 
 def _workflow_value(name: str) -> str:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    match = re.search(rf"^\s{{2}}{name}:\s*([0-9a-f]+)\s*$", workflow, re.MULTILINE)
-    assert match, f"Missing workflow value: {name}"
-    return match.group(1)
+    contract = json.loads(RELEASE_CONTRACT.read_text(encoding="utf-8"))
+    key = name.removeprefix("KACE_BOOTSTRAP_").lower()
+    return contract["kace"][f"bootstrap_{key}"]
 
 
 def test_packaged_bootstrap_matches_pinned_sha256():
     assert BOOTSTRAP.is_file(), "bootstrap.sh must be fetched before tests/build"
+    actual = hashlib.sha256(BOOTSTRAP.read_bytes()).hexdigest()
     if AUTHORITATIVE_BOOTSTRAP.is_file():
         assert BOOTSTRAP.read_bytes() == AUTHORITATIVE_BOOTSTRAP.read_bytes()
-        return
-    actual = hashlib.sha256(BOOTSTRAP.read_bytes()).hexdigest()
     assert actual == _workflow_value("KACE_BOOTSTRAP_SHA256")
+    assert actual == EXPECTED_BOOTSTRAP_SHA256
 
 
 def test_workflow_fetches_bootstrap_from_immutable_reference():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     ref = _workflow_value("KACE_BOOTSTRAP_REF")
     assert re.fullmatch(r"[0-9a-f]{40}", ref)
-    assert "KACE/{ref}/scripts/bootstrap.sh" in workflow
+    assert "python scripts/release.py fetch-bootstrap" in workflow
+    assert "KACE_BOOTSTRAP_REF:" not in workflow
+    assert ref in RELEASE_CONTRACT.read_text(encoding="utf-8")
     assert "KACE/main/scripts/bootstrap.sh" not in workflow
 
 
@@ -60,10 +65,24 @@ def test_bootstrap_contains_immutable_installer_contract_and_terminal_failure():
     assert 'KACE/${KACE_INSTALL_REF}/install.sh' in script
     assert "/main/install.sh" not in script
     assert 'KACE_SOURCE_REF="$KACE_INSTALL_REF"' in script
+    assert script.count('KACE_EXPECTED_COMMIT="$KACE_INSTALL_REF"') >= 2
     assert "KACE_NO_LAUNCH=1" not in script
     assert "=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ===" in script
     failure_block = script.split('if [ "$INSTALL_OK" -ne 1 ]; then', 1)[1].split("fi", 1)[0]
-    assert "exit 1" in failure_block
+    assert 'exit "$INSTALL_EXIT"' in failure_block
+    for exit_code in (2, 10, 20, 30, 40):
+        assert re.search(rf"(?m)^\s*{exit_code}\)\s*$", failure_block)
+
+
+def test_bootstrap_emits_versioned_guarded_terminal_events():
+    script = BOOTSTRAP.read_text(encoding="utf-8")
+    assert 'BOOTSTRAP_PROTOCOL="kace-bootstrap/v1"' in script
+    assert "BOOTSTRAP_TERMINAL_EMITTED" in script
+    assert 'emit_bootstrap_event "workflow_started" "INIT"' in script
+    assert 'emit_bootstrap_event "stage_started" "$id"' in script
+    assert 'emit_bootstrap_terminal "workflow_succeeded" "SUCCESS" 0' in script
+    assert 'emit_bootstrap_terminal "workflow_failed" "BOOTSTRAP_ERROR" "$exit_status"' in script
+    assert 'emit_bootstrap_terminal "workflow_cancelled" "SIGNAL_${signal_name}" 2' in script
 
 
 def test_bootstrap_pins_every_critical_external_dependency():
@@ -97,12 +116,16 @@ def test_bootstrap_pins_every_critical_external_dependency():
     assert "download_verified_file" in script
 
 
-def test_bootstrap_enables_native_klipper_features_idempotently():
+def test_bootstrap_preserves_printer_cfg_and_reconciles_only_moonraker_default():
     script = BOOTSTRAP.read_text(encoding="utf-8")
     assert "# BEGIN KACE_CONFIG_DEFAULT_HELPER" in script
     assert "os.replace(temporary_name, path)" in script
-    assert '"exclude_object"' in script
-    assert '"force_move" "enable_force_move" "True"' in script
+    config_block = script.split('# ── 5. Printer Data Directories & Config Files', 1)[1].split(
+        '# ── 6. Dashboard UI', 1
+    )[0]
+    assert '"exclude_object"' not in config_block
+    assert '"force_move" "enable_force_move" "True"' not in config_block
+    assert 'if [ ! -f "$PRINTER_HOME/printer_data/config/printer.cfg" ]' in config_block
     assert '"file_manager" "enable_object_processing" "True"' in script
 
 
@@ -167,7 +190,9 @@ verify_requested_power_relay "$PRINTER_HOME/printer_data/config/moonraker.conf"
         '    "$PRINTER_HOME/printer_data/config/moonraker.conf"'
     )
     install_call = script.index('"$PRINTER_HOME/moonraker/scripts/install-moonraker.sh"')
-    restart_call = script.index("systemctl restart moonraker")
+    # Ignore the earlier rollback helper's recovery restart; this assertion is
+    # about the normal install/start-services path.
+    restart_call = script.index("systemctl restart moonraker", install_call)
     assert config_call < install_call < restart_call
 
 
@@ -183,12 +208,14 @@ def test_frontend_rejects_bootstrap_error_marker():
     assert "finishBtn.disabled = true" in app_js
 
 
-def test_frontend_waits_for_wizard_completion_marker_before_enabling_finish():
+def test_frontend_uses_versioned_terminal_event_and_keeps_legacy_fallback():
     app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
-    completion_marker = "Bootstrap complete! KACE wizard finished successfully."
-    marker_index = app_js.index(completion_marker)
-    enabled_index = app_js.index("finishBtn.disabled = false", marker_index)
-    assert marker_index < enabled_index
+    assert "window.updateBootstrapEvent" in app_js
+    assert "eventName === 'workflow_succeeded'" in app_js
+    assert "!bootstrapAuthoritativeSeen" in app_js
+    assert "Bootstrap complete! KACE wizard finished successfully." in app_js
+    assert "window.pywebview.api.start_bootstrap(selectedUi)" in app_js
+    assert "window.pywebview.api.send_ssh_input(bootstrapCmd)" not in app_js
     assert "Bootstrap complete! KACE Node is fully ready." not in app_js
 
     script = BOOTSTRAP.read_text(encoding="utf-8")

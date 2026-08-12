@@ -35,7 +35,11 @@ The two projects are independent repositories with a deliberately narrow integra
 5. The bootstrap installs Klipper, Moonraker, the selected web interface, optional Crowsnest support, and KACE, then launches the KACE wizard in the same SSH terminal.
 6. Studio reports success only after the wizard exits successfully and the bootstrap verifies the final requested relay configuration.
 
-Studio CI fetches `scripts/bootstrap.sh` from an immutable KACE commit, verifies its SHA-256, and supplies that exact file to the PyInstaller build. Source mode prefers the sibling `KACE/scripts/bootstrap.sh` checkout when both repositories share this workspace; packaged mode uses the bundled copy.
+`release-contract.json` is the single machine-readable source for the immutable KACE bootstrap/installer tuple and the exact packaging toolchain. Studio CI downloads that bootstrap, verifies it before the build, then inspects the finished PyInstaller archive and compares every contract-owned resource byte for byte. Source mode prefers the sibling `KACE/scripts/bootstrap.sh` checkout when both repositories share this workspace; packaged mode resolves only the `_MEIPASS` copy. Resource resolution never depends on the process working directory.
+
+The build also emits `KACE-studio.release.json` next to the executable. It records the Studio commit and dirty state, KACE bootstrap and installed-source refs/hashes, Python/PyInstaller identity, runner image, dependency-lock/spec hashes, every bundled-resource hash, contractual Windows version metadata, Authenticode status, and the final EXE SHA-256. This is an external manifest so hashing it cannot change the executable it identifies. CI fixes `PYTHONHASHSEED` and the PE timestamp to the source commit, builds twice from a clean checkout, and rejects different hashes. A second Windows job rebuilds from the same commit on a fresh runner and emits an image- and commit-bound independent-build attestation only when the executable is byte-identical. Both Windows build jobs also launch the packaged EXE under a hard deadline, load the real PyWebView renderer off-screen, and require the Studio DOM and Python-to-JavaScript bridge before accepting the artifact.
+
+Manual CI exposes a separate `release_candidate` gate. It is fail-closed: publication evidence is produced only when the configured PFX, password, and expected signer-certificate SHA-256 are present; `signtool` signs with SHA-256 and a trusted timestamp; and the packaged bytes, PE metadata, same-runner rebuild, independent rebuild, manifest, signer identity, and timestamp all verify. Ordinary CI artifacts remain explicitly unsigned development outputs. The workflow never publishes a GitHub release.
 
 ## Current status
 
@@ -46,9 +50,9 @@ The `main` branch and CI artifacts are development outputs, not a stable compati
 ## Features
 
 - Guided desktop flow built with PyWebView and a local HTML/CSS/JavaScript interface.
-- Official image discovery, download, checksum handling, cache reuse, and atomic `.part` publication.
+- Official image discovery, download, checksum handling, per-user cache reuse under `%LOCALAPPDATA%\KACE Studio\cache`, and atomic `.part` publication.
 - Complete ZIP and XZ extraction checks before a raw image becomes flashable.
-- Custom-image support limited to uncompressed `.img` files, with optional adjacent SHA-256 sidecars.
+- Custom-image support limited to uncompressed `.img` files with mandatory externally supplied SHA-256 sidecars. Custom pre-baked images additionally require an image-bound capability attestation.
 - Minimum raw-image plausibility and destination-capacity checks.
 - Windows disk discovery with system/boot exclusions and allowed-bus filtering.
 - A full selected-device identity snapshot passed to the elevated writer for revalidation.
@@ -58,7 +62,7 @@ The `main` branch and CI artifacts are development outputs, not a stable compati
 - Local network discovery for SSH and Moonraker endpoints.
 - Embedded SSH terminal and SFTP file management.
 - Bootstrap progress and failure reporting in the desktop UI.
-- Read-only MANUAL/USB firmware-deployment progress, instructions, native artifact download, and reconnect recovery from KACE's deployment manifest.
+- Read-only firmware progress, including KACE-owned MCU identity evidence and manual-confirmation states, instructions, native artifact download, and reconnect recovery from KACE's deployment manifest.
 
 ## Requirements
 
@@ -74,7 +78,7 @@ The `main` branch and CI artifacts are development outputs, not a stable compati
 
 - Python 3.11 or 3.12.
 - Git.
-- Windows for real writer validation; Linux is supported for non-destructive CI tests.
+- Windows 10 or 11 for the desktop application and real writer validation; the packaged EXE uses the OS-provided UCRT/API-set runtime. Linux is supported for non-destructive CI tests.
 - PyInstaller when building the executable.
 
 Docker is not required to run Studio. It is used by the KACE repository for configuration and firmware validation.
@@ -122,13 +126,13 @@ Before building, place the bootstrap file verified against the pinned KACE commi
 
 | Area | Responsibility |
 | --- | --- |
-| `main.py` | PyWebView API, desktop lifecycle, image acquisition, cache orchestration, and workflow state |
-| `web/` | Local user interface, workflow state, validation, terminal, and bundled front-end assets |
+| `main.py` | PyWebView API, desktop lifecycle, image acquisition, cache orchestration, and forwarding of KACE-owned workflow events |
+| `web/` | Local user interface, read-only workflow projections, validation, terminal, and bundled front-end assets |
 | `backend/imager.py` | Disk discovery, identity policy, elevated-writer invocation, and boot-partition injection |
 | `backend/kace_writer.py` | UAC-elevated physical-device revalidation and raw image writing |
 | `backend/discovery.py` | Local-network host and service discovery |
 | `backend/ssh_client.py` | SSH terminal, SFTP operations, and size-limited deployment-manifest recovery |
-| `backend/sha512_crypt.py` | Password-hash support for injected Linux account data |
+| `backend/sha512_crypt.py` | Salted SHA-512 crypt password hashes for injected Linux account data, implemented by the pinned `libpass` dependency |
 | `bootstrap.sh` | Build input copied from a pinned KACE revision |
 | `main.spec` | PyInstaller definition, including the verified bootstrap and web assets |
 | `tests/` | Unit and regression coverage using disk, PowerShell, process, network, cache, and filesystem mocks |
@@ -141,6 +145,7 @@ The application normally runs without elevation. Only the physical writer helper
 - Vanilla HTML, CSS, and JavaScript.
 - xterm.js for the embedded terminal.
 - Paramiko for SSH/SFTP.
+- `libpass` for Linux-compatible `$6$` account-password hashing; the abandoned `pcrypt` package is not used.
 - PowerShell and Win32 disk APIs for Windows imaging.
 - PyInstaller for the Windows executable.
 - Pytest and GitHub Actions for validation and CI.
@@ -154,6 +159,8 @@ python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt
 python -m pytest -v
 ```
+
+For a Windows source-mode renderer check, run `python main.py --smoke-test`. After building, the release-relevant check is `python scripts/smoke_executable.py dist/KACE-studio.exe --timeout 45`; it is distinct from `--verify-package`, which verifies bundled bytes without initializing PyWebView. A timeout, missing WebView2 runtime, renderer startup failure, DOM mismatch, or missing bridge is a hard failure.
 
 The suite covers the image cache and extraction paths, cancellation cleanup, raw-image checks, disk filtering, device-identity snapshots, elevated-helper revalidation, bootstrap delivery, discovery, SSH behavior, and UI-facing backend contracts. Disk and writer tests are mocked and must never target real hardware.
 
@@ -178,15 +185,18 @@ GitHub Actions currently:
 - Includes the verified `bootstrap.sh` and local web assets through `main.spec`.
 - Uploads the executable as a CI artifact.
 
-CI does not publish a release, sign the executable, or flash physical media.
+CI does not publish a release or flash physical media. Normal CI builds remain unsigned; the manual release-candidate path can sign only when repository signing secrets and the expected certificate identity are configured.
 
 ## Compatibility and limits
 
 - Physical imaging is Windows-only.
 - Automated official-image paths handle the ZIP/XZ formats implemented by the acquisition pipeline.
 - Manually selected custom images must already be raw `.img` files; compressed custom files are rejected before the writer.
+- Every custom image must be accompanied by an external `<image>.img.sha256` or `<image>.sha256` file containing its expected SHA-256. Studio never creates or infers this trust input from the selected image; a missing, malformed, conflicting, or mismatched checksum stops before any block write.
+- A custom image classified as pre-baked must also have `<image>.img.kace-attestation.json`. The `kace-studio-prebaked-attestation/v1` document binds `image_sha256` to the selected raw image and declares a supported `family`, `version`, full `source_commit`, required systemd `services`, and provisioning `capabilities`. Automatic pre-baked entries carry the same attestation in `image-manifest.json`, additionally bind the pinned archive checksum, and are checked against the upstream raw-image checksum before flashing. Missing, incompatible, or mismatched attestations stop before any block write.
 - The current removable-target policy accepts supported USB, SD, and MMC paths after system/boot and identity checks. External USB HDD/SSD devices remain high-risk even with reinforced confirmation.
 - Network discovery depends on local routing, firewall rules, SSH availability, and Moonraker port visibility.
+- The complete SSH trust/connect/retry transaction has a 30-second wall-clock deadline. Set `KACE_STUDIO_SSH_CONNECT_DEADLINE_S` to a positive finite number of seconds to override it; invalid values fail before a network attempt.
 - Studio can provision the dashboard choices implemented by the KACE bootstrap. Upstream images and installers can change independently.
 - Automated tests do not prove electrical, storage, or printer safety on real hardware.
 
