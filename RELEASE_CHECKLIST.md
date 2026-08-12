@@ -63,11 +63,14 @@ $env:SOURCE_DATE_EPOCH = (git show -s --format=%ct HEAD)
 python -m PyInstaller --clean -y main.spec
 python scripts/release.py verify-bundle dist/KACE-studio.exe
 python scripts/release.py verify-metadata dist/KACE-studio.exe
+dist\KACE-studio.exe --verify-package
+python scripts/smoke_executable.py dist/KACE-studio.exe --timeout 45
 python scripts/release.py write-manifest dist/KACE-studio.exe dist/KACE-studio.release.json
 ```
 
 - [ ] `main.spec` includes `bootstrap.sh` and all required `web/` assets.
 - [ ] The executable launches without using files from the source checkout.
+- [ ] The packaged PyWebView smoke loads the real DOM and JavaScript bridge before its external 45-second deadline; `--verify-package` alone does not satisfy this gate.
 - [ ] The exact bootstrap, release contract, and every tracked `web/` byte are extracted from the PyInstaller archive and compared with the verified inputs.
 - [ ] The comparison accounts for Studio's intentional boot-partition version comment and LF normalization at injection time; those transformed bytes are tested separately from the packaged input.
 - [ ] The executable contains no unexpected development paths, caches, logs, or credentials.

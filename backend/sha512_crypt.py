@@ -1,19 +1,24 @@
-import pcrypt
+from passlib.hash import sha512_crypt
+
+
+# Keep the work factor explicit so generated images do not silently change their
+# password-hash cost when the implementation is upgraded.
+SHA512_CRYPT_ROUNDS = 656_000
 
 def hash_password(password: str) -> str:
     """
     Generates a Unix-compatible SHA-512 crypt hash (Modular Crypt Format, $6$)
     suitable for use in userconf.txt / /etc/shadow.
 
-    Complexity & Salt details:
-    - Uses `pcrypt.mksalt(pcrypt.METHOD_SHA512)` to generate a crypt-compatible salt.
-    - The salt consists of 16 random characters from the set [a-zA-Z0-9./], providing
-      96 bits of entropy (6 bits per character).
-    - The final hash format matches Modular Crypt Format: $6$rounds=<rounds>$<salt>$<hash>
-      (defaulting to 5000 rounds of SHA-512 crypt, which is the system standard).
+    The final hash uses Modular Crypt Format and an independently generated salt.
+    The work factor is fixed here instead of inheriting a dependency default.
     """
-    salt = pcrypt.mksalt(pcrypt.METHOD_SHA512)
-    return pcrypt.crypt(password, salt)
+    return sha512_crypt.using(rounds=SHA512_CRYPT_ROUNDS).hash(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a password without depending on the removed ``crypt``-style API."""
+    return sha512_crypt.verify(password, password_hash)
 
 if __name__ == "__main__":
     # Self-test

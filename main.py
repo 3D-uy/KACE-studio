@@ -5,6 +5,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 import uuid
 import webview
 
@@ -38,6 +39,7 @@ from backend.prebaked_preflight import load_custom_attestation
 import mimetypes
 
 HTTP_TIMEOUT_SECONDS = 30
+PYWEBVIEW_SMOKE_TIMEOUT_SECONDS = 30
 IMAGE_PROVENANCE_SCHEMA = "kace-studio-image-provenance/v1"
 
 # Prevent Windows registry pollution from overriding MIME types
@@ -1414,7 +1416,7 @@ class Api:
             print(f"Error saving preferences: {e}", file=sys.stderr)
             return False
 
-def main():
+def _create_application_window(*, smoke_mode: bool = False):
     api = Api()
     web_dir = bundled_path("web")
     html_path = web_dir / "index.html"
@@ -1433,9 +1435,63 @@ def main():
         height=700,
         resizable=True,
         min_size=(900, 600),
-        background_color="#0b0f19"
+        background_color="#0b0f19",
+        # On Windows, a window created with hidden=True does not initialize
+        # WebView2 until it is shown. Put smoke windows off-screen instead; the
+        # probe hides them immediately after the native window is initialized.
+        hidden=False,
+        focus=not smoke_mode,
+        x=-32_000 if smoke_mode else None,
+        y=-32_000 if smoke_mode else None,
     )
     api.set_window(window)
+    return window
+
+
+def _run_smoke_probe(window, result: dict, timeout_seconds: float) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        if not window.events.shown.wait(max(0.0, deadline - time.monotonic())):
+            raise TimeoutError("PyWebView did not initialize a native window before the deadline")
+        if not window.events.loaded.wait(max(0.0, deadline - time.monotonic())):
+            raise TimeoutError("PyWebView did not load the Studio frontend before the deadline")
+        window.hide()
+        observed = window.evaluate_js(
+            """(() => ({
+                title: document.title,
+                ready: document.readyState === 'complete',
+                root: Boolean(document.querySelector('.app-container')),
+                bridge: Boolean(window.pywebview && window.pywebview.api &&
+                    typeof window.pywebview.api.get_preferences === 'function')
+            }))()"""
+        )
+        expected = {
+            "title": "KACE Studio",
+            "ready": True,
+            "root": True,
+            "bridge": True,
+        }
+        if observed != expected:
+            raise RuntimeError(f"PyWebView runtime contract mismatch: {observed!r}")
+        result["ok"] = True
+    except Exception as exc:
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        window.destroy()
+
+
+def run_pywebview_smoke_test(timeout_seconds: float = PYWEBVIEW_SMOKE_TIMEOUT_SECONDS) -> None:
+    """Load the real frontend and JS bridge in an off-screen native window."""
+    verify_runtime_resources()
+    window = _create_application_window(smoke_mode=True)
+    result: dict = {}
+    webview.start(_run_smoke_probe, args=(window, result, timeout_seconds))
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error", "PyWebView closed before the smoke probe completed"))
+
+
+def main():
+    window = _create_application_window()
     webview.start()
 
 if __name__ == "__main__":
@@ -1443,6 +1499,14 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--verify-package":
         verify_runtime_resources()
         print("KACE Studio packaged resource contract passed.")
+        sys.exit(0)
+    elif len(sys.argv) > 1 and sys.argv[1] == "--smoke-test":
+        try:
+            run_pywebview_smoke_test()
+        except Exception as exc:
+            if sys.stderr is not None:
+                print(f"KACE Studio PyWebView smoke failed: {exc}", file=sys.stderr)
+            sys.exit(1)
         sys.exit(0)
     elif len(sys.argv) > 1 and sys.argv[1] == "--write-disk":
         from backend.kace_writer import main as writer_main

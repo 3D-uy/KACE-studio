@@ -1,5 +1,5 @@
 # Direct runtime inputs. CI installs the fully resolved, hashed requirements.lock.
 pywebview==6.2.1
 paramiko==5.0.0
-pcrypt==1.0.5
+libpass==1.9.3
 pytz==2026.3.post1

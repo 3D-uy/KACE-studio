@@ -37,7 +37,7 @@ The two projects are independent repositories with a deliberately narrow integra
 
 `release-contract.json` is the single machine-readable source for the immutable KACE bootstrap/installer tuple and the exact packaging toolchain. Studio CI downloads that bootstrap, verifies it before the build, then inspects the finished PyInstaller archive and compares every contract-owned resource byte for byte. Source mode prefers the sibling `KACE/scripts/bootstrap.sh` checkout when both repositories share this workspace; packaged mode resolves only the `_MEIPASS` copy. Resource resolution never depends on the process working directory.
 
-The build also emits `KACE-studio.release.json` next to the executable. It records the Studio commit and dirty state, KACE bootstrap and installed-source refs/hashes, Python/PyInstaller identity, runner image, dependency-lock/spec hashes, every bundled-resource hash, contractual Windows version metadata, Authenticode status, and the final EXE SHA-256. This is an external manifest so hashing it cannot change the executable it identifies. CI fixes `PYTHONHASHSEED` and the PE timestamp to the source commit, builds twice from a clean checkout, and rejects different hashes. A second Windows job rebuilds from the same commit on a fresh runner and emits an image- and commit-bound independent-build attestation only when the executable is byte-identical.
+The build also emits `KACE-studio.release.json` next to the executable. It records the Studio commit and dirty state, KACE bootstrap and installed-source refs/hashes, Python/PyInstaller identity, runner image, dependency-lock/spec hashes, every bundled-resource hash, contractual Windows version metadata, Authenticode status, and the final EXE SHA-256. This is an external manifest so hashing it cannot change the executable it identifies. CI fixes `PYTHONHASHSEED` and the PE timestamp to the source commit, builds twice from a clean checkout, and rejects different hashes. A second Windows job rebuilds from the same commit on a fresh runner and emits an image- and commit-bound independent-build attestation only when the executable is byte-identical. Both Windows build jobs also launch the packaged EXE under a hard deadline, load the real PyWebView renderer off-screen, and require the Studio DOM and Python-to-JavaScript bridge before accepting the artifact.
 
 Manual CI exposes a separate `release_candidate` gate. It is fail-closed: publication evidence is produced only when the configured PFX, password, and expected signer-certificate SHA-256 are present; `signtool` signs with SHA-256 and a trusted timestamp; and the packaged bytes, PE metadata, same-runner rebuild, independent rebuild, manifest, signer identity, and timestamp all verify. Ordinary CI artifacts remain explicitly unsigned development outputs. The workflow never publishes a GitHub release.
 
@@ -132,7 +132,7 @@ Before building, place the bootstrap file verified against the pinned KACE commi
 | `backend/kace_writer.py` | UAC-elevated physical-device revalidation and raw image writing |
 | `backend/discovery.py` | Local-network host and service discovery |
 | `backend/ssh_client.py` | SSH terminal, SFTP operations, and size-limited deployment-manifest recovery |
-| `backend/sha512_crypt.py` | Password-hash support for injected Linux account data |
+| `backend/sha512_crypt.py` | Salted SHA-512 crypt password hashes for injected Linux account data, implemented by the pinned `libpass` dependency |
 | `bootstrap.sh` | Build input copied from a pinned KACE revision |
 | `main.spec` | PyInstaller definition, including the verified bootstrap and web assets |
 | `tests/` | Unit and regression coverage using disk, PowerShell, process, network, cache, and filesystem mocks |
@@ -145,6 +145,7 @@ The application normally runs without elevation. Only the physical writer helper
 - Vanilla HTML, CSS, and JavaScript.
 - xterm.js for the embedded terminal.
 - Paramiko for SSH/SFTP.
+- `libpass` for Linux-compatible `$6$` account-password hashing; the abandoned `pcrypt` package is not used.
 - PowerShell and Win32 disk APIs for Windows imaging.
 - PyInstaller for the Windows executable.
 - Pytest and GitHub Actions for validation and CI.
@@ -158,6 +159,8 @@ python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt
 python -m pytest -v
 ```
+
+For a Windows source-mode renderer check, run `python main.py --smoke-test`. After building, the release-relevant check is `python scripts/smoke_executable.py dist/KACE-studio.exe --timeout 45`; it is distinct from `--verify-package`, which verifies bundled bytes without initializing PyWebView. A timeout, missing WebView2 runtime, renderer startup failure, DOM mismatch, or missing bridge is a hard failure.
 
 The suite covers the image cache and extraction paths, cancellation cleanup, raw-image checks, disk filtering, device-identity snapshots, elevated-helper revalidation, bootstrap delivery, discovery, SSH behavior, and UI-facing backend contracts. Disk and writer tests are mocked and must never target real hardware.
 

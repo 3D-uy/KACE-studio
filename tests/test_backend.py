@@ -46,7 +46,7 @@ if not os.path.exists(bootstrap_dest):
         with open(bootstrap_dest, "w", encoding="utf-8", newline="\n") as f:
             f.write(mock_content)
 
-from backend.sha512_crypt import hash_password
+from backend.sha512_crypt import SHA512_CRYPT_ROUNDS, hash_password
 from backend.discovery import get_local_subnet_ips, probe_ip_ports
 from backend.imager import (
     DEFAULT_USERNAME,
@@ -129,7 +129,9 @@ class TestKaceBackend(unittest.TestCase):
         hashed = hash_password(pwd)
         
         self.assertTrue(hashed.startswith("$6$"), f"Hash should start with $6$. Got: {hashed}")
-        self.assertEqual(len(hashed.split("$")), 4, f"Hash components mismatched. Got: {hashed}")
+        components = hashed.split("$")
+        self.assertEqual(len(components), 5, f"Hash components mismatched. Got: {hashed}")
+        self.assertEqual(components[2], f"rounds={SHA512_CRYPT_ROUNDS}")
         
     def test_subnet_ips_generation(self):
         """
@@ -598,18 +600,16 @@ class TestKaceBackend(unittest.TestCase):
     def test_password_hash_crypt_verification(self):
         """
         Extend the SHA-512 test to verify the hash is actually valid against the original
-        plaintext using crypt.crypt() or equivalent (pcrypt.crypt).
+        plaintext using the same SHA-512 crypt standard.
         """
-        import pcrypt
+        from backend.sha512_crypt import verify_password
         pwd = "my_secure_kace_password_123"
         hashed = hash_password(pwd)
         
         self.assertTrue(hashed.startswith("$6$"))
-        verification = pcrypt.crypt(pwd, hashed)
-        self.assertEqual(verification, hashed)
+        self.assertTrue(verify_password(pwd, hashed))
         
-        wrong_verification = pcrypt.crypt("wrong_password", hashed)
-        self.assertNotEqual(wrong_verification, hashed)
+        self.assertFalse(verify_password("wrong_password", hashed))
 
     def test_dashboard_ui_both_injection(self):
         """
@@ -886,11 +886,11 @@ class TestKaceBackend(unittest.TestCase):
     def test_userconf_hash_verification(self):
         """
         Verify that userconf.txt contains a valid SHA-512 crypt hash (Modular Crypt Format)
-        and verifies successfully against the plaintext using pcrypt.
+        and verifies successfully against the plaintext.
         """
         import tempfile
         import shutil
-        import pcrypt
+        from backend.sha512_crypt import verify_password
         from backend.imager import inject_config
         from unittest.mock import patch
         
@@ -921,11 +921,10 @@ class TestKaceBackend(unittest.TestCase):
                 self.assertTrue(hashed.startswith("$6$"))
                 
                 # Cryptographic verification against plaintext
-                verification = pcrypt.crypt("mysecretpassword", hashed)
-                self.assertEqual(verification, hashed)
+                self.assertTrue(verify_password("mysecretpassword", hashed))
                 
                 # Negative check
-                self.assertNotEqual(pcrypt.crypt("wrong_password", hashed), hashed)
+                self.assertFalse(verify_password("wrong_password", hashed))
         finally:
             shutil.rmtree(temp_boot)
 

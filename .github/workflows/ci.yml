@@ -146,6 +146,7 @@ jobs:
         python scripts/release.py verify-bundle dist/KACE-studio.exe
         python scripts/release.py verify-metadata dist/KACE-studio.exe
         dist\KACE-studio.exe --verify-package
+        python scripts/smoke_executable.py dist/KACE-studio.exe --timeout 45
         python scripts/release.py write-manifest dist/KACE-studio.exe dist/KACE-studio.release.json --reproducible-reference build/KACE-studio.repro-reference.exe
 
     - name: Upload primary unsigned build evidence
@@ -202,6 +203,7 @@ jobs:
         python scripts/release.py attach-independent-attestation primary/KACE-studio.release.json dist/KACE-studio.independent-build.json dist/KACE-studio.release.json
         python scripts/release.py verify-metadata dist/KACE-studio.exe
         dist\KACE-studio.exe --verify-package
+        python scripts/smoke_executable.py dist/KACE-studio.exe --timeout 45
 
     - name: Upload independently reproduced unsigned artifact
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

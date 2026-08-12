@@ -246,6 +246,10 @@ invoke==3.0.3 \
     --hash=sha256:437b6a622223824380bfb4e64f612711a6b648c795f565efc8625af66fb57f0c \
     --hash=sha256:f11327165e5cbb89b2ad1d88d3292b5113332c43b8553b494da435d6ec6f5053
     # via paramiko
+libpass==1.9.3 \
+    --hash=sha256:3cbeb14d22086660e92c30d787ea981973d67394e81c8c870e1a83cfe1c84353 \
+    --hash=sha256:7830b9323d9ba96a841ad698a8dec1d43a2b0b7f1c855c76772e7972c1c6d959
+    # via -r requirements.txt
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
@@ -256,9 +260,6 @@ packaging==26.3 \
 paramiko==5.0.0 \
     --hash=sha256:36763b5b95c2a0dcfdf1abc48e48156ee425b21efe2f0e787c2dd5a95c0e5e79 \
     --hash=sha256:b7044611c30140d9a75261653210e2002977b71a0497ff3ba0d98d7edbf62f7c
-    # via -r requirements.txt
-pcrypt==1.0.5 \
-    --hash=sha256:61f0cb73900aa8bf682f9347bc7f8468dbe9f7fd861ff3be246e2f0c23c18405
     # via -r requirements.txt
 pefile==2024.8.26 \
     --hash=sha256:3ff6c5d8b43e8c37bb6e6dd5085658d658a7a0bdcd20b6a07b1fcfc1c4e9d632 \
