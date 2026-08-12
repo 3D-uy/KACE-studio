@@ -39,11 +39,27 @@ def test_source_runtime_resource_contract_is_complete():
 
 def test_release_inputs_have_one_consistent_immutable_bootstrap_contract():
     facts = release.verify_inputs()
+    assert len(facts["candidate_ref"]) == 40
+    assert facts["candidate_ref"] == facts["installer_ref"]
     assert len(facts["bootstrap_ref"]) == 40
     assert len(facts["bootstrap_sha256"]) == 64
     assert len(facts["installer_ref"]) == 40
     assert len(facts["installer_sha256"]) == 64
     assert ROOT / "image-manifest.json" in facts["resources"]
+
+
+def test_release_contract_declares_the_exact_kace_runtime_candidate():
+    contract = resources.load_release_contract()
+    kace = contract["kace"]
+    assert re.fullmatch(r"[0-9a-f]{40}", kace["candidate_ref"])
+    assert kace["installer_ref"] == kace["candidate_ref"]
+
+    bootstrap = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+    internal_ref = re.search(
+        r'^KACE_INSTALL_REF="([0-9a-f]{40})"$', bootstrap, re.MULTILINE
+    )
+    assert internal_ref
+    assert internal_ref.group(1) == kace["candidate_ref"]
 
 
 def test_release_verification_rejects_unchecksummed_image_manifest(tmp_path):

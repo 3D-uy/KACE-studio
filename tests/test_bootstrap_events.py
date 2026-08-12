@@ -122,6 +122,28 @@ def test_backend_ignores_events_from_an_unrelated_workflow():
     assert not any("bootstrap-unrelated" in script for script in api._window.scripts)
 
 
+def test_kace_cancellation_is_forwarded_as_terminal_and_releases_guard():
+    api = Api()
+    api._ssh = FakeSsh()
+    api._window = FakeWindow()
+    started = api.start_bootstrap("mainsail")
+
+    api._forward_bootstrap_event({
+        "protocol": "kace-bootstrap/v1",
+        "event": "workflow_cancelled",
+        "workflow_id": started["workflow_id"],
+        "sequence": 2,
+        "stage": "KACE",
+        "code": "CANCELLED",
+        "exit_code": 2,
+    }, api._ssh_gen)
+
+    assert api._bootstrap_active is False
+    assert api._bootstrap_workflow_id is None
+    assert any("workflow_cancelled" in script for script in api._window.scripts)
+    assert api.start_bootstrap("mainsail")["status"] == "started"
+
+
 def test_backend_rejects_invalid_dashboard_without_sending_input():
     api = Api()
     api._ssh = FakeSsh()

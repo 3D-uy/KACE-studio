@@ -133,6 +133,7 @@ def verify_inputs(contract: dict | None = None, root: Path = ROOT) -> dict:
     if signing.get("expected_certificate_sha256_env") != "KACE_SIGNING_CERT_SHA256":
         raise ReleaseContractError("release signer identity environment is invalid")
     kace = contract.get("kace", {})
+    candidate_ref = _require_pattern(kace.get("candidate_ref"), FULL_SHA, "candidate_ref")
     bootstrap_ref = _require_pattern(kace.get("bootstrap_ref"), FULL_SHA, "bootstrap_ref")
     bootstrap_hash = _require_pattern(
         kace.get("bootstrap_sha256"), SHA256, "bootstrap_sha256"
@@ -141,6 +142,10 @@ def verify_inputs(contract: dict | None = None, root: Path = ROOT) -> dict:
     installer_hash = _require_pattern(
         kace.get("installer_sha256"), SHA256, "installer_sha256"
     )
+    if installer_ref != candidate_ref:
+        raise ReleaseContractError(
+            "installer ref must equal the declared KACE candidate ref"
+        )
     image_count = verify_image_manifest(root / "image-manifest.json")
 
     bootstrap = root / "bootstrap.sh"
@@ -151,10 +156,14 @@ def verify_inputs(contract: dict | None = None, root: Path = ROOT) -> dict:
     internal_hash = re.search(
         r'^KACE_INSTALL_SHA256="([0-9a-f]{64})"$', script, re.MULTILINE
     )
-    if not internal_ref or internal_ref.group(1) != installer_ref:
-        raise ReleaseContractError("bootstrap installer ref differs from release contract")
+    if not internal_ref or internal_ref.group(1) != candidate_ref:
+        raise ReleaseContractError("bootstrap runtime ref differs from declared candidate")
     if not internal_hash or internal_hash.group(1) != installer_hash:
         raise ReleaseContractError("bootstrap installer hash differs from release contract")
+    if script.count('KACE_EXPECTED_COMMIT="$KACE_INSTALL_REF"') < 2:
+        raise ReleaseContractError(
+            "bootstrap does not bind every installer path to the declared candidate"
+        )
 
     lock_path = root / "requirements.lock"
     if not lock_path.is_file():
@@ -170,6 +179,7 @@ def verify_inputs(contract: dict | None = None, root: Path = ROOT) -> dict:
 
     files = resource_files(contract, root)
     return {
+        "candidate_ref": candidate_ref,
         "bootstrap_ref": bootstrap_ref,
         "bootstrap_sha256": bootstrap_hash,
         "installer_ref": installer_ref,
@@ -687,7 +697,12 @@ def fetch_bootstrap(contract: dict | None = None, destination: Path | None = Non
 def verify_remote_installer(contract: dict | None = None) -> str:
     contract = contract or load_contract()
     kace = contract["kace"]
+    candidate_ref = _require_pattern(kace.get("candidate_ref"), FULL_SHA, "candidate_ref")
     ref = _require_pattern(kace.get("installer_ref"), FULL_SHA, "installer_ref")
+    if ref != candidate_ref:
+        raise ReleaseContractError(
+            "installer ref must equal the declared KACE candidate ref"
+        )
     expected = _require_pattern(kace.get("installer_sha256"), SHA256, "installer_sha256")
     url = f"https://raw.githubusercontent.com/3D-uy/KACE/{ref}/install.sh"
     with tempfile.TemporaryDirectory(prefix="kace-studio-installer-contract-") as directory:

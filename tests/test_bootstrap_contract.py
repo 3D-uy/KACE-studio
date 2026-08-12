@@ -65,6 +65,7 @@ def test_bootstrap_contains_immutable_installer_contract_and_terminal_failure():
     assert 'KACE/${KACE_INSTALL_REF}/install.sh' in script
     assert "/main/install.sh" not in script
     assert 'KACE_SOURCE_REF="$KACE_INSTALL_REF"' in script
+    assert script.count('KACE_EXPECTED_COMMIT="$KACE_INSTALL_REF"') >= 2
     assert "KACE_NO_LAUNCH=1" not in script
     assert "=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ===" in script
     failure_block = script.split('if [ "$INSTALL_OK" -ne 1 ]; then', 1)[1].split("fi", 1)[0]

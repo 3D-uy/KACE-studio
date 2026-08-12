@@ -16,7 +16,7 @@ KACE is the source of `scripts/bootstrap.sh`. Studio must not maintain an indepe
 - [ ] Select a full, immutable KACE commit SHA.
 - [ ] Download `scripts/bootstrap.sh` from that commit's raw GitHub URL.
 - [ ] Calculate SHA-256 from the downloaded bytes.
-- [ ] Update `bootstrap_ref`, `bootstrap_sha256`, `installer_ref`, and `installer_sha256` together in `release-contract.json`; CI must not duplicate them as environment variables.
+- [ ] Update `candidate_ref`, `bootstrap_ref`, `bootstrap_sha256`, `installer_ref`, and `installer_sha256` together in `release-contract.json`; `candidate_ref` and `installer_ref` must be identical, and CI must not duplicate them as environment variables.
 - [ ] Confirm the bootstrap's internal installer URL, revision, and SHA-256 identify an already published KACE `install.sh`.
 - [ ] Fetch the remote installer and verify its SHA-256 without executing it.
 - [ ] Run the tests that reject a mismatched or mutable contract.
