@@ -226,7 +226,11 @@ def test_custom_prebaked_family_reaches_injection_without_vanilla_inference(
     monkeypatch.setattr(api, "_resolve_custom_image", lambda path: path)
     monkeypatch.setattr(api, "_validate_raw_image", lambda _path: 1024)
     monkeypatch.setattr(api, "_preflight_prebaked_image", lambda *_args: None)
-    monkeypatch.setattr(main, "flash_drive", lambda *_args: (True, ""))
+    def fake_flash(*args):
+        captured["verify_write"] = args[4]
+        return True, ""
+
+    monkeypatch.setattr(main, "flash_drive", fake_flash)
 
     def fake_inject(*_args, **kwargs):
         captured.update(kwargs)
@@ -235,6 +239,7 @@ def test_custom_prebaked_family_reaches_injection_without_vanilla_inference(
     monkeypatch.setattr(main, "inject_config", fake_inject)
     api._flash_worker(99, provisioning, {"number": 99})
     assert captured["image_type"] is ImageType.CUSTOM_PREBAKED
+    assert captured["verify_write"] is True
 
 
 def test_cancelled_download_removes_part_and_preserves_canonical(api, tmp_path, monkeypatch):

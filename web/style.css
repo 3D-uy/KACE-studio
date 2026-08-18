@@ -20,6 +20,7 @@
     
     --success-color: #10b981;
     --success-hover: #059669;
+    --warning-color: #f59e0b;
     --danger-color: #ef4444;
     --danger-hover: #dc2626;
     --accent-glow: rgba(255, 133, 0, 0.4);
@@ -308,6 +309,44 @@ body {
     box-shadow: 0 0 8px var(--primary-glow);
 }
 
+.wifi-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+}
+
+.form-group .wifi-label-row > label {
+    margin-bottom: 0;
+}
+
+.form-group .wifi-security-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 10px;
+}
+
+.form-group .wifi-security-label select {
+    width: auto;
+    height: 28px;
+    padding: 4px 28px 4px 8px !important;
+    border-color: transparent;
+    background-color: transparent;
+    background-position: right 7px center;
+    background-size: 13px;
+    color: var(--cyan-accent);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.form-group .wifi-security-label select:focus {
+    border-color: var(--cyan-accent);
+    box-shadow: 0 0 8px var(--cyan-glow);
+}
+
 .credentials-fields,
 .relay-fields,
 .service-options-grid,
@@ -348,10 +387,12 @@ body {
 }
 
 .service-option-label input[type="checkbox"] {
-    width: auto;
-    height: auto;
+    width: 20px;
+    height: 20px;
     margin: 0;
+    accent-color: #258cf4;
     cursor: pointer;
+    flex: 0 0 auto;
 }
 
 .service-info {
@@ -365,13 +406,13 @@ body {
     border: 0;
     border-radius: 50%;
     background: transparent;
-    color: var(--primary-color);
+    color: var(--cyan-accent);
     cursor: help;
     font-size: 16px;
 }
 
 .service-info:focus-visible {
-    outline: 2px solid var(--primary-color);
+    outline: 2px solid var(--cyan-accent);
     outline-offset: 2px;
 }
 
@@ -404,12 +445,43 @@ body {
     visibility: visible;
 }
 
-#power-relay-settings {
+.relay-settings {
+    margin-top: 16px;
+}
+
+.relay-settings summary {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: fit-content;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    list-style: none;
+}
+
+.relay-settings summary::-webkit-details-marker {
     display: none;
 }
 
-.form-section:has(#power-relay-enable:checked) #power-relay-settings {
-    display: block !important;
+.relay-settings summary::after {
+    content: '\f078';
+    margin-left: 4px;
+    color: var(--cyan-accent);
+    font-family: 'Font Awesome 6 Free';
+    font-size: 10px;
+    font-weight: 900;
+    transition: transform 0.16s ease;
+}
+
+.relay-settings[open] summary::after {
+    transform: rotate(180deg);
+}
+
+.relay-settings .relay-fields {
+    margin-top: 12px;
 }
 
 @media (max-width: 720px) {
@@ -445,7 +517,7 @@ body {
 }
 
 .tip-text i {
-    color: var(--primary-color);
+    color: var(--cyan-accent);
     margin-right: 4px;
 }
 

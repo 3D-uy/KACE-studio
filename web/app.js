@@ -567,7 +567,10 @@ function togglePowerRelaySettings() {
     const relayEnabled = document.getElementById('power-relay-enable');
     const relaySettings = document.getElementById('power-relay-settings');
     if (relayEnabled && relaySettings) {
-        relaySettings.style.display = relayEnabled.checked ? 'block' : 'none';
+        relaySettings.hidden = !relayEnabled.checked;
+        if (!relayEnabled.checked) {
+            relaySettings.open = false;
+        }
     }
 }
 
@@ -615,6 +618,7 @@ function startFlashing() {
     const powerGpioInput = document.getElementById('power-gpio-number').value.trim();
     const powerActiveLow = document.getElementById('power-active-low').checked;
     const restartKlipperWhenPowered = document.getElementById('restart-klipper-when-powered').checked;
+    const verifyWrite = !document.getElementById('skip-write-verification').checked;
     let powerGpio = null;
     if (powerRelay) {
         if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(powerDevice)) {
@@ -679,7 +683,8 @@ function startFlashing() {
             powerActiveLow,
             restartKlipperWhenPowered,
             imageType,
-            wifiSecurity
+            wifiSecurity,
+            verifyWrite
         ).then(res => {
             if (!res) {
                 window.updateDeviceState("ERROR", 0, "Flashing aborted or failed.");
@@ -789,8 +794,11 @@ window.updateDeviceState = function (state, progress, message) {
         case 'BOOTSTRAPPED':
             if (term) term.write(`\x1b[1;32m[Status] ${message}\x1b[0m\r\n`);
             break;
-        case 'BOOTSTRAP_FAILED':
         case 'BOOTSTRAP_CANCELLED':
+            // KACE already renders the localized cancellation in the SSH
+            // transcript. Keep Studio's status semantic without duplicating it.
+            break;
+        case 'BOOTSTRAP_FAILED':
             if (term) term.write(`\x1b[1;31m[Bootstrap] ${message}\x1b[0m\r\n`);
             break;
         case 'BOOTSTRAP_INTERRUPTED':
@@ -1776,12 +1784,15 @@ function completeBootstrapSuccess(message) {
 function completeBootstrapTerminal(state, message) {
     bootstrapActive = false;
     bootstrapFailureHandled = true;
+    const isCancelled = state === 'BOOTSTRAP_CANCELLED';
     const label = document.getElementById('bootstrap-stage-label');
-    if (label) label.textContent = `✖ ${message}`;
+    if (label) label.textContent = `${isCancelled ? '⚠' : '✖'} ${message}`;
     const connSubtitle = document.getElementById('connection-subtitle');
     if (connSubtitle) {
         connSubtitle.textContent = message;
-        connSubtitle.style.color = 'var(--danger-color)';
+        connSubtitle.style.color = isCancelled
+            ? 'var(--warning-color)'
+            : 'var(--danger-color)';
     }
     const finishBtn = document.getElementById('finish-btn');
     if (finishBtn) {
@@ -1822,9 +1833,12 @@ window.updateBootstrapEvent = function (event) {
         return true;
     }
     if (eventName === 'workflow_cancelled') {
+        const pendingActivation = event.code === 'PENDING_ACTIVATION';
         completeBootstrapTerminal(
             'BOOTSTRAP_CANCELLED',
-            `Bootstrap cancelled${event.code ? ` (${event.code})` : ''}.`,
+            pendingActivation
+                ? 'Installation is prepared and pending operator activation.'
+                : 'Installation cancelled safely. No configuration changes were applied.',
         );
         return true;
     }
@@ -2252,12 +2266,11 @@ const PERSISTED_FIELDS = [
     { id: 'custom-image-type', type: 'value' },
     { id: 'pi-model-select', type: 'hidden' },
     { id: 'bootstrap-ui-select-imager', type: 'hidden' },
-    { id: 'ssh-enable', type: 'checked' },
     { id: 'crowsnest-enable', type: 'checked' },
     { id: 'ssh-username', type: 'value' },
     { id: 'wifi-security-select', type: 'value' },
-    { id: 'power-relay-enable', type: 'checked' },
     { id: 'power-device-name', type: 'value' },
+    { id: 'skip-write-verification', type: 'checked' },
 ];
 
 function saveFormState() {
@@ -2308,6 +2321,7 @@ function restoreFormState() {
         const imageSource = document.getElementById('image-source-select');
         if (imageSource) toggleImageSource(imageSource.value);
         toggleWifiSecurity();
+        togglePowerRelaySettings();
 
         // Sync custom dropdowns visual states
         document.querySelectorAll('.custom-select-container').forEach(container => {

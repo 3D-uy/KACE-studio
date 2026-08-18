@@ -31,7 +31,7 @@ from backend.ssh_client import SSHSession
 from backend.power_controller import MoonrakerPowerController, PowerControllerError
 from backend.remote_power_config import RemotePowerConfigError, parse_remote_power_config
 from backend.workflow_events import KaceWorkflowEventParser
-from backend.bootstrap_events import BootstrapEventParser
+from backend.bootstrap_events import BootstrapEventParser, MachineProtocolDisplayFilter
 from backend.resources import bundled_path, verify_runtime_resources
 from backend.app_paths import application_cache_dir
 from backend.image_manifest import ImageManifest
@@ -322,7 +322,7 @@ class Api:
             )
         return result
 
-    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, image_type: str = ImageType.RASPIOS_VANILLA.value, wifi_security: str = "wpa2"):
+    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, image_type: str = ImageType.RASPIOS_VANILLA.value, wifi_security: str = "wpa2", verify_write: bool = True):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
         """
@@ -378,6 +378,7 @@ class Api:
                 power_gpio=power_gpio,
                 power_active_low=power_active_low,
                 restart_klipper_when_powered=restart_klipper_when_powered,
+                verify_write=verify_write,
                 bootstrap_exists=bootstrap_exists,
                 bootstrap_sha256=bootstrap_sha256,
                 validate_media=True,
@@ -882,10 +883,16 @@ class Api:
             # Stage 2: Flash image to drive
             self.set_device_state("FLASHING", 0, "Writing blocks to SD card...")
 
-            def progress_callback(percent):
-                self.set_device_state("FLASHING", percent, f"Writing blocks: {percent}%")
+            def progress_callback(status, percent, message):
+                self.set_device_state("FLASHING", percent, message)
 
-            success, err_msg = flash_drive(drive_id, image_path, progress_callback, drive_identity)
+            success, err_msg = flash_drive(
+                drive_id,
+                image_path,
+                progress_callback,
+                drive_identity,
+                provisioning.verify_write,
+            )
             if not success:
                 self.set_device_state("ERROR", 0, f"Flashing failed: {err_msg}")
                 return
@@ -1052,10 +1059,14 @@ class Api:
                     # the SSH command that owns the installation workflow.
                     print(f"[KACE] Could not forward workflow event: {exc}")
 
+            protocol_display_filter = MachineProtocolDisplayFilter()
+
+            def forward_bootstrap_event(event):
+                protocol_display_filter.enable_authoritative_bootstrap()
+                self._forward_bootstrap_event(event, current_gen)
+
             workflow_parser = KaceWorkflowEventParser(forward_workflow_event)
-            bootstrap_parser = BootstrapEventParser(
-                lambda event: self._forward_bootstrap_event(event, current_gen)
-            )
+            bootstrap_parser = BootstrapEventParser(forward_bootstrap_event)
             
             def flush_write_buffer():
                 with buffer_lock:
@@ -1076,14 +1087,17 @@ class Api:
 
                 workflow_parser.feed(text)
                 bootstrap_parser.feed(text)
+                visible_text = protocol_display_filter.feed(text)
+                if not visible_text:
+                    return
                 
                 flush_now = False
                 with buffer_lock:
-                    write_buffer.append(text)
+                    write_buffer.append(visible_text)
                     # If the data contains the cursor position query (\x1b[6n) or a terminal mode query/setting (\x1b[?),
                     # flush immediately to prevent interactive TUI prompts (like prompt_toolkit/questionary)
                     # from timing out waiting for the cursor response, which causes scrambled/cascading rendering.
-                    if "\x1b[6n" in text or "\x1b[?" in text:
+                    if "\x1b[6n" in visible_text or "\x1b[?" in visible_text:
                         flush_now = True
                         if flush_timer[0] is not None:
                             flush_timer[0].cancel()
@@ -1099,6 +1113,10 @@ class Api:
                 
             def on_close():
                 # Flush any remaining buffered data before closing
+                visible_tail = protocol_display_filter.flush()
+                if visible_tail:
+                    with buffer_lock:
+                        write_buffer.append(visible_tail)
                 flush_write_buffer()
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen:
@@ -1162,9 +1180,9 @@ class Api:
         )
         command = (
             f"if [ -f /boot/firmware/bootstrap.sh ]; then "
-            f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' bash /boot/firmware/bootstrap.sh --dashboard {dashboard_ui}; "
+            f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' KACE_BOOTSTRAP_EVENT_STREAM=1 bash /boot/firmware/bootstrap.sh --dashboard {dashboard_ui}; "
             f"elif [ -f /boot/bootstrap.sh ]; then "
-            f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' bash /boot/bootstrap.sh --dashboard {dashboard_ui}; "
+            f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' KACE_BOOTSTRAP_EVENT_STREAM=1 bash /boot/bootstrap.sh --dashboard {dashboard_ui}; "
             f"else printf '%s\\n' '{missing_marker}'; fi\n"
         )
 
@@ -1369,9 +1387,9 @@ class Api:
         allowed_form_fields = {
             "hostname-input", "timezone-select", "os-arch-select",
             "image-source-select", "pi-model-select",
-            "bootstrap-ui-select-imager", "ssh-enable",
-            "crowsnest-enable", "ssh-username",
-            "power-relay-enable", "power-device-name",
+            "bootstrap-ui-select-imager", "crowsnest-enable", "ssh-username",
+            "power-device-name",
+            "skip-write-verification",
         }
         if not isinstance(prefs, dict):
             return False

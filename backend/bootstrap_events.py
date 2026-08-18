@@ -20,6 +20,95 @@ ALLOWED_EVENTS = TERMINAL_EVENTS | {"workflow_started", "stage_started"}
 _EVENT_RE = re.compile(r"=== KACE_BOOTSTRAP_EVENT:\s*(\{[^\r\n]*\})\s*===")
 
 
+class MachineProtocolDisplayFilter:
+    """Remove machine-only marker lines from the human SSH transcript.
+
+    Parsers must consume the original stream before this filter is applied.
+    The incremental implementation avoids buffering ordinary prompts that do
+    not end in a newline, which is required for interactive SSH terminals.
+    """
+
+    PREFIXES = (
+        "=== KACE_BOOTSTRAP_EVENT:",
+        "=== KACE_WORKFLOW_EVENT:",
+        "=== KACE_RESULT:",
+    )
+    AUTHORITATIVE_PREFIXES = (
+        "=== STAGE:",
+        "=== KACE_BOOTSTRAP_ERROR:",
+    )
+
+    def __init__(self):
+        self._at_line_start = True
+        self._candidate = ""
+        self._dropping = False
+        self._skip_lf = False
+        self._authoritative_bootstrap = False
+
+    def enable_authoritative_bootstrap(self) -> None:
+        """Hide legacy markers once versioned bootstrap events are confirmed."""
+        self._authoritative_bootstrap = True
+
+    def _prefixes(self) -> tuple[str, ...]:
+        if self._authoritative_bootstrap:
+            return self.PREFIXES + self.AUTHORITATIVE_PREFIXES
+        return self.PREFIXES
+
+    def feed(self, data: str) -> str:
+        if not isinstance(data, str) or not data:
+            return ""
+        prefixes = self._prefixes()
+        visible: list[str] = []
+        for char in data:
+            if self._skip_lf:
+                self._skip_lf = False
+                if char == "\n":
+                    continue
+            if self._dropping:
+                if char == "\r":
+                    self._dropping = False
+                    self._at_line_start = True
+                    self._skip_lf = True
+                elif char == "\n":
+                    self._dropping = False
+                    self._at_line_start = True
+                continue
+
+            if self._candidate:
+                self._candidate += char
+                if any(prefix.startswith(self._candidate) for prefix in prefixes):
+                    continue
+                if any(self._candidate.startswith(prefix) for prefix in prefixes):
+                    self._candidate = ""
+                    self._dropping = True
+                    continue
+                visible.append(self._candidate)
+                self._at_line_start = self._candidate.endswith(("\r", "\n"))
+                self._candidate = ""
+                continue
+
+            if self._at_line_start and char == "=":
+                self._candidate = char
+                continue
+
+            visible.append(char)
+            self._at_line_start = char in "\r\n"
+        return "".join(visible)
+
+    def flush(self) -> str:
+        """Release a non-protocol partial candidate when the stream closes."""
+        if self._dropping:
+            self._dropping = False
+            self._at_line_start = True
+            self._skip_lf = False
+            return ""
+        candidate = self._candidate
+        self._candidate = ""
+        self._at_line_start = not candidate or candidate.endswith(("\r", "\n"))
+        self._skip_lf = False
+        return candidate
+
+
 @dataclass(frozen=True)
 class BootstrapCursor:
     workflow_id: str

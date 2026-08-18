@@ -23,6 +23,7 @@ case "$BOOTSTRAP_WORKFLOW_ID" in
 esac
 BOOTSTRAP_SEQUENCE=0
 BOOTSTRAP_TERMINAL_EMITTED=0
+BOOTSTRAP_EVENT_STREAM="${KACE_BOOTSTRAP_EVENT_STREAM:-0}"
 CURRENT_BOOTSTRAP_STAGE="INIT"
 POWER_RECONCILE_CONFIG=""
 POWER_RECONCILE_BACKUP=""
@@ -35,10 +36,16 @@ emit_bootstrap_event() {
     local stage="${2:-$CURRENT_BOOTSTRAP_STAGE}"
     local code="${3:-}"
     local exit_code="${4:-0}"
+    local marker
     BOOTSTRAP_SEQUENCE=$((BOOTSTRAP_SEQUENCE + 1))
-    printf '=== KACE_BOOTSTRAP_EVENT: {"protocol":"%s","event":"%s","workflow_id":"%s","sequence":%d,"stage":"%s","code":"%s","exit_code":%d} ===\n' \
+    printf -v marker '=== KACE_BOOTSTRAP_EVENT: {"protocol":"%s","event":"%s","workflow_id":"%s","sequence":%d,"stage":"%s","code":"%s","exit_code":%d} ===' \
         "$BOOTSTRAP_PROTOCOL" "$event" "$BOOTSTRAP_WORKFLOW_ID" \
         "$BOOTSTRAP_SEQUENCE" "$stage" "$code" "$exit_code"
+    if [ "$BOOTSTRAP_EVENT_STREAM" = "1" ] || [ "${KACE_BOOTSTRAP_LIB_ONLY:-0}" = "1" ] || [ -z "${LOG_FILE:-}" ]; then
+        printf '%s\n' "$marker"
+    else
+        printf '%s\n' "$marker" >> "$LOG_FILE"
+    fi
 }
 
 emit_bootstrap_terminal() {
@@ -97,8 +104,8 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="edfd3ede9c9ab18b3887006a9b555b4785c9b722"
-KACE_INSTALL_SHA256="f116b3475684f6f242b10c53fcc3f898a8ab7b6e4e7149892a3a0e932dc1d701"
+KACE_INSTALL_REF="cd12a469e5314a71da284f30fd80caaa1f0b7716"
+KACE_INSTALL_SHA256="29b4a5124d36bcdef852f4d6e966db7bf73ba853920c080826da8251b6dde930"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
 readonly CROWSNEST_REPOSITORY CROWSNEST_REF MAINSAIL_VERSION MAINSAIL_URL MAINSAIL_SHA256
@@ -1366,8 +1373,10 @@ else
     LOG_FILE="$HOME/kace-bootstrap.log"
 fi
 
-# Redirect stdout and stderr to the log file while preserving console output
-exec > >(tee -i "$LOG_FILE") 2>&1
+# Truncate once, then keep every writer in append mode. Machine events can be
+# written directly to the log without racing tee's independent file offset.
+: > "$LOG_FILE"
+exec > >(tee -a -i "$LOG_FILE") 2>&1
 
 echo -e "\n${C_CYAN}${C_BOLD}"
 echo "========================================================"
@@ -2115,13 +2124,24 @@ else
 fi
 
 if [ "$INSTALL_OK" -ne 1 ]; then
-    echo "=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ==="
-    log_err "KACE agent installation failed; the node is not fully provisioned."
-    log_err "Pinned installer: $KACE_INSTALL_URL"
     case "$INSTALL_EXIT" in
         2)
             emit_bootstrap_terminal "workflow_cancelled" "CANCELLED" "$INSTALL_EXIT"
+            exit "$INSTALL_EXIT"
             ;;
+        41)
+            log_warn "KACE prepared the installation, but activation still requires operator action."
+            emit_bootstrap_terminal "workflow_cancelled" "PENDING_ACTIVATION" "$INSTALL_EXIT"
+            exit "$INSTALL_EXIT"
+            ;;
+    esac
+
+    # Diagnostic identifiers remain in the persistent log without cluttering
+    # the normal terminal. Studio receives the versioned event below.
+    printf '%s\n' "=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ===" >> "$LOG_FILE"
+    printf '%s\n' "Pinned installer: $KACE_INSTALL_URL" >> "$LOG_FILE"
+    log_err "KACE agent installation failed; the node is not fully provisioned."
+    case "$INSTALL_EXIT" in
         10)
             emit_bootstrap_terminal "workflow_failed" "PRECONDITION_FAILED" "$INSTALL_EXIT"
             ;;

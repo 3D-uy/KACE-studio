@@ -694,7 +694,7 @@ class TestKaceBackend(unittest.TestCase):
             ).replace(
                 '/boot/kace-bootstrap.txt', posix_boot_cfg_path
             ).replace(
-                'exec > >(tee -i "$LOG_FILE") 2>&1', '# exec > >(tee -i "$LOG_FILE") 2>&1'
+                'exec > >(tee -a -i "$LOG_FILE") 2>&1', '# exec > >(tee -a -i "$LOG_FILE") 2>&1'
             )
             
             target_str = 'echo "--------------------------------------------------------"'

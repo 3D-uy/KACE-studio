@@ -68,10 +68,13 @@ def test_bootstrap_contains_immutable_installer_contract_and_terminal_failure():
     assert script.count('KACE_EXPECTED_COMMIT="$KACE_INSTALL_REF"') >= 2
     assert "KACE_NO_LAUNCH=1" not in script
     assert "=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ===" in script
-    failure_block = script.split('if [ "$INSTALL_OK" -ne 1 ]; then', 1)[1].split("fi", 1)[0]
+    failure_block = script.split('if [ "$INSTALL_OK" -ne 1 ]; then', 1)[1].split("\nfi\n", 1)[0]
     assert 'exit "$INSTALL_EXIT"' in failure_block
-    for exit_code in (2, 10, 20, 30, 40):
+    for exit_code in (2, 10, 20, 30, 40, 41):
         assert re.search(rf"(?m)^\s*{exit_code}\)\s*$", failure_block)
+    assert failure_block.index("2)") < failure_block.index("KACE agent installation failed")
+    assert failure_block.index("41)") < failure_block.index("KACE agent installation failed")
+    assert 'log_err "Pinned installer:' not in failure_block
 
 
 def test_bootstrap_emits_versioned_guarded_terminal_events():
@@ -83,6 +86,28 @@ def test_bootstrap_emits_versioned_guarded_terminal_events():
     assert 'emit_bootstrap_terminal "workflow_succeeded" "SUCCESS" 0' in script
     assert 'emit_bootstrap_terminal "workflow_failed" "BOOTSTRAP_ERROR" "$exit_status"' in script
     assert 'emit_bootstrap_terminal "workflow_cancelled" "SIGNAL_${signal_name}" 2' in script
+    assert 'BOOTSTRAP_EVENT_STREAM="${KACE_BOOTSTRAP_EVENT_STREAM:-0}"' in script
+
+
+def test_studio_presents_cancellation_as_warning_and_filters_machine_output():
+    app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    style = (ROOT / "web" / "style.css").read_text(encoding="utf-8")
+    main = (ROOT / "main.py").read_text(encoding="utf-8")
+
+    cancelled_case = app.split("case 'BOOTSTRAP_CANCELLED':", 1)[1].split(
+        "case 'BOOTSTRAP_FAILED':", 1
+    )[0]
+    assert "1;31m" not in cancelled_case
+    completion = app.split("function completeBootstrapTerminal", 1)[1].split(
+        "window.updateBootstrapEvent", 1
+    )[0]
+    assert "var(--warning-color)" in completion
+    assert "var(--danger-color)" in completion
+    assert "Installation cancelled safely" in app
+    assert "PENDING_ACTIVATION" in app
+    assert "--warning-color:" in style
+    assert "MachineProtocolDisplayFilter" in main
+    assert "protocol_display_filter.feed(text)" in main
 
 
 def test_bootstrap_pins_every_critical_external_dependency():

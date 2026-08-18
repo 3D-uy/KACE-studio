@@ -34,6 +34,7 @@ def valid_request(**overrides):
         "power_gpio": None,
         "power_active_low": False,
         "restart_klipper_when_powered": True,
+        "verify_write": True,
         "bootstrap_exists": True,
         "bootstrap_sha256": EXPECTED_BOOTSTRAP_SHA256,
         "validate_media": True,
@@ -94,6 +95,7 @@ def test_every_explicit_image_family_has_a_supported_contract(
         ({"bootstrap_sha256": "0" * 64}, "bootstrap"),
         ({"cache_free_bytes": 1024}, "free_space"),
         ({"target_size_bytes": 1024}, "target_drive"),
+        ({"verify_write": "false"}, "verify_write"),
     ],
 )
 def test_invalid_provisioning_facts_are_rejected(updates, field):
@@ -112,6 +114,11 @@ def test_open_wifi_is_explicit_and_rejects_a_password():
     with pytest.raises(ProvisioningValidationError) as error:
         validate_provisioning(**valid_request(wifi_security="open"))
     assert error.value.field == "wifi_password"
+
+
+def test_write_verification_is_enabled_by_default_but_can_be_skipped():
+    assert validate_provisioning(**valid_request()).verify_write is True
+    assert validate_provisioning(**valid_request(verify_write=False)).verify_write is False
 
 
 def _drive_snapshot():

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from backend.bootstrap_events import BootstrapEventParser
+from backend.bootstrap_events import BootstrapEventParser, MachineProtocolDisplayFilter
 from main import Api
 
 
@@ -55,6 +55,48 @@ def test_malformed_or_unknown_events_are_ignored(payload):
     assert parser.feed(f"{PREFIX}{json.dumps(payload)} ===\n") == []
 
 
+def test_machine_protocol_filter_hides_fragmented_markers_but_preserves_prompts():
+    display_filter = MachineProtocolDisplayFilter()
+    line, _ = marker()
+    result_marker = (
+        '=== KACE_RESULT: {"protocol":"kace-outcome/v1",'
+        '"outcome":"CANCELLED","exit_code":2} ===\r\n'
+    )
+    chunks = [
+        "Apply configuration? [y/N]: ",
+        "n\r\n" + line[:17],
+        line[17:] + result_marker[:11],
+        result_marker[11:] + "\u26a0 Installation cancelled\r\n",
+    ]
+    visible = "".join(display_filter.feed(chunk) for chunk in chunks)
+    visible += display_filter.flush()
+    assert "Apply configuration? [y/N]: n" in visible
+    assert "\u26a0 Installation cancelled" in visible
+    assert "KACE_BOOTSTRAP_EVENT" not in visible
+    assert "KACE_RESULT" not in visible
+    assert "workflow_id" not in visible
+
+
+def test_machine_protocol_filter_does_not_delay_non_marker_partial_lines():
+    display_filter = MachineProtocolDisplayFilter()
+    assert display_filter.feed("ordinary prompt without newline") == "ordinary prompt without newline"
+    assert display_filter.feed("\n=== user-facing heading ===\n") == "\n=== user-facing heading ===\n"
+
+
+def test_authoritative_events_hide_stage_and_error_fallback_markers():
+    display_filter = MachineProtocolDisplayFilter()
+    legacy = "=== STAGE: KLIPPER ===\n"
+    assert display_filter.feed(legacy) == legacy
+
+    display_filter.enable_authoritative_bootstrap()
+    hidden = display_filter.feed(
+        "=== STAGE: MOONRAKER ===\r\n"
+        "=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ===\r\n"
+        "Readable failure guidance.\r\n"
+    )
+    assert hidden == "Readable failure guidance.\r\n"
+
+
 class FakeWindow:
     def __init__(self):
         self.scripts = []
@@ -84,7 +126,10 @@ def test_backend_guard_allows_only_one_active_bootstrap_and_reopens_on_terminal(
     assert second["status"] == "busy"
     assert len(api._ssh.commands) == 1
     assert first["workflow_id"] in api._ssh.commands[0]
+    assert "KACE_BOOTSTRAP_EVENT_STREAM=1" in api._ssh.commands[0]
     assert "curl" not in api._ssh.commands[0]
+    assert "kace.py" not in api._ssh.commands[0]
+    assert "install.sh" not in api._ssh.commands[0]
 
     api._forward_bootstrap_event({
         "protocol": "kace-bootstrap/v1",

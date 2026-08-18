@@ -69,6 +69,7 @@ class ProvisioningData:
     power_gpio: Optional[int]
     power_active_low: bool
     restart_klipper_when_powered: bool
+    verify_write: bool
 
 
 _HOSTNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
@@ -128,6 +129,7 @@ def validate_provisioning(
     power_gpio: Optional[int] = None,
     power_active_low: bool = False,
     restart_klipper_when_powered: bool = True,
+    verify_write: bool = True,
     bootstrap_exists: bool = True,
     bootstrap_sha256: str = EXPECTED_BOOTSTRAP_SHA256,
     validate_media: bool = False,
@@ -209,6 +211,7 @@ def validate_provisioning(
         "power_relay": power_relay,
         "power_active_low": power_active_low,
         "restart_klipper_when_powered": restart_klipper_when_powered,
+        "verify_write": verify_write,
     }
     for field, value in boolean_fields.items():
         if not isinstance(value, bool):
@@ -272,4 +275,5 @@ def validate_provisioning(
         power_gpio=normalized_power_gpio,
         power_active_low=power_active_low,
         restart_klipper_when_powered=restart_klipper_when_powered,
+        verify_write=verify_write,
     )

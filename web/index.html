@@ -28,7 +28,7 @@
     <link rel="stylesheet" href="vendor/xterm/xterm.min.css">
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="vendor/fontawesome/css/all.min.css">
-    <link rel="stylesheet" href="style.css?v=2.2.3">
+    <link rel="stylesheet" href="style.css?v=2.2.4">
 </head>
 <body>
     <div class="app-container">
@@ -348,12 +348,16 @@
 
                             <!-- Step 8: WiFi Setup -->
                             <div class="form-group" style="margin-bottom: 0;">
-                                <label for="wifi-ssid"><span class="brand-orange">STEP 8:</span> WI-FI NETWORK</label>
+                                <div class="wifi-label-row">
+                                    <label for="wifi-ssid"><span class="brand-orange">STEP 8:</span> WI-FI NETWORK</label>
+                                    <label for="wifi-security-select" class="wifi-security-label">Security
+                                        <select id="wifi-security-select" onchange="toggleWifiSecurity()">
+                                            <option value="wpa2" selected>WPA2/WPA3</option>
+                                            <option value="open">Open</option>
+                                        </select>
+                                    </label>
+                                </div>
                                 <input type="text" id="wifi-ssid" placeholder="Network Name / SSID" style="margin-bottom: 8px;">
-                                <select id="wifi-security-select" onchange="toggleWifiSecurity()" style="margin-bottom: 8px;">
-                                    <option value="wpa2" selected>WPA2/WPA3 Personal</option>
-                                    <option value="open">Open network (no password)</option>
-                                </select>
                                 <div class="password-wrapper" id="wifi-password-wrapper" style="margin-bottom: 8px;">
                                     <input type="password" id="wifi-password" placeholder="WiFi Password">
                                     <i class="fa-solid fa-eye password-toggle-icon" onclick="togglePasswordVisibility('wifi-password', this)"></i>
@@ -371,10 +375,10 @@
                             <div class="service-options-grid">
                                 <div class="service-option">
                                     <label for="ssh-enable" class="service-option-label">
-                                        <input type="checkbox" id="ssh-enable" checked> Enable SSH
+                                        <input type="checkbox" id="ssh-enable"> Enable SSH
                                     </label>
                                     <button type="button" class="service-info" aria-label="About Enable SSH">
-                                        <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                        <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
                                     <div class="service-tooltip" role="tooltip">Allows KACE Studio to connect to the Pi after it boots and opens the SSH Workspace.</div>
                                 </div>
@@ -383,7 +387,7 @@
                                         <input type="checkbox" id="crowsnest-enable"> Install Crowsnest (Webcam Streamer)
                                     </label>
                                     <button type="button" class="service-info" aria-label="About Crowsnest">
-                                        <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                        <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
                                     <div class="service-tooltip" role="tooltip">Installs the webcam streaming service. Leave it disabled when the printer has no camera.</div>
                                 </div>
@@ -392,7 +396,7 @@
                                         <input type="checkbox" id="ssh-password-auth" checked> Enable Password Authentication
                                     </label>
                                     <button type="button" class="service-info" aria-label="About password authentication">
-                                        <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                        <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
                                     <div class="service-tooltip" role="tooltip">Lets you sign in using the password above. Disable it only when SSH keys are already configured.</div>
                                 </div>
@@ -401,15 +405,24 @@
                                         <input type="checkbox" id="power-relay-enable" onchange="togglePowerRelaySettings()"> Pi controls printer power through a GPIO relay
                                     </label>
                                     <button type="button" class="service-info" aria-label="About GPIO relay power control">
-                                        <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                        <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
                                     <div class="service-tooltip" role="tooltip">Use only when a relay wired to the Pi physically switches printer power. It enables Moonraker power control.</div>
+                                </div>
+                                <div class="service-option">
+                                    <label for="skip-write-verification" class="service-option-label">
+                                        <input type="checkbox" id="skip-write-verification"> Skip SD readback verification (faster)
+                                    </label>
+                                    <button type="button" class="service-info" aria-label="About SD readback verification">
+                                        <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+                                    </button>
+                                    <div class="service-tooltip" role="tooltip">Not recommended. Verification reads the full image back from the SD card and detects write errors before the card is used.</div>
                                 </div>
                             </div>
                         </div>
 
-                         <div class="form-group" id="power-relay-settings" style="margin-top: 16px;">
-                             <label><span class="brand-orange">GPIO RELAY:</span> POWER CONTROL</label>
+                         <details class="form-group relay-settings" id="power-relay-settings" hidden>
+                             <summary><span class="brand-orange">GPIO RELAY:</span> POWER CONTROL</summary>
                              <div class="relay-fields">
                                  <div class="form-group" style="margin-bottom: 0;">
                                      <label for="power-device-name" style="text-transform: none; font-size: 12px;">Device name</label>
@@ -426,7 +439,7 @@
                                          <input type="checkbox" id="power-active-low"> Signal is active low
                                      </label>
                                      <button type="button" class="service-info" aria-label="About active low relay signals">
-                                         <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                      </button>
                                      <div class="service-tooltip" role="tooltip">Enable this when the relay turns on when the GPIO signal is low. Check the relay board documentation first.</div>
                                  </div>
@@ -435,12 +448,12 @@
                                          <input type="checkbox" id="restart-klipper-when-powered" checked> Restart Klipper when power is enabled
                                      </label>
                                      <button type="button" class="service-info" aria-label="About restarting Klipper after power is enabled">
-                                         <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                      </button>
                                      <div class="service-tooltip" role="tooltip">Restarts Klipper after the printer powers on so it can reconnect to the controller.</div>
                                  </div>
                              </div>
-                         </div>
+                         </details>
 
                          <!-- Step 10: Resume & Write Summary -->
                          <div class="form-group" style="margin-top: 24px;">
@@ -712,6 +725,6 @@
         <button onclick="terminalContextMenuAction('clear')"><i class="fa-solid fa-trash-can"></i> Clear</button>
     </div>
 
-    <script src="app.js?v=2.2.3"></script>
+    <script src="app.js?v=2.2.4"></script>
 </body>
 </html>

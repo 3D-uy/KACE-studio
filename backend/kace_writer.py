@@ -490,8 +490,11 @@ def main():
         _normalize_identity(expected_identity)
         expected_image_size = int(write_contract["image_size"])
         expected_image_sha256 = str(write_contract["image_sha256"])
+        verify_write = write_contract.get("verify_write", True)
         if expected_image_size <= 0 or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_image_sha256):
             raise ValueError("invalid image size or SHA-256")
+        if not isinstance(verify_write, bool):
+            raise ValueError("verify_write must be a boolean")
     except (KeyError, json.JSONDecodeError, TypeError, ValueError) as contract_error:
         safe_print_err(f"ERROR: Invalid write contract: {contract_error}")
         write_status(status_file, "error", message="Invalid or incomplete write contract.")
@@ -591,34 +594,37 @@ def main():
                     last_pct = pct
 
             dest.flush()
-            safe_print_out("STATUS: Verifying physical disk readback...")
-            write_status(
-                status_file,
-                "verifying",
-                progress=0,
-                message="Verifying physical disk readback...",
-            )
-            last_verify_pct = [-1]
+            if verify_write:
+                safe_print_out("STATUS: Verifying physical disk readback...")
+                write_status(
+                    status_file,
+                    "verifying",
+                    progress=0,
+                    message="Verifying physical disk readback...",
+                )
+                last_verify_pct = [-1]
 
-            def report_readback(bytes_read, total_bytes):
-                pct = int((bytes_read / total_bytes) * 100)
-                if pct != last_verify_pct[0]:
-                    safe_print_out(f"VERIFY_PROGRESS: {pct}")
-                    write_status(
-                        status_file,
-                        "verifying",
-                        progress=pct,
-                        message=f"Verifying physical disk readback: {pct}%",
-                    )
-                    last_verify_pct[0] = pct
+                def report_readback(bytes_read, total_bytes):
+                    pct = int((bytes_read / total_bytes) * 100)
+                    if pct != last_verify_pct[0]:
+                        safe_print_out(f"VERIFY_PROGRESS: {pct}")
+                        write_status(
+                            status_file,
+                            "verifying",
+                            progress=pct,
+                            message=f"Verifying physical disk readback: {pct}%",
+                        )
+                        last_verify_pct[0] = pct
 
-            _verify_disk_readback(
-                dest,
-                image_size,
-                expected_image_sha256,
-                chunk_size=chunk_size,
-                progress_callback=report_readback,
-            )
+                _verify_disk_readback(
+                    dest,
+                    image_size,
+                    expected_image_sha256,
+                    chunk_size=chunk_size,
+                    progress_callback=report_readback,
+                )
+            else:
+                safe_print_out("STATUS: Physical disk readback verification skipped by user.")
 
         # 3. Bring disk back online to allow Windows to mount partitions (non-fatal)
         safe_print_out("STATUS: Bringing disk back online...")

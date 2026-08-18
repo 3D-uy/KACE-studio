@@ -359,3 +359,10 @@ def test_frontend_passes_snapshot_and_requires_typed_high_risk_confirmation():
     assert "driveIdentity" in source
     assert "passwordAuth,\n            driveIdentity" in source
     assert "highRiskConfirmed" in source
+
+
+def test_frontend_does_not_restore_ssh_or_relay_selection():
+    source = (Path(main.__file__).resolve().parent / "web" / "app.js").read_text(encoding="utf-8")
+    persisted_section = source.split("const PERSISTED_FIELDS = [", 1)[1].split("];", 1)[0]
+    assert "ssh-enable" not in persisted_section
+    assert "power-relay-enable" not in persisted_section

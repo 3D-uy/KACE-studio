@@ -520,7 +520,7 @@ try {{
         
     return None
 
-def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive_identity=None) -> tuple:
+def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive_identity=None, verify_write: bool = True) -> tuple:
     """
     Flashes the image block-by-block onto the target drive by spawning
     the elevated helper process kace_writer.py.
@@ -545,10 +545,13 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
             f"Image is too large for target disk: {image_size} bytes required, "
             f"{identity['size_bytes']} bytes available."
         )
+    if not isinstance(verify_write, bool):
+        return False, "Write verification setting must be a boolean."
     image_contract = {
         "disk_identity": identity,
         "image_size": image_size,
         "image_sha256": _sha256_file(image_path),
+        "verify_write": verify_write,
     }
 
     if sys.platform != "win32":
@@ -695,7 +698,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
                     message = data.get("message", "")
                     
                     if progress_callback and progress != last_progress:
-                        progress_callback(progress)
+                        progress_callback(status, progress, message)
                         last_progress = progress
                         
                     if status == "success":
