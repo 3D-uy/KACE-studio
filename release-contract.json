@@ -30,10 +30,10 @@
   },
   "kace": {
     "repository": "https://github.com/3D-uy/KACE.git",
-    "candidate_ref": "8a07d3e5a5f375c6d14bddc391658a8185f4b347",
-    "bootstrap_ref": "e371e6ef90be3fc23978c65a98f5e419ea9ae2f9",
-    "bootstrap_sha256": "622661ea561ffecb6b2a7f0d36abfbd5a70ac212dd273f44af8a08af2878a5b7",
-    "installer_ref": "8a07d3e5a5f375c6d14bddc391658a8185f4b347",
+    "candidate_ref": "9e539b2b68561eccb6225de9bae906be69bcd637",
+    "bootstrap_ref": "04c60dab0453bf1372141ed190d1d635da2e94c0",
+    "bootstrap_sha256": "e6cc403f4a265f84fc6f78381b1f97697eb964e8a4fc43f29710282e838ef204",
+    "installer_ref": "9e539b2b68561eccb6225de9bae906be69bcd637",
     "installer_sha256": "0a27bfc3064bc6baf35b02a3960dbbfa37b5c0e7d1d989e22eb97230a698c9e4"
   },
   "bundled_resources": [
