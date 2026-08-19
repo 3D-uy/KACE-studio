@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.bootstrap_events import BootstrapEventParser
 from backend.provisioning import EXPECTED_BOOTSTRAP_SHA256
 
 
@@ -87,6 +88,28 @@ def test_bootstrap_emits_versioned_guarded_terminal_events():
     assert 'emit_bootstrap_terminal "workflow_failed" "BOOTSTRAP_ERROR" "$exit_status"' in script
     assert 'emit_bootstrap_terminal "workflow_cancelled" "SIGNAL_${signal_name}" 2' in script
     assert 'BOOTSTRAP_EVENT_STREAM="${KACE_BOOTSTRAP_EVENT_STREAM:-0}"' in script
+
+
+@pytest.mark.skipif(_find_bash() is None, reason="bash is not available")
+def test_authoritative_kace_event_is_consumed_by_studio_parser():
+    command = r'''
+set -euo pipefail
+export KACE_BOOTSTRAP_LIB_ONLY=1
+export KACE_BOOTSTRAP_EVENT_STREAM=1
+export KACE_BOOTSTRAP_WORKFLOW_ID=bootstrap-integration
+source "$1"
+emit_bootstrap_event workflow_started INIT
+'''
+    result = subprocess.run(
+        [_find_bash(), "-c", command, "bootstrap-contract", BOOTSTRAP.as_posix()],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    events = BootstrapEventParser().feed(result.stdout)
+    assert len(events) == 1
+    assert events[0]["workflow_id"] == "bootstrap-integration"
+    assert events[0]["event"] == "workflow_started"
 
 
 def test_studio_presents_cancellation_as_warning_and_filters_machine_output():

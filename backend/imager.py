@@ -226,6 +226,58 @@ CLEAN_WIFI_ON_SUCCESS=true
 '''
 
 
+def _first_run_hostname_reconciliation_body(hostname: str) -> str:
+    """Keep prebaked hostname persistence and local resolution coherent."""
+    return f'''
+# Keep the persistent hostname and sudo's local resolver view in agreement.
+TARGET_HOSTNAME='{hostname}'
+HOSTNAME_FILE="${{KACE_HOSTNAME_FILE:-/etc/hostname}}"
+HOSTS_FILE="${{KACE_HOSTS_FILE:-/etc/hosts}}"
+
+reconcile_local_hostname() {{
+    local temporary
+
+    if [ ! -f "$HOSTNAME_FILE" ] || [ "$(tr -d '\\r\\n' < "$HOSTNAME_FILE")" != "$TARGET_HOSTNAME" ]; then
+        temporary="${{HOSTNAME_FILE}}.kace.$$"
+        printf '%s\\n' "$TARGET_HOSTNAME" > "$temporary"
+        if [ -e "$HOSTNAME_FILE" ]; then
+            chmod --reference="$HOSTNAME_FILE" "$temporary"
+            chown --reference="$HOSTNAME_FILE" "$temporary"
+        fi
+        mv -f "$temporary" "$HOSTNAME_FILE"
+    fi
+
+    if [ "${{KACE_SKIP_RUNTIME_HOSTNAME:-false}}" != "true" ] && \
+            [ "$(hostname)" != "$TARGET_HOSTNAME" ]; then
+        hostnamectl set-hostname "$TARGET_HOSTNAME"
+    fi
+
+    if [ -f "$HOSTS_FILE" ] && awk -v host="$TARGET_HOSTNAME" '
+        $1 == "127.0.0.1" || $1 == "127.0.1.1" || $1 == "::1" {{
+            for (i = 2; i <= NF; i++) {{
+                if ($i ~ /^#/) break
+                if ($i == host) found = 1
+            }}
+        }}
+        END {{ exit(found ? 0 : 1) }}
+    ' "$HOSTS_FILE"; then
+        return 0
+    fi
+
+    temporary="${{HOSTS_FILE}}.kace.$$"
+    if [ -e "$HOSTS_FILE" ]; then
+        cp --preserve=mode,ownership "$HOSTS_FILE" "$temporary"
+    else
+        : > "$temporary"
+    fi
+    printf '127.0.1.1\\t%s\\n' "$TARGET_HOSTNAME" >> "$temporary"
+    mv -f "$temporary" "$HOSTS_FILE"
+}}
+
+reconcile_local_hostname
+'''
+
+
 def _write_first_run_artifacts(boot_path: str, script_content: str) -> str:
     state_path = os.path.join(boot_path, "kace-firstrun.state")
     script_path = os.path.join(boot_path, "firstrun.sh")
@@ -1179,10 +1231,13 @@ password_authentication = {"true" if password_auth else "false"}
             ssh_enabled_str = "true" if ssh_enabled else "false"
             pw_auth_str = "true" if ssh_enabled and password_auth else "false"
 
+            hostname_reconciliation = _first_run_hostname_reconciliation_body(clean_hostname)
             firstrun_body = f"""
 HASHED_PW='{hashed_pw}'
 TARGET_USER='{username}'
 SSH_ENABLED='{ssh_enabled_str}'
+
+{hostname_reconciliation}
 
 # ── 1. Detect the pre-existing printer user ──────────────────────────────────
 # On pre-baked images (MainsailOS / FluiddPi) Klipper lives under the default

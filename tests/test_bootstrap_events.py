@@ -33,6 +33,13 @@ def test_fragmented_bootstrap_event_is_reassembled_and_forwarded():
     assert seen == [event]
 
 
+def test_bootstrap_event_embedded_in_an_echoed_shell_command_is_not_authoritative():
+    parser = BootstrapEventParser()
+    line, _ = marker(event="workflow_failed", code="BOOTSTRAP_NOT_FOUND")
+    echoed_command = f"kace@kace:~ $ if true; then :; else printf '%s' '{line.strip()}'; fi\r\n"
+    assert parser.feed(echoed_command) == []
+
+
 def test_duplicate_and_out_of_order_events_are_ignored_per_workflow():
     parser = BootstrapEventParser()
     newer, event = marker(sequence=3, stage="MOONRAKER")
@@ -75,6 +82,21 @@ def test_machine_protocol_filter_hides_fragmented_markers_but_preserves_prompts(
     assert "KACE_BOOTSTRAP_EVENT" not in visible
     assert "KACE_RESULT" not in visible
     assert "workflow_id" not in visible
+
+
+def test_machine_protocol_filter_hides_fragmented_studio_launch_echo():
+    display_filter = MachineProtocolDisplayFilter()
+    command = (
+        "KACE_STUDIO_LAUNCH=1; if [ -f /boot/firmware/bootstrap.sh ]; then "
+        "KACE_BOOTSTRAP_WORKFLOW_ID='bootstrap-secret' bash /boot/firmware/bootstrap.sh; "
+        "else printf '%s' 'BOOTSTRAP_NOT_FOUND'; fi\r\n"
+    )
+    chunks = ["kace@kace:~ $ " + command[:9], command[9:41], command[41:] + "Starting KACE\r\n"]
+    visible = "".join(display_filter.feed(chunk) for chunk in chunks)
+    visible += display_filter.flush()
+    assert visible == "kace@kace:~ $ \r\nStarting KACE\r\n"
+    assert "bootstrap-secret" not in visible
+    assert "BOOTSTRAP_NOT_FOUND" not in visible
 
 
 def test_machine_protocol_filter_does_not_delay_non_marker_partial_lines():
@@ -126,6 +148,8 @@ def test_backend_guard_allows_only_one_active_bootstrap_and_reopens_on_terminal(
     assert second["status"] == "busy"
     assert len(api._ssh.commands) == 1
     assert first["workflow_id"] in api._ssh.commands[0]
+    assert api._ssh.commands[0].startswith("KACE_STUDIO_LAUNCH=1;")
+    assert api._ssh.commands[0].count("\n") == 1
     assert "KACE_BOOTSTRAP_EVENT_STREAM=1" in api._ssh.commands[0]
     assert "curl" not in api._ssh.commands[0]
     assert "kace.py" not in api._ssh.commands[0]

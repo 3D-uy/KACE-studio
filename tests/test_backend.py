@@ -1582,6 +1582,8 @@ class TestKaceBackend(unittest.TestCase):
                 self.assertIn("#!/bin/bash", fr_content)
                 # New strategy: rename existing user, not create a new one
                 self.assertIn("TARGET_USER='customuser'", fr_content)
+                self.assertIn("TARGET_HOSTNAME='kace-test'", fr_content)
+                self.assertIn("reconcile_local_hostname", fr_content)
                 self.assertIn("usermod -l", fr_content)          # login rename
                 self.assertIn("groupmod -n", fr_content)         # group rename
                 self.assertIn("ln -s", fr_content)               # compat symlink for venv shebangs

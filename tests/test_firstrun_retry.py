@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.imager import _build_retryable_first_run
+from backend.imager import (
+    _build_retryable_first_run,
+    _first_run_hostname_reconciliation_body,
+)
 
 
 def _bash():
@@ -24,6 +27,65 @@ def _state(path: Path) -> dict[str, str]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if "=" in line
     )
+
+
+@pytest.mark.skipif(_bash() is None, reason="bash is unavailable")
+def test_prebaked_hostname_reconciliation_is_safe_and_idempotent(tmp_path):
+    hostname_file = tmp_path / "hostname"
+    hosts_file = tmp_path / "hosts"
+    hostname_file.write_text("mainsailos\n", encoding="utf-8")
+    hosts_file.write_text(
+        "127.0.0.1\tlocalhost\n127.0.1.1\tmainsailos\n",
+        encoding="utf-8",
+    )
+    script = tmp_path / "reconcile-hostname.sh"
+    script.write_text(
+        "#!/bin/bash\nset -Eeuo pipefail\n"
+        + _first_run_hostname_reconciliation_body("kace"),
+        encoding="utf-8",
+    )
+    env = dict(
+        os.environ,
+        KACE_HOSTNAME_FILE=hostname_file.as_posix(),
+        KACE_HOSTS_FILE=hosts_file.as_posix(),
+        KACE_SKIP_RUNTIME_HOSTNAME="true",
+    )
+
+    first = subprocess.run([_bash(), str(script)], env=env, capture_output=True, text=True)
+    assert first.returncode == 0, first.stderr
+    assert hostname_file.read_text(encoding="utf-8") == "kace\n"
+    first_hosts = hosts_file.read_text(encoding="utf-8")
+    assert first_hosts.count("127.0.1.1\tkace") == 1
+    assert "127.0.1.1\tmainsailos" in first_hosts
+
+    second = subprocess.run([_bash(), str(script)], env=env, capture_output=True, text=True)
+    assert second.returncode == 0, second.stderr
+    assert hosts_file.read_text(encoding="utf-8") == first_hosts
+
+
+@pytest.mark.skipif(_bash() is None, reason="bash is unavailable")
+def test_prebaked_hostname_reconciliation_preserves_already_correct_hosts(tmp_path):
+    hostname_file = tmp_path / "hostname"
+    hosts_file = tmp_path / "hosts"
+    hostname_file.write_text("kace\n", encoding="utf-8")
+    original = "127.0.0.1\tlocalhost\n127.0.1.1\tkace\n"
+    hosts_file.write_text(original, encoding="utf-8")
+    script = tmp_path / "reconcile-hostname.sh"
+    script.write_text(
+        "#!/bin/bash\nset -Eeuo pipefail\n"
+        + _first_run_hostname_reconciliation_body("kace"),
+        encoding="utf-8",
+    )
+    env = dict(
+        os.environ,
+        KACE_HOSTNAME_FILE=hostname_file.as_posix(),
+        KACE_HOSTS_FILE=hosts_file.as_posix(),
+        KACE_SKIP_RUNTIME_HOSTNAME="true",
+    )
+
+    result = subprocess.run([_bash(), str(script)], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert hosts_file.read_text(encoding="utf-8") == original
 
 
 @pytest.mark.skipif(_bash() is None, reason="bash is unavailable")

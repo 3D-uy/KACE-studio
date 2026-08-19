@@ -17,7 +17,50 @@ TERMINAL_EVENTS = frozenset({
     "workflow_cancelled",
 })
 ALLOWED_EVENTS = TERMINAL_EVENTS | {"workflow_started", "stage_started"}
-_EVENT_RE = re.compile(r"=== KACE_BOOTSTRAP_EVENT:\s*(\{[^\r\n]*\})\s*===")
+_EVENT_RE = re.compile(r"^\s*=== KACE_BOOTSTRAP_EVENT:\s*(\{[^\r\n]*\})\s*===")
+
+
+class BootstrapLaunchEchoFilter:
+    """Hide Studio's bootstrap launch command when an interactive PTY echoes it."""
+
+    PREFIX = "KACE_STUDIO_LAUNCH=1;"
+
+    def __init__(self):
+        self._candidate = ""
+        self._dropping = False
+
+    def feed(self, data: str) -> str:
+        if not isinstance(data, str) or not data:
+            return ""
+        visible: list[str] = []
+        for char in data:
+            if self._dropping:
+                if char in "\r\n":
+                    self._dropping = False
+                    visible.append(char)
+                continue
+            if self._candidate:
+                self._candidate += char
+                if self._candidate == self.PREFIX:
+                    self._candidate = ""
+                    self._dropping = True
+                elif self.PREFIX.startswith(self._candidate):
+                    continue
+                else:
+                    visible.append(self._candidate)
+                    self._candidate = ""
+                continue
+            if char == self.PREFIX[0]:
+                self._candidate = char
+            else:
+                visible.append(char)
+        return "".join(visible)
+
+    def flush(self) -> str:
+        candidate = self._candidate
+        self._candidate = ""
+        self._dropping = False
+        return candidate
 
 
 class MachineProtocolDisplayFilter:
@@ -39,6 +82,7 @@ class MachineProtocolDisplayFilter:
     )
 
     def __init__(self):
+        self._launch_echo_filter = BootstrapLaunchEchoFilter()
         self._at_line_start = True
         self._candidate = ""
         self._dropping = False
@@ -56,6 +100,9 @@ class MachineProtocolDisplayFilter:
 
     def feed(self, data: str) -> str:
         if not isinstance(data, str) or not data:
+            return ""
+        data = self._launch_echo_filter.feed(data)
+        if not data:
             return ""
         prefixes = self._prefixes()
         visible: list[str] = []
@@ -97,16 +144,17 @@ class MachineProtocolDisplayFilter:
 
     def flush(self) -> str:
         """Release a non-protocol partial candidate when the stream closes."""
+        launch_candidate = self._launch_echo_filter.flush()
         if self._dropping:
             self._dropping = False
             self._at_line_start = True
             self._skip_lf = False
-            return ""
+            return launch_candidate
         candidate = self._candidate
         self._candidate = ""
         self._at_line_start = not candidate or candidate.endswith(("\r", "\n"))
         self._skip_lf = False
-        return candidate
+        return launch_candidate + candidate
 
 
 @dataclass(frozen=True)

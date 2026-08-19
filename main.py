@@ -1179,7 +1179,7 @@ class Api:
             f"{json.dumps(missing_event, separators=(',', ':'))} ==="
         )
         command = (
-            f"if [ -f /boot/firmware/bootstrap.sh ]; then "
+            f"KACE_STUDIO_LAUNCH=1; if [ -f /boot/firmware/bootstrap.sh ]; then "
             f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' KACE_BOOTSTRAP_EVENT_STREAM=1 bash /boot/firmware/bootstrap.sh --dashboard {dashboard_ui}; "
             f"elif [ -f /boot/bootstrap.sh ]; then "
             f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' KACE_BOOTSTRAP_EVENT_STREAM=1 bash /boot/bootstrap.sh --dashboard {dashboard_ui}; "
