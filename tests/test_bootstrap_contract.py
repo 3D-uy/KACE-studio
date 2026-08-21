@@ -185,7 +185,13 @@ def test_bootstrap_preserves_existing_moonraker_configuration():
 
 
 @pytest.mark.skipif(_find_bash() is None, reason="bash is not available")
-def test_gpio_relay_is_final_before_moonraker_install_and_restart(tmp_path):
+@pytest.mark.parametrize(
+    ("active_low", "expected_pin"),
+    (("false", "gpio21"), ("true", "!gpio21")),
+)
+def test_gpio_relay_is_final_before_moonraker_install_and_restart(
+    tmp_path, active_low, expected_pin
+):
     config_dir = tmp_path / "printer_data" / "config"
     config_dir.mkdir(parents=True)
     moonraker_conf = config_dir / "moonraker.conf"
@@ -203,8 +209,8 @@ source "$1"
 PRINTER_HOME="$2"
 POWER_RELAY=true
 POWER_DEVICE=printer
-POWER_GPIO=20
-POWER_ACTIVE_LOW=true
+POWER_GPIO=21
+POWER_ACTIVE_LOW="$3"
 POWER_RESTART_KLIPPER=true
 POWER_INITIAL_STATE=on
 POWER_OFF_WHEN_SHUTDOWN=false
@@ -213,7 +219,10 @@ ensure_moonraker_config "$PRINTER_HOME/printer_data/config/moonraker.conf" "$PRI
 verify_requested_power_relay "$PRINTER_HOME/printer_data/config/moonraker.conf"
 """
     result = subprocess.run(
-        [_find_bash(), "-c", command, "bootstrap-test", BOOTSTRAP.as_posix(), tmp_path.as_posix()],
+        [
+            _find_bash(), "-c", command, "bootstrap-test",
+            BOOTSTRAP.as_posix(), tmp_path.as_posix(), active_low,
+        ],
         capture_output=True,
         text=True,
         env={**os.environ, "KACE_TEST_PYTHON": Path(sys.executable).as_posix()},
@@ -223,7 +232,7 @@ verify_requested_power_relay "$PRINTER_HOME/printer_data/config/moonraker.conf"
     final_content = moonraker_conf.read_text(encoding="utf-8")
     assert "[power printer]" in final_content
     assert "type: gpio" in final_content
-    assert "pin: !gpiochip0/gpio20" in final_content
+    assert f"pin: {expected_pin}" in final_content
     assert "restart_klipper_when_powered: true" in final_content
     assert "initial_state: on" in final_content
     assert "off_when_shutdown: false" in final_content

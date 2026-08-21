@@ -2018,11 +2018,13 @@ async function togglePrinterPower() {
     const action = printerPowerStatus === 'on' ? 'power_off' : 'power_on';
     renderPrinterPower({ available: true, status: 'init', detail: 'Waiting for Moonraker confirmation…' });
     try {
-        renderPrinterPower(await window.pywebview.api[action](currentDeviceIp, powerDevice));
+        await window.pywebview.api[action](currentDeviceIp, powerDevice);
     } catch (error) {
         renderPrinterPower({ available: true, status: 'error', detail: String(error) });
     } finally {
         printerPowerRequestActive = false;
+        // The command response is not UI state.  Re-read the same Moonraker
+        // power device that Mainsail observes and render only that result.
         await refreshPrinterPower();
     }
 }

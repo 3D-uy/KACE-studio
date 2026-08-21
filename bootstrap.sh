@@ -104,7 +104,7 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="e1bde5a32a3d58a77eccd90e60cbf6c4a6b63978"
+KACE_INSTALL_REF="d3da2b577eb101382dacdccdf1844e62cd29e0e5"
 KACE_INSTALL_SHA256="0a27bfc3064bc6baf35b02a3960dbbfa37b5c0e7d1d989e22eb97230a698c9e4"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
@@ -519,7 +519,7 @@ path = Path(sys.argv[1])
 state_path = Path(sys.argv[2]) if sys.argv[2] else None
 enabled = sys.argv[3] == "true"
 device = sys.argv[4] if enabled else None
-pin = f"gpiochip0/gpio{sys.argv[5]}" if enabled else None
+pin = f"gpio{sys.argv[5]}" if enabled else None
 if enabled and sys.argv[6] == "true":
     pin = f"!{pin}"
 expected = [
@@ -676,7 +676,7 @@ path = Path(sys.argv[1])
 state_path = Path(sys.argv[2]) if sys.argv[2] else None
 enabled = sys.argv[3] == "true"
 device = sys.argv[4] if enabled else None
-pin = f"gpiochip0/gpio{sys.argv[5]}" if enabled else None
+pin = f"gpio{sys.argv[5]}" if enabled else None
 if enabled and sys.argv[6] == "true":
     pin = f"!{pin}"
 expected = {

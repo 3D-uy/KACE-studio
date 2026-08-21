@@ -1,4 +1,5 @@
 from pathlib import Path
+import ast
 import json
 
 import pytest
@@ -50,6 +51,21 @@ def test_power_on_uses_power_api_and_confirms_final_state():
         (
             "/machine/device_power/device",
             {"device": "main_psu", "action": "on"},
+        )
+    ]
+
+
+def test_power_off_uses_power_api_and_confirms_final_state():
+    http = FakeMoonrakerHttp(["on", "off"])
+    power = MoonrakerPowerController(
+        "192.168.1.20", "main_psu", http_client=http, poll_interval=0
+    )
+
+    assert power.power_off(timeout=1) == "off"
+    assert http.posts == [
+        (
+            "/machine/device_power/device",
+            {"device": "main_psu", "action": "off"},
         )
     ]
 
@@ -295,6 +311,56 @@ def test_end_to_end_status_then_power_on_without_ssh_or_kace(monkeypatch):
     assert requests[2][2] == {"device": "main_psu", "action": "on"}
 
 
+def test_studio_on_off_and_displayed_state_share_moonraker_truth(monkeypatch):
+    import main
+
+    moonraker_state = {"printer": "off"}
+    requests = []
+
+    class Response:
+        def __init__(self, body):
+            self._body = json.dumps(body).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return self._body
+
+    def fake_urlopen(request, timeout):
+        method = request.get_method()
+        payload = json.loads(request.data.decode("utf-8")) if request.data else None
+        requests.append((method, request.full_url, payload, timeout))
+        if method == "POST":
+            moonraker_state[payload["device"]] = payload["action"]
+            return Response({"result": {payload["device"]: payload["action"]}})
+        return Response({
+            "result": {
+                "devices": [
+                    {"device": "printer", "status": moonraker_state["printer"]}
+                ]
+            }
+        })
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    api = main.Api()
+
+    studio_on = api.power_on("192.168.1.20", "printer")
+    mainsail_on = api.get_power_status("192.168.1.20", "printer")
+    studio_off = api.power_off("192.168.1.20", "printer")
+    mainsail_off = api.get_power_status("192.168.1.20", "printer")
+
+    assert studio_on["status"] == mainsail_on["status"] == "on"
+    assert studio_off["status"] == mainsail_off["status"] == "off"
+    assert [payload for method, _url, payload, _timeout in requests if method == "POST"] == [
+        {"device": "printer", "action": "on"},
+        {"device": "printer", "action": "off"},
+    ]
+
+
 def test_studio_power_controller_has_no_kace_or_ssh_bootstrap_dependency():
     backend = (ROOT / "backend" / "power_controller.py").read_text(encoding="utf-8")
     assert "~/kace" not in backend
@@ -304,6 +370,35 @@ def test_studio_power_controller_has_no_kace_or_ssh_bootstrap_dependency():
     assert "gpiod" not in backend.lower()
     assert "/machine/device_power/devices" in backend
     assert "/machine/device_power/device" in backend
+
+
+def test_runtime_power_route_cannot_execute_gpio_or_shell_commands():
+    main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+    tree = ast.parse(main_source)
+    api_class = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Api"
+    )
+    power_route = next(
+        node
+        for node in api_class.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "_run_power_action"
+    )
+    route_source = ast.get_source_segment(main_source, power_route).lower()
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(power_route)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert called_attributes.isdisjoint(
+        {"run_command", "system", "popen", "check_call", "check_output"}
+    )
+    assert "_ssh" not in route_source
+    assert all(
+        forbidden not in route_source
+        for forbidden in ("rpi.gpio", "gpiozero", "gpiod", "raspi-gpio", "pinctrl", "sys/class/gpio")
+    )
 
 
 def test_power_button_works_for_selected_host_without_ssh_connection():
@@ -332,6 +427,9 @@ def test_power_button_works_for_selected_host_without_ssh_connection():
 
     assert "sshConnected" not in refresh
     assert "sshConnected" not in toggle
+    assert "renderPrinterPower(await window.pywebview.api[action]" not in toggle
+    assert "await window.pywebview.api[action](currentDeviceIp, powerDevice)" in toggle
+    assert "await refreshPrinterPower()" in toggle
     assert "startPowerPolling()" in connect
     assert "stopPowerPolling()" not in connection_state
 

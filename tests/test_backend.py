@@ -419,40 +419,45 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
-    def test_bootstrap_config_injection_includes_gpio_relay(self):
+    def test_bootstrap_config_injection_preserves_active_low_selection(self):
         import tempfile
         import shutil
         from pathlib import Path
         from backend.imager import inject_config
         from unittest.mock import patch
 
-        temp_boot = tempfile.mkdtemp()
-        try:
-            with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
-                success = inject_config(
-                    disk_number=99,
-                    hostname="kace.local",
-                    wifi_ssid="",
-                    wifi_password="",
-                    ssh_password="validpass123",
-                    dashboard_ui="mainsail",
-                    power_relay=True,
-                    power_device="printer",
-                    power_gpio=20,
-                    power_active_low=True,
-                    restart_klipper_when_powered=True,
-                )
-            self.assertTrue(success)
-            content = (Path(temp_boot) / "kace-bootstrap.txt").read_text(encoding="utf-8")
-            self.assertIn("POWER_RELAY=true", content)
-            self.assertIn("POWER_DEVICE=printer", content)
-            self.assertIn("POWER_GPIO=20", content)
-            self.assertIn("POWER_ACTIVE_LOW=true", content)
-            self.assertIn("POWER_RESTART_KLIPPER=true", content)
-            self.assertIn("POWER_INITIAL_STATE=on", content)
-            self.assertIn("POWER_OFF_WHEN_SHUTDOWN=false", content)
-        finally:
-            shutil.rmtree(temp_boot)
+        for active_low in (False, True):
+            with self.subTest(active_low=active_low):
+                temp_boot = tempfile.mkdtemp()
+                try:
+                    with patch("backend.imager.get_boot_drive_letter", return_value=temp_boot):
+                        success = inject_config(
+                            disk_number=99,
+                            hostname="kace.local",
+                            wifi_ssid="",
+                            wifi_password="",
+                            ssh_password="validpass123",
+                            dashboard_ui="mainsail",
+                            power_relay=True,
+                            power_device="printer",
+                            power_gpio=21,
+                            power_active_low=active_low,
+                            restart_klipper_when_powered=True,
+                        )
+                    self.assertTrue(success)
+                    content = (Path(temp_boot) / "kace-bootstrap.txt").read_text(encoding="utf-8")
+                    self.assertIn("POWER_RELAY=true", content)
+                    self.assertIn("POWER_DEVICE=printer", content)
+                    self.assertIn("POWER_GPIO=21", content)
+                    self.assertIn(
+                        f"POWER_ACTIVE_LOW={'true' if active_low else 'false'}",
+                        content,
+                    )
+                    self.assertIn("POWER_RESTART_KLIPPER=true", content)
+                    self.assertIn("POWER_INITIAL_STATE=on", content)
+                    self.assertIn("POWER_OFF_WHEN_SHUTDOWN=false", content)
+                finally:
+                    shutil.rmtree(temp_boot)
 
     def test_bootstrap_config_rejects_requested_relay_without_gpio(self):
         from backend.imager import inject_config
