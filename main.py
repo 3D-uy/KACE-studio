@@ -31,6 +31,7 @@ from backend.ssh_client import SSHSession
 from backend.power_controller import MoonrakerPowerController, PowerControllerError
 from backend.remote_power_config import RemotePowerConfigError, parse_remote_power_config
 from backend.workflow_events import KaceWorkflowEventParser
+from backend.firmware_workflow import checkpoint_event, parse_checkpoint
 from backend.bootstrap_events import BootstrapEventParser, MachineProtocolDisplayFilter
 from backend.resources import bundled_path, verify_runtime_resources
 from backend.app_paths import application_cache_dir
@@ -164,6 +165,8 @@ class Api:
         self._bootstrap_lock = threading.Lock()
         self._bootstrap_active = False
         self._bootstrap_workflow_id = None
+        self._bootstrap_recovery = None
+        self._last_kace_workflow_state = ""
         self._window = None
         # L8 FIX: Use threading.Event for cross-thread cancel signalling.
         self._flash_cancel_event = threading.Event()
@@ -193,9 +196,12 @@ class Api:
             if event_name in ("workflow_started", "stage_started"):
                 self._bootstrap_active = True
                 self._bootstrap_workflow_id = workflow_id
+                if event_name == "workflow_started":
+                    self._last_kace_workflow_state = ""
             elif BootstrapEventParser.is_terminal(event):
                 self._bootstrap_active = False
                 self._bootstrap_workflow_id = None
+                self._bootstrap_recovery = None
 
         if self._window is not None:
             try:
@@ -222,6 +228,32 @@ class Api:
                 )
             except Exception as exc:
                 print(f"[KACE] Could not forward bootstrap interruption: {exc}")
+        return True
+
+    def _suspend_bootstrap_for_ssh_loss(self, reason: str, *, expected: bool) -> bool:
+        """Preserve a recoverable run when transport ends without failure evidence."""
+        with self._bootstrap_lock:
+            if not self._bootstrap_active:
+                return False
+            workflow_id = self._bootstrap_workflow_id or "pending-bootstrap"
+            self._bootstrap_active = False
+            self._bootstrap_workflow_id = None
+            self._bootstrap_recovery = {
+                "workflow_id": workflow_id,
+                "reason": reason,
+                "expected": bool(expected),
+                "kace_state": self._last_kace_workflow_state,
+            }
+
+        if self._window is not None:
+            try:
+                self._window.evaluate_js(
+                    "window.updateBootstrapDisconnected("
+                    f"{json.dumps(workflow_id)}, {json.dumps(reason)}, "
+                    f"{json.dumps(bool(expected))});"
+                )
+            except Exception as exc:
+                print(f"[KACE] Could not forward recoverable SSH loss: {exc}")
         return True
 
     def _sanitize_error(self, e: Exception) -> str:
@@ -1050,6 +1082,7 @@ class Api:
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen or self._window is None:
                         return
+                self._last_kace_workflow_state = str(event.get("state") or "")
                 try:
                     self._window.evaluate_js(
                         f"window.updateKaceWorkflowEvent({json.dumps(event)});"
@@ -1121,14 +1154,31 @@ class Api:
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen:
                         return
-                interrupted = self._interrupt_bootstrap(
-                    "SSH disconnected before bootstrap emitted a terminal event."
+                expected_disconnect_states = {
+                    "AWAITING_POWER_CYCLE",
+                    "AWAITING_REENUMERATION",
+                    "FIRMWARE_RESTART",
+                    "WAITING_MOONRAKER",
+                    "VERIFYING_CONFIG",
+                }
+                expected = self._last_kace_workflow_state in expected_disconnect_states
+                suspended = self._suspend_bootstrap_for_ssh_loss(
+                    (
+                        "SSH disconnected during an expected restart; reconnect to continue verification."
+                        if expected else
+                        "SSH connection was lost unexpectedly; the remote checkpoint can be resumed after reconnecting."
+                    ),
+                    expected=expected,
                 )
-                if interrupted:
+                if suspended:
                     self.set_device_state(
-                        "BOOTSTRAP_INTERRUPTED",
+                        "BOOTSTRAP_RECOVERABLE",
                         0,
-                        "SSH disconnected before bootstrap completed.",
+                        (
+                            "Expected restart disconnected SSH; reconnect to continue verification."
+                            if expected else
+                            "Unexpected SSH loss; reconnect to resume the saved workflow."
+                        ),
                     )
                 else:
                     # Stale callbacks should not clear the status
@@ -1164,6 +1214,8 @@ class Api:
                 }
             self._bootstrap_active = True
             self._bootstrap_workflow_id = workflow_id
+            self._bootstrap_recovery = None
+            self._last_kace_workflow_state = ""
 
         missing_event = {
             "protocol": "kace-bootstrap/v1",
@@ -1270,6 +1322,17 @@ class Api:
         if not isinstance(deployment, dict):
             return None
         return manifest
+
+    def get_firmware_workflow_checkpoint(self):
+        """Return a validated read-only projection of KACE's resume checkpoint."""
+        raw = self._ssh.read_text_file("kace/firmware-workflow.json")
+        checkpoint = parse_checkpoint(raw)
+        if checkpoint is None:
+            return None
+        return {
+            "checkpoint": checkpoint,
+            "event": checkpoint_event(checkpoint),
+        }
 
     def _read_remote_power_config(self) -> dict:
         reader = getattr(self._ssh, "read_text_file_result", None)

@@ -1234,6 +1234,11 @@ function performSshLogin(username, password) {
                     window.pywebview.api.get_firmware_deployment_manifest()
                         .then(manifest => restoreKaceDeploymentManifest(manifest))
                         .catch(err => console.debug('No firmware deployment manifest available:', err));
+                    window.pywebview.api.get_firmware_workflow_checkpoint()
+                        .then(result => {
+                            if (result && result.event) window.updateKaceWorkflowEvent(result.event);
+                        })
+                        .catch(err => console.debug('No firmware workflow checkpoint available:', err));
                 }
             } else if (isHostKeyMismatch) {
                 term.write(`\r\n\x1b[1;33m[SECURITY ALERT] SSH Host Key Mismatch for ${currentDeviceIp}!\x1b[0m\r\n`);
@@ -1472,11 +1477,14 @@ const KACE_INSTALLATION_STEPS = [
 ];
 
 const KACE_FIRMWARE_DEPLOYMENT_STEPS = [
-    'Deployment planned',
-    'Artifact prepared',
-    'User action',
-    'Automatic flash',
-    'Firmware delivered',
+    'Hardware selected',
+    'Firmware compiled',
+    'Firmware flashed',
+    'MCU verified',
+    'Configuration generated',
+    'Ready to deploy',
+    'Deployment verification',
+    'Workflow completed',
 ];
 
 const KACE_TERMINAL_ERRORS = new Set([
@@ -1492,12 +1500,21 @@ function kaceWorkflowDefinition(kind) {
             steps: KACE_FIRMWARE_DEPLOYMENT_STEPS,
             positions: {
                 DEPLOYMENT_PLANNED: [0, 1],
+                HARDWARE_SELECTED: [0, 1],
+                COMPILE_REQUIRED: [0, 1],
                 PREPARING_ARTIFACT: [0, 1],
                 ARTIFACT_READY: [1, 2],
                 AWAITING_USER_ACTION: [1, 2],
-                ACTION_REQUIRED: [2, -1],
-                FLASHING: [1, 3],
-                FLASHED: [4, -1],
+                AWAITING_FLASH: [1, 2],
+                ACTION_REQUIRED: [1, 2],
+                FLASHING: [1, 2],
+                FLASHED: [2, 3],
+                VERIFYING_MCU: [2, 3],
+                MCU_VERIFIED: [3, 4],
+                CONFIG_GENERATED: [4, 5],
+                READY_TO_DEPLOY: [5, 6],
+                DEPLOYING: [5, 6],
+                COMPLETE: [7, -1],
             },
         };
     }
@@ -1553,8 +1570,9 @@ function renderKaceWorkflow(view) {
     const downloadButton = document.getElementById('kace-firmware-download');
     if (!tracker || !title || !status || !steps || !detail) return;
 
-    const isDone = view.state === 'DONE';
-    const isActionRequired = view.kind === 'firmware_deployment' && view.state === 'ACTION_REQUIRED';
+    const isDone = view.state === 'DONE' || view.state === 'COMPLETE';
+    const isActionRequired = view.kind === 'firmware_deployment' &&
+        ['COMPILE_REQUIRED', 'ARTIFACT_READY', 'AWAITING_FLASH', 'ACTION_REQUIRED'].includes(view.state);
     const isError = KACE_TERMINAL_ERRORS.has(view.state);
     const positionState = isError ? (view.progressState || view.state) : view.state;
     const definition = kaceWorkflowDefinition(view.kind);
@@ -1858,6 +1876,25 @@ window.updateBootstrapInterrupted = function (workflowId, reason) {
         'BOOTSTRAP_INTERRUPTED',
         reason || `Bootstrap ${workflowId || ''} was interrupted.`,
     );
+    return true;
+};
+
+window.updateBootstrapDisconnected = function (workflowId, reason, expected) {
+    bootstrapActive = false;
+    bootstrapFailureHandled = false;
+    const message = reason || (expected
+        ? 'SSH disconnected during an expected restart. Reconnect to continue verification.'
+        : 'SSH was lost unexpectedly. Reconnect to resume the saved checkpoint.');
+    const label = document.getElementById('bootstrap-stage-label');
+    if (label) label.textContent = `⚠ ${message}`;
+    const connSubtitle = document.getElementById('connection-subtitle');
+    if (connSubtitle) {
+        connSubtitle.textContent = message;
+        connSubtitle.style.color = 'var(--warning-color)';
+    }
+    const finishBtn = document.getElementById('finish-btn');
+    if (finishBtn) finishBtn.disabled = true;
+    window.updateDeviceState('BOOTSTRAP_RECOVERABLE', 0, message);
     return true;
 };
 
