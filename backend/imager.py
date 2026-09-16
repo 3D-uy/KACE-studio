@@ -502,7 +502,77 @@ def _build_boot_path(letter: str) -> str:
         return f"{letter}:\\"
     return letter
 
-def get_boot_drive_letter(disk_number: int):
+def _injection_storage_query(command: str) -> dict:
+    if sys.platform != "win32":
+        raise OSError("Boot volume identity verification requires Windows.")
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+         "$ErrorActionPreference = 'Stop'; "
+         "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); " + command],
+        capture_output=True, text=True, encoding="utf-8", **SUBPROCESS_FLAGS,
+    )
+    if result.returncode != 0 or result.stderr.strip() or not result.stdout.strip():
+        raise OSError("Could not verify the injection target.")
+    data = json.loads(result.stdout)
+    if not isinstance(data, dict):
+        raise ValueError("Injection target is absent or ambiguous.")
+    return data
+
+
+def _check_injection_identity(current: dict, expected: dict) -> None:
+    current = _normalize_disk_identity(current)
+    if any(current[field] != expected[field] for field in DISK_IDENTITY_FIELDS):
+        raise ValueError("Injection target disk identity changed.")
+    if current["is_system"] or current["is_boot"] or current["bus_type"] not in ("USB", "SD", "MMC", "1394"):
+        raise ValueError("Injection target disk is unsafe.")
+
+
+_VOLUME_PATH_RE = re.compile(r"\\\\\?\\Volume\{[0-9a-fA-F-]{36}\}\\")
+
+
+def _verified_boot_volume(boot_path: str, identity: dict) -> str:
+    """Bind the mounted volume to its physical disk; return its stable GUID path."""
+    if re.fullmatch(r"[A-Za-z]:\\", boot_path):
+        volume_query = f"Get-Volume -DriveLetter '{boot_path[0]}' -ErrorAction Stop"
+    elif _VOLUME_PATH_RE.fullmatch(boot_path):
+        volume_query = f"Get-Volume -Path '{boot_path}' -ErrorAction Stop"
+    else:
+        raise ValueError("Invalid boot volume path.")
+    data = _injection_storage_query(f"""
+    $volumes = @({volume_query})
+    if ($volumes.Count -ne 1) {{ throw 'Boot volume is absent or ambiguous' }}
+    $volume = $volumes[0]
+    $parts = @(Get-Partition -Volume $volume -ErrorAction Stop)
+    if ($parts.Count -ne 1) {{ throw 'Boot partition is absent or ambiguous' }}
+    $part = $parts[0]
+    $disks = @(Get-Disk -Partition $part -ErrorAction Stop)
+    if ($disks.Count -ne 1) {{ throw 'Physical disk is absent or ambiguous' }}
+    $disk = $disks[0]
+    [PSCustomObject]@{{
+        Disk = [PSCustomObject]@{{
+            Number = $disk.Number; FriendlyName = $disk.FriendlyName
+            Size = $disk.Size; BusType = [string]$disk.BusType
+            IsSystem = $disk.IsSystem; IsBoot = $disk.IsBoot
+            SerialNumber = $disk.SerialNumber; UniqueId = $disk.UniqueId; Path = $disk.Path
+        }}
+        PartitionNumber = $part.PartitionNumber
+        DiskNumber = $part.DiskNumber
+        VolumePath = $volume.Path
+        FileSystem = $volume.FileSystem
+    }} | ConvertTo-Json -Depth 4
+    """)
+    _check_injection_identity(data["Disk"], identity)
+    path = data["VolumePath"]
+    if (data["PartitionNumber"] != 1 or data["DiskNumber"] != identity["number"]
+            or data["FileSystem"] not in ("FAT", "FAT32")
+            or not isinstance(path, str) or not _VOLUME_PATH_RE.fullmatch(path)):
+        raise ValueError("Boot volume does not belong to the authorized target.")
+    if _VOLUME_PATH_RE.fullmatch(boot_path) and path.casefold() != boot_path.casefold():
+        raise ValueError("Boot volume changed before injection.")
+    return path
+
+
+def get_boot_drive_letter(disk_number: int, drive_identity=None):
     """
     Finds the FAT32/FAT partition drive letter of the flashed SD card.
     """
@@ -511,6 +581,12 @@ def get_boot_drive_letter(disk_number: int):
     if not isinstance(disk_number, int):
         raise TypeError(f"disk_number must be an integer, got {type(disk_number).__name__}")
     if sys.platform != "win32":
+        return None
+    try:
+        identity = _normalize_disk_identity(drive_identity or {})
+        if identity["number"] != disk_number:
+            raise ValueError("Disk number does not match the authorized identity.")
+    except (TypeError, ValueError):
         return None
         
     ps_cmd = f"""
@@ -541,6 +617,12 @@ try {{
 }}
 """
     for _ in range(5):  # Retry up to 5 times to let Windows mount the disk
+        try:
+            _check_injection_identity(
+                _injection_storage_query(_disk_query_command(disk_number)), identity,
+            )
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
         res = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True, encoding="utf-8", errors="replace", **SUBPROCESS_FLAGS)
         if "ERROR: PRIVILEGE_REQUIRED" in res.stdout or "PermissionDenied" in res.stdout or "PermissionDenied" in res.stderr:
             print("ERROR: Failed to assign drive letter to boot partition.", file=sys.stderr)
@@ -793,7 +875,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
     finally:
         ctypes.windll.kernel32.CloseHandle(hProcess)
 
-def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, image_type: ImageType | str = ImageType.RASPIOS_VANILLA, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, wifi_security: WifiSecurity | str = WifiSecurity.WPA2) -> bool:
+def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, image_type: ImageType | str = ImageType.RASPIOS_VANILLA, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, wifi_security: WifiSecurity | str = WifiSecurity.WPA2, drive_identity: dict | None = None) -> bool:
     """
     Injects SSH enablement, User credentials, WiFi configuration (wpa_supplicant + NetworkManager),
     and hostname parameters directly to the FAT32 boot partition.
@@ -854,7 +936,14 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
     clean_os_arch  = re.sub(r'[\r\n=]', '', os_arch)  if os_arch  else ''
 
     # Wait for OS mount
-    boot_path = get_boot_drive_letter(disk_number)
+    try:
+        identity = _normalize_disk_identity(drive_identity or {})
+        if identity["number"] != disk_number:
+            raise ValueError("Disk number does not match the authorized identity.")
+    except (TypeError, ValueError):
+        print("Cannot inject configuration without a complete authorized disk identity.", file=sys.stderr)
+        return False
+    boot_path = get_boot_drive_letter(disk_number, drive_identity=identity)
     _dbg(f"get_boot_drive_letter({disk_number}) resolved to: '{boot_path}'")
     if not boot_path or not os.path.exists(boot_path):
         print(f"FAT32 boot partition not mounted or not found on physical disk {disk_number}.", file=sys.stderr)
@@ -887,6 +976,17 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         
         clean_toml_ssid = wifi_ssid.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '')
         clean_toml_password = wifi_password.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '')
+
+        # Resolve the mounted volume's physical owner immediately before the
+        # first mutation. Use its GUID path so later drive-letter reuse cannot
+        # redirect configuration or credentials to another mounted volume.
+        try:
+            boot_path = _verified_boot_volume(boot_path, identity)
+            # Recheck the GUID itself, not the reusable letter used to find it.
+            boot_path = _verified_boot_volume(boot_path, identity)
+        except (OSError, ValueError, TypeError, KeyError):
+            print("Boot volume identity verification failed; configuration was not written.", file=sys.stderr)
+            return False
 
         # C. SSH Enablement
         ssh_marker_paths = (

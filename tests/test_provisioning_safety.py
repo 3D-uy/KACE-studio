@@ -4,10 +4,24 @@ from backend.imager import inject_config
 from backend.provisioning import ImageType, ProvisioningValidationError
 
 
+_TEST_DISK_IDENTITY = {
+    "friendly_name": "Test SD", "size_bytes": 32000000000, "bus_type": "USB",
+    "is_system": False, "is_boot": False, "serial_number": "TEST-SERIAL",
+    "unique_id": "TEST-UNIQUE", "path": "TEST-PHYSICAL-PATH",
+}
+
+
+@pytest.fixture(autouse=True)
+def verified_test_boot_volume(monkeypatch):
+    # These tests exercise file contents in temporary directories. Physical
+    # identity/binding behavior is covered by test_injection_identity.py.
+    monkeypatch.setattr("backend.imager._verified_boot_volume", lambda path, _identity: path)
+
+
 def test_disabling_ssh_removes_markers_and_disables_cloud_init(tmp_path, monkeypatch):
     (tmp_path / "ssh").touch()
     (tmp_path / "ssh.txt").touch()
-    monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda _disk: str(tmp_path))
+    monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda _disk, **_kwargs: str(tmp_path))
 
     assert inject_config(
         disk_number=99,
@@ -18,6 +32,7 @@ def test_disabling_ssh_removes_markers_and_disables_cloud_init(tmp_path, monkeyp
         dashboard_ui="mainsail",
         ssh_enabled=False,
         password_auth=True,
+        drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
     )
 
     assert not (tmp_path / "ssh").exists()
@@ -47,6 +62,7 @@ def test_cloud_init_rejects_multiline_wifi_before_mount_access(tmp_path, monkeyp
             wifi_password=password,
             ssh_password="local-password",
             dashboard_ui="mainsail",
+            drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
         )
     assert mount_called is False
     assert list(tmp_path.iterdir()) == []
@@ -74,6 +90,7 @@ def test_prebaked_headless_wifi_rejects_line_injection_before_mount(tmp_path, mo
             ssh_password="local-password",
             dashboard_ui="mainsail",
             image_type=ImageType.MAINSAILOS_PREBAKED,
+            drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
         )
     assert mount_called is False
 
@@ -84,7 +101,7 @@ def test_prebaked_ssh_disable_is_enforced_on_first_boot(tmp_path, monkeypatch):
     )
     (tmp_path / "ssh").touch()
     (tmp_path / "ssh.txt").touch()
-    monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda _disk: str(tmp_path))
+    monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda _disk, **_kwargs: str(tmp_path))
 
     assert inject_config(
         disk_number=99,
@@ -96,6 +113,7 @@ def test_prebaked_ssh_disable_is_enforced_on_first_boot(tmp_path, monkeypatch):
         ssh_enabled=False,
         password_auth=True,
         image_type=ImageType.MAINSAILOS_PREBAKED,
+        drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
     )
 
     script = (tmp_path / "firstrun.sh").read_text(encoding="utf-8")
@@ -110,7 +128,7 @@ def test_open_wifi_generates_passwordless_network_profiles(tmp_path, monkeypatch
     (tmp_path / "cmdline.txt").write_text(
         "console=tty1 root=PARTUUID=abc-02 rootwait\n", encoding="utf-8"
     )
-    monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda _disk: str(tmp_path))
+    monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda _disk, **_kwargs: str(tmp_path))
 
     assert inject_config(
         disk_number=99,
@@ -120,6 +138,7 @@ def test_open_wifi_generates_passwordless_network_profiles(tmp_path, monkeypatch
         wifi_security="open",
         ssh_password="local-password",
         dashboard_ui="mainsail",
+        drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
     )
 
     wpa = (tmp_path / "wpa_supplicant.conf").read_text(encoding="utf-8")
@@ -134,7 +153,7 @@ def test_open_wifi_generates_passwordless_network_profiles(tmp_path, monkeypatch
 
 
 def test_raw_64_hex_wifi_psk_is_not_hashed_again(tmp_path, monkeypatch):
-    monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda _disk: str(tmp_path))
+    monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda _disk, **_kwargs: str(tmp_path))
     raw_psk = "A1" * 32
     assert inject_config(
         disk_number=99,
@@ -143,6 +162,7 @@ def test_raw_64_hex_wifi_psk_is_not_hashed_again(tmp_path, monkeypatch):
         wifi_password=raw_psk,
         ssh_password="local-password",
         dashboard_ui="mainsail",
+        drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
     )
     wpa = (tmp_path / "wpa_supplicant.conf").read_text(encoding="utf-8")
     assert f"psk={raw_psk.lower()}" in wpa

@@ -56,6 +56,23 @@ from backend.imager import (
 )
 from backend.provisioning import ImageType
 
+import pytest
+
+
+_TEST_DISK_IDENTITY = {
+    "friendly_name": "Test SD", "size_bytes": 32000000000, "bus_type": "USB",
+    "is_system": False, "is_boot": False, "serial_number": "TEST-SERIAL",
+    "unique_id": "TEST-UNIQUE", "path": "TEST-PHYSICAL-PATH",
+}
+
+
+@pytest.fixture(autouse=True)
+def verified_test_boot_volume(monkeypatch):
+    # These tests exercise file contents in temporary directories. Physical
+    # identity/binding behavior is covered by test_injection_identity.py.
+    monkeypatch.setattr("backend.imager._verified_boot_volume", lambda path, _identity: path)
+
+
 class TestKaceBackend(unittest.TestCase):
 
     def test_inject_config_never_writes_boot_files_with_direct_open(self):
@@ -97,7 +114,8 @@ class TestKaceBackend(unittest.TestCase):
                  patch("backend.imager._write_text_atomically", side_effect=fail_userconf_publish), \
                  patch("backend.imager.subprocess.run"):
                 result = imager.inject_config(
-                    7, "printer", "", "", "validpass123", "mainsail"
+                    7, "printer", "", "", "validpass123", "mainsail",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=7),
                 )
 
             self.assertFalse(result)
@@ -175,7 +193,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_ssid="MySSID",
                     wifi_password="MyPassword",
                     ssh_password="kacepwd123",
-                    dashboard_ui="mainsail"
+                    dashboard_ui="mainsail",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
                 
@@ -253,7 +272,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_ssid="",
                     wifi_password="",
                     ssh_password="validpass123",
-                    dashboard_ui="mainsail"
+                    dashboard_ui="mainsail",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 userconf_path = os.path.join(temp_boot, "userconf.txt")
                 with open(userconf_path, "r") as f:
@@ -281,7 +301,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="TestPass",
                     ssh_password="validpass123",
                     dashboard_ui="mainsail",
-                    timezone="America/Sao_Paulo"
+                    timezone="America/Sao_Paulo",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 # wpa_supplicant.conf must use the correct country code
                 wpa_path = os.path.join(temp_boot, "wpa_supplicant.conf")
@@ -330,7 +351,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="TestPass",
                     ssh_password="validpass123",
                     dashboard_ui="mainsail",
-                    timezone=""
+                    timezone="",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 wpa_path = os.path.join(temp_boot, "wpa_supplicant.conf")
                 with open(wpa_path, "r") as f:
@@ -399,7 +421,8 @@ class TestKaceBackend(unittest.TestCase):
                     timezone="Europe/London",
                     pi_model="pi4",
                     os_arch="64bit",
-                    crowsnest=True
+                    crowsnest=True,
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 bootstrap_path = os.path.join(temp_boot, "kace-bootstrap.txt")
                 self.assertTrue(os.path.exists(bootstrap_path))
@@ -443,6 +466,7 @@ class TestKaceBackend(unittest.TestCase):
                             power_gpio=21,
                             power_active_low=active_low,
                             restart_klipper_when_powered=True,
+                            drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                         )
                     self.assertTrue(success)
                     content = (Path(temp_boot) / "kace-bootstrap.txt").read_text(encoding="utf-8")
@@ -473,6 +497,7 @@ class TestKaceBackend(unittest.TestCase):
                 power_relay=True,
                 power_device="printer",
                 power_gpio=None,
+                drive_identity=dict(_TEST_DISK_IDENTITY, number=1),
             )
 
     def test_bootstrap_config_rejects_invalid_requested_relay_device(self):
@@ -489,6 +514,7 @@ class TestKaceBackend(unittest.TestCase):
                 power_relay=True,
                 power_device="printer power",
                 power_gpio=20,
+                drive_identity=dict(_TEST_DISK_IDENTITY, number=1),
             )
 
     def test_wifi_credentials_injection_escaping(self):
@@ -515,7 +541,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_ssid=wifi_ssid,
                     wifi_password=wifi_password,
                     ssh_password="kacepwd123",
-                    dashboard_ui="mainsail"
+                    dashboard_ui="mainsail",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
                 
@@ -597,7 +624,8 @@ class TestKaceBackend(unittest.TestCase):
                             wifi_ssid="ssid",
                             wifi_password="validwifi123",
                             ssh_password="validpass123",
-                            dashboard_ui="mainsail"
+                            dashboard_ui="mainsail",
+                            drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                         )
         finally:
             shutil.rmtree(temp_boot)
@@ -635,7 +663,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_ssid="ssid",
                     wifi_password="validwifi123",
                     ssh_password="validpass123",
-                    dashboard_ui="both"
+                    dashboard_ui="both",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
                 
@@ -747,7 +776,8 @@ class TestKaceBackend(unittest.TestCase):
                 wifi_ssid="ssid",
                 wifi_password="validwifi123",
                 ssh_password="validpass123",
-                dashboard_ui="mainsail"
+                dashboard_ui="mainsail",
+                drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
             )
             self.assertFalse(success)
             
@@ -764,7 +794,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_ssid="ssid",
                     wifi_password="validwifi123",
                     ssh_password="validpass123",
-                    dashboard_ui="mainsail"
+                    dashboard_ui="mainsail",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertFalse(success)
         finally:
@@ -844,7 +875,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="MyPassword",
                     ssh_password="kacepwd123",
                     dashboard_ui="mainsail",
-                    timezone="America/Sao_Paulo"
+                    timezone="America/Sao_Paulo",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
                 
@@ -908,7 +940,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_ssid="MySSID",
                     wifi_password="MyPassword",
                     ssh_password="mysecretpassword",
-                    dashboard_ui="mainsail"
+                    dashboard_ui="mainsail",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
                 
@@ -967,7 +1000,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="MyPassword",
                     ssh_password="kacepwd123",
                     dashboard_ui="mainsail",
-                    timezone="America/Sao_Paulo"
+                    timezone="America/Sao_Paulo",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
                 
@@ -1032,7 +1066,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_ssid="",
                     wifi_password="",
                     ssh_password="kacepwd123",
-                    dashboard_ui="mainsail"
+                    dashboard_ui="mainsail",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
                 
@@ -1067,7 +1102,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_ssid="MySSID",
                     wifi_password="MyPassword",
                     ssh_password="kacepwd123",
-                    dashboard_ui="mainsail"
+                    dashboard_ui="mainsail",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 # Should return True because cmdline.txt missing is skipped gracefully
                 self.assertTrue(success)
@@ -1100,7 +1136,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_ssid="MySSID",
                     wifi_password="MyPassword",
                     ssh_password="kacepwd123",
-                    dashboard_ui="mainsail"
+                    dashboard_ui="mainsail",
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
                 
@@ -1230,7 +1267,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="MyPassword",
                     ssh_password="kacepwd123",
                     dashboard_ui="mainsail",
-                    image_type=ImageType.MAINSAILOS_PREBAKED
+                    image_type=ImageType.MAINSAILOS_PREBAKED,
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
                 
@@ -1276,7 +1314,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="MyPassword",
                     ssh_password="kacepwd123",
                     dashboard_ui="mainsail",
-                    image_type=ImageType.RASPIOS_VANILLA
+                    image_type=ImageType.RASPIOS_VANILLA,
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
                 self.assertTrue(os.path.exists(cfg_path))
@@ -1331,7 +1370,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="TestPass",
                     ssh_password="validpass123",
                     dashboard_ui="mainsail",
-                    image_type=ImageType.MAINSAILOS_PREBAKED
+                    image_type=ImageType.MAINSAILOS_PREBAKED,
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
 
@@ -1375,7 +1415,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="MySecretPass",
                     ssh_password="validpass123",
                     dashboard_ui="mainsail",
-                    image_type=ImageType.RASPIOS_VANILLA
+                    image_type=ImageType.RASPIOS_VANILLA,
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
 
@@ -1422,7 +1463,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="TestPass",
                     ssh_password="validpass123",
                     dashboard_ui="mainsail",
-                    image_type=ImageType.MAINSAILOS_PREBAKED
+                    image_type=ImageType.MAINSAILOS_PREBAKED,
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
 
@@ -1470,7 +1512,8 @@ class TestKaceBackend(unittest.TestCase):
                     ssh_password="validpass123",
                     dashboard_ui="mainsail",
                     timezone="America/New_York",
-                    image_type=ImageType.MAINSAILOS_PREBAKED
+                    image_type=ImageType.MAINSAILOS_PREBAKED,
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
 
@@ -1511,7 +1554,8 @@ class TestKaceBackend(unittest.TestCase):
                     wifi_password="TestPass",
                     ssh_password="validpass123",
                     dashboard_ui="mainsail",
-                    image_type=ImageType.RASPIOS_VANILLA
+                    image_type=ImageType.RASPIOS_VANILLA,
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
 
@@ -1573,7 +1617,8 @@ class TestKaceBackend(unittest.TestCase):
                     dashboard_ui="mainsail",
                     username="customuser",
                     password_auth=True,
-                    image_type=ImageType.MAINSAILOS_PREBAKED
+                    image_type=ImageType.MAINSAILOS_PREBAKED,
+                    drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                 )
                 self.assertTrue(success)
 
@@ -1645,6 +1690,7 @@ class TestKaceBackend(unittest.TestCase):
                             ImageType.MAINSAILOS_PREBAKED
                             if mode else ImageType.RASPIOS_VANILLA
                         ),
+                        drive_identity=dict(_TEST_DISK_IDENTITY, number=99),
                     )
                     self.assertTrue(success)
 

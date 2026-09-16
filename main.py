@@ -375,7 +375,7 @@ class Api:
             self.set_device_state("ERROR", 0, "High-risk HDD/SSD destination requires reinforced confirmation.")
             return False
 
-        drive_identity = selected_snapshot
+        drive_identity = dict(selected_identity)
 
         # Gather read-only environmental facts, then validate the entire request
         # before creating a worker, resolving/downloading an image, or writing disk.
@@ -952,6 +952,7 @@ class Api:
                 power_active_low=provisioning.power_active_low,
                 restart_klipper_when_powered=provisioning.restart_klipper_when_powered,
                 wifi_security=provisioning.wifi_security,
+                drive_identity=drive_identity,
             )
 
             if inject_success:
