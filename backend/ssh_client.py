@@ -16,6 +16,7 @@ from typing import Callable
 KNOWN_HOSTS_LOCK_TIMEOUT_SECONDS = 5.0
 DEFAULT_SSH_CONNECT_DEADLINE_SECONDS = 30.0
 SSH_CONNECT_DEADLINE_ENV = "KACE_STUDIO_SSH_CONNECT_DEADLINE_S"
+SFTP_TIMEOUT_SECONDS = 5.0
 _known_hosts_thread_lock = threading.RLock()
 
 
@@ -565,13 +566,43 @@ class SSHSession:
         self._close_transport_objects(channel, client)
 
     def get_sftp(self):
-        """Returns an open paramiko SFTP client, or None if not connected."""
-        if self.client and self.client.get_transport() and self.client.get_transport().is_active():
-            try:
-                return self.client.open_sftp()
-            except Exception:
-                return None
-        return None
+        """Open SFTP with bounded initialization and channel read/write waits."""
+        client = self.client
+        transport = client.get_transport() if client else None
+        if not transport or not transport.is_active():
+            return None
+        channel = None
+        timer = None
+        opened = False
+        try:
+            channel = transport.open_session(timeout=SFTP_TIMEOUT_SECONDS)
+            channel.settimeout(SFTP_TIMEOUT_SECONDS)
+            # Paramiko's subsystem acknowledgement ignores Channel.settimeout.
+            # Closing this channel wakes that wait without closing another session.
+            timer = threading.Timer(
+                SFTP_TIMEOUT_SECONDS, self._close_transport_objects, args=(channel, None),
+            )
+            timer.daemon = True
+            timer.name = "kace-sftp-init-timeout"
+            timer.start()
+            channel.invoke_subsystem("sftp")
+            sftp = paramiko.SFTPClient(channel)
+            if channel.closed:
+                raise TimeoutError("SFTP channel closed during initialization.")
+            opened = True
+            return sftp
+        except Exception as exc:
+            print(f"SFTP initialization failed: {exc}")
+            return None
+        finally:
+            if timer is not None:
+                timer.cancel()
+            if not opened:
+                if channel is None:
+                    # Paramiko may retain a pending channel when opening times out.
+                    self._discard_client(client)
+                else:
+                    self._close_transport_objects(channel, None)
 
     def list_directory(self, path: str) -> list:
         """Returns list of dicts: {name, is_dir, size, modified}"""
