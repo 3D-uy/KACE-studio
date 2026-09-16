@@ -17,6 +17,7 @@ KNOWN_HOSTS_LOCK_TIMEOUT_SECONDS = 5.0
 DEFAULT_SSH_CONNECT_DEADLINE_SECONDS = 30.0
 SSH_CONNECT_DEADLINE_ENV = "KACE_STUDIO_SSH_CONNECT_DEADLINE_S"
 SFTP_TIMEOUT_SECONDS = 5.0
+SSH_INPUT_TIMEOUT_SECONDS = 5.0
 _known_hosts_thread_lock = threading.RLock()
 
 
@@ -264,6 +265,7 @@ class SSHSession:
         self.channel = None
         self.running = False
         self._state_lock = threading.RLock()
+        self._send_lock = threading.Lock()
 
     def _discard_client(self, client) -> None:
         with self._state_lock:
@@ -530,12 +532,39 @@ class SSHSession:
         """
         Sends keyboard input to the running terminal channel.
         """
-        if self.channel and not self.channel.closed:
+        channel = self.channel
+        if channel and not channel.closed:
+            acquired = False
             try:
-                self.channel.send(data)
-                return True
+                payload = data.encode("utf-8")
+                deadline = time.monotonic() + SSH_INPUT_TIMEOUT_SECONDS
+                acquired = self._send_lock.acquire(timeout=SSH_INPUT_TIMEOUT_SECONDS)
+                if not acquired:
+                    raise TimeoutError("SSH input timed out waiting for another send")
+                offset = 0
+                while True:
+                    if self.channel is not channel or channel.closed:
+                        raise OSError("SSH terminal channel changed or closed")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("SSH input timed out before completion")
+                    if offset == len(payload):
+                        return True
+                    # Do not change the shared channel timeout: recv() runs in
+                    # another thread. Only this lock's owner consumes the send
+                    # window, so send_ready() avoids waiting for flow control.
+                    if not channel.send_ready():
+                        time.sleep(min(0.01, remaining))
+                        continue
+                    sent = channel.send(payload[offset:])
+                    if sent <= 0:
+                        raise OSError("SSH terminal send made no progress")
+                    offset += sent
             except Exception as e:
                 print(f"Error sending SSH input: {e}")
+            finally:
+                if acquired:
+                    self._send_lock.release()
         return False
 
     def resize_pty(self, cols: int, rows: int):
