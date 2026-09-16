@@ -97,62 +97,64 @@ class Win32DiskWriter:
         ]
         self._DeviceIoControl.restype = wintypes.BOOL
 
-        # 1. Lock and dismount all volumes on this disk
-        if disk_number is not None:
+        # Construction must fail before opening the disk if any volume is unsafe.
+        try:
             volumes = self._get_disk_volumes(disk_number)
             safe_print_out(f"STATUS: Found volume access paths for locking: {volumes}")
             for vol_path in volumes:
-                try:
+                h_vol = self._CreateFileW(
+                    vol_path,
+                    GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    None,
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    None
+                )
+                # Fallback to GENERIC_READ
+                if self._is_invalid(h_vol):
                     h_vol = self._CreateFileW(
                         vol_path,
-                        GENERIC_READ | GENERIC_WRITE,
+                        GENERIC_READ,
                         FILE_SHARE_READ | FILE_SHARE_WRITE,
                         None,
                         OPEN_EXISTING,
                         FILE_ATTRIBUTE_NORMAL,
                         None
                     )
-                    # Fallback to GENERIC_READ
-                    if self._is_invalid(h_vol):
-                        h_vol = self._CreateFileW(
-                            vol_path,
-                            GENERIC_READ,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE,
-                            None,
-                            OPEN_EXISTING,
-                            FILE_ATTRIBUTE_NORMAL,
-                            None
-                        )
-                    
-                    if not self._is_invalid(h_vol):
-                        bytes_returned = wintypes.DWORD(0)
-                        res_lock = self._DeviceIoControl(h_vol, 0x00090018, None, 0, None, 0, ctypes.byref(bytes_returned), None)
-                        res_dismount = self._DeviceIoControl(h_vol, 0x00090020, None, 0, None, 0, ctypes.byref(bytes_returned), None)
-                        self.volume_handles.append(h_vol)
-                        if not res_lock:
-                            self.lock_failed = True
-                            safe_print_err(f"[WARNING] Failed to lock volume {vol_path}. Another process may be using the drive.")
-                        safe_print_out(f"STATUS: Locked and dismounted volume {vol_path} (Lock: {res_lock}, Dismount: {res_dismount})")
-                    else:
-                        err_code = kernel32.GetLastError()
-                        safe_print_err(f"Warning: Failed to open volume handle for {vol_path}: GetLastError {err_code}")
-                except Exception as vol_err:
-                    safe_print_err(f"Warning: Exception locking volume {vol_path}: {vol_err}")
+                if self._is_invalid(h_vol):
+                    err_code = kernel32.GetLastError()
+                    raise OSError(f"Failed to open volume {vol_path}: GetLastError {err_code}")
+                # Register ownership before either IOCTL can fail or raise.
+                self.volume_handles.append(h_vol)
+                bytes_returned = wintypes.DWORD(0)
+                if not self._DeviceIoControl(h_vol, 0x00090018, None, 0, None, 0, ctypes.byref(bytes_returned), None):
+                    err_code = kernel32.GetLastError()
+                    raise OSError(f"Failed to lock volume {vol_path}: GetLastError {err_code}")
+                if not self._DeviceIoControl(h_vol, 0x00090020, None, 0, None, 0, ctypes.byref(bytes_returned), None):
+                    err_code = kernel32.GetLastError()
+                    raise OSError(f"Failed to dismount volume {vol_path}: GetLastError {err_code}")
+                safe_print_out(f"STATUS: Locked and dismounted volume {vol_path}")
 
-        # 2. Open physical drive handle
-        self.handle = self._CreateFileW(
-            self.physical_path,
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            None,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            None
-        )
-        
-        if self._is_invalid(self.handle):
-            err_code = kernel32.GetLastError()
-            raise OSError(None, f"CreateFileW failed with GetLastError: {err_code}", self.physical_path, err_code)
+            # Open the physical drive only after every volume has been secured.
+            self.handle = self._CreateFileW(
+                self.physical_path,
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                None
+            )
+            if self._is_invalid(self.handle):
+                err_code = kernel32.GetLastError()
+                raise OSError(None, f"CreateFileW failed with GetLastError: {err_code}", self.physical_path, err_code)
+        except BaseException:
+            self.lock_failed = True
+            # __exit__ is not called when construction fails. Closing the volume
+            # handles also releases any locks already acquired.
+            self.close()
+            raise
 
     def _is_invalid(self, handle):
         return handle is None or handle == 0 or handle == -1 or handle == 0xFFFFFFFF or handle == 0xFFFFFFFFFFFFFFFF
@@ -161,23 +163,31 @@ class Win32DiskWriter:
         # SEC FIX: Runtime guard replacing assert (assert is disabled with -O).
         if not isinstance(disk_number, int):
             raise TypeError(f"disk_number must be an integer, got {type(disk_number).__name__}")
-        try:
-            res = subprocess.run(["powershell", "-Command", f"Get-Partition -DiskNumber {disk_number} | Select-Object -ExpandProperty AccessPaths"], capture_output=True, text=True, encoding="utf-8", **SUBPROCESS_FLAGS)
-            if res.returncode == 0:
-                paths = []
-                for line in res.stdout.splitlines():
-                    line = line.strip()
-                    if line:
-                        if line.endswith("\\"):
-                            line = line[:-1]
-                        if len(line) == 2 and line.endswith(":"):
-                            paths.append(f"\\\\.\\{line}")
-                        else:
-                            paths.append(line)
-                return list(set(paths))
-        except Exception as e:
-            safe_print_err(f"Warning: Failed to query partitions for locking: {e}")
-        return []
+        # CIM enumeration can return zero partitions without treating a query
+        # failure (including PowerShell non-terminating errors) as an empty disk.
+        command = (
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
+            "Get-CimInstance -Namespace root/Microsoft/Windows/Storage "
+            f"-ClassName MSFT_Partition -Filter 'DiskNumber = {disk_number}' -ErrorAction Stop "
+            "| Select-Object -ExpandProperty AccessPaths -ErrorAction Stop"
+        )
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True, text=True, encoding="utf-8", **SUBPROCESS_FLAGS,
+        )
+        if res.returncode != 0 or res.stderr.strip():
+            raise OSError(f"Failed to enumerate volumes for disk {disk_number}: {res.stderr.strip()}")
+        paths = []
+        for line in res.stdout.splitlines():
+            line = line.strip()
+            if line:
+                if line.endswith("\\"):
+                    line = line[:-1]
+                if len(line) == 2 and line.endswith(":"):
+                    paths.append(f"\\\\.\\{line}")
+                else:
+                    paths.append(line)
+        return list(set(paths))
     def write(self, data: bytes):
         if self._is_invalid(self.handle):
             raise OSError("Handle is closed or invalid.")
