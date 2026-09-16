@@ -78,6 +78,97 @@ function establish(session) {
 
 
 CASES = {
+    "on_off_waits_for_observed_state_and_blocks_duplicate_commands": r"""
+        const actions = [];
+        for (const action of ['power_on', 'power_off']) {
+            api[action] = (...args) => {actions.push(action); return queue('command', args);};
+        }
+        select('A.local');
+        const a = establish(1);
+        const button = document.getElementById('printer-power-btn');
+        const label = document.getElementById('printer-power-state');
+        assert.equal(button.disabled, true);
+        await togglePrinterPower();
+        assert.equal(requests.command.length, 0);
+        requests.status.at(-1).resolve(result(a, 'off'));
+        await tick();
+
+        for (const [action, observed] of [['power_on', 'on'], ['power_off', 'off']]) {
+            assert.equal(button.disabled, false);
+            const previous = printerPowerStatus;
+            const polls = requests.status.length;
+            const commands = requests.command.length;
+            const toggle = togglePrinterPower();
+            assert.equal(actions.at(-1), action);
+            assert.deepEqual(requests.command.at(-1).args, ['a.local', 'shared_relay', a]);
+            assert.equal(button.disabled, true);
+            assert.equal(label.textContent, 'init');
+            await togglePrinterPower();
+            await refreshPrinterPower();
+            assert.equal(requests.command.length, commands + 1);
+            assert.equal(requests.status.length, polls);
+
+            // An acknowledgement is not the observed relay state.
+            requests.command.at(-1).resolve(result(a, previous));
+            await tick();
+            assert.equal(printerPowerRequestActive, false);
+            assert.equal(requests.status.length, polls + 1);
+            assert.deepEqual(requests.status.at(-1).args, ['a.local', 'shared_relay', a]);
+            assert.equal(label.textContent, 'init');
+            assert.equal(button.disabled, true);
+            await togglePrinterPower();
+            assert.equal(requests.command.length, commands + 1);
+
+            requests.status.at(-1).resolve(result(a, observed));
+            await toggle;
+            assert.equal(printerPowerStatus, observed);
+            assert.equal(label.textContent, observed);
+            assert.equal(button.disabled, false);
+        }
+        assert.deepEqual(actions, ['power_on', 'power_off']);
+    """,
+    "power_errors_disable_actions_and_allow_polling_recovery": r"""
+        select('A.local');
+        const a = establish(1);
+        const button = document.getElementById('printer-power-btn');
+        const label = document.getElementById('printer-power-state');
+        requests.status.at(-1).reject(new Error('Moonraker unreachable'));
+        await tick();
+        assert.equal(label.textContent, 'error');
+        assert.equal(button.disabled, true);
+        assert.equal(powerStatusRequest, null);
+        await togglePrinterPower();
+        assert.equal(requests.command.length, 0);
+
+        const recovered = refreshPrinterPower();
+        requests.status.at(-1).resolve(result(a, 'off'));
+        await recovered;
+        assert.equal(button.disabled, false);
+        const toggle = togglePrinterPower();
+        const polls = requests.status.length;
+        requests.command.at(-1).reject(new Error('Command failed'));
+        await tick();
+        assert.equal(printerPowerRequestActive, false);
+        assert.equal(label.textContent, 'error');
+        assert.equal(button.disabled, true);
+        assert.equal(requests.status.length, polls + 1);
+        // A reachable device reporting an error must also remain disabled.
+        requests.status.at(-1).resolve(result(a, 'error'));
+        await toggle;
+        assert.equal(printerPowerAvailable, true);
+        assert.equal(button.disabled, true);
+        assert.equal(powerStatusRequest, null);
+        await togglePrinterPower();
+        assert.equal(requests.command.length, 1);
+
+        const retry = refreshPrinterPower();
+        requests.status.at(-1).resolve(result(a, 'on'));
+        await retry;
+        assert.equal(label.textContent, 'on');
+        assert.equal(button.disabled, false);
+        assert.equal(printerPowerRequestActive, false);
+        assert.deepEqual(powerContext, a);
+    """,
     "selection_and_late_status": r"""
         select('A.local');
         assert.equal(printerPowerAvailable, false);
