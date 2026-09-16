@@ -28,15 +28,19 @@ class MoonrakerPowerController:
         *,
         http_client=None,
         poll_interval: float = 0.5,
+        authorize=None,
     ):
         if not isinstance(device, str) or not _DEVICE_RE.fullmatch(device):
             raise ValueError("POWER_DEVICE is missing or invalid")
         self.device = device
         self._http = http_client or MoonrakerHttpClient(host)
         self.poll_interval = float(poll_interval)
+        self._authorize = authorize
 
     def get_status(self) -> str:
         """Return the real Moonraker state: on, off, init, or error."""
+        if self._authorize is not None:
+            self._authorize()
         try:
             body = self._http.get("/machine/device_power/devices")
         except MoonrakerHttpError as exc:
@@ -72,6 +76,8 @@ class MoonrakerPowerController:
 
     def _set_and_confirm(self, action: str, timeout: float) -> str:
         self.wait_until_ready(timeout=timeout)
+        if self._authorize is not None:
+            self._authorize()
         try:
             self._http.post(
                 "/machine/device_power/device",

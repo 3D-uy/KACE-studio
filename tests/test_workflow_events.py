@@ -126,7 +126,7 @@ def test_legacy_sessions_without_kace_events_remain_supported():
     assert parser.feed(legacy) == []
     assert parser.workflows == {}
     app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
-    assert "parseBootstrapProgress(data)" in app_js
+    assert "parseBootstrapProgress(data, context)" in app_js
 
 
 def test_firmware_deployment_events_preserve_method_artifact_and_instructions():

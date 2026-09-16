@@ -19,6 +19,12 @@ let printerPowerAvailable = false;
 let printerPowerRequestActive = false;
 let printerPowerPollTimer = null;
 let remotePowerAuthority = null;
+let powerSelection = 0;
+let powerContext = null;
+let powerTargetReady = Promise.resolve(false);
+let powerRequestSequence = 0;
+let powerStatusRequest = null;
+let powerAuthorityRequest = 0;
 
 let userPreferences = { theme: 'dark', kace_auto_scan: true, form_state: {} };
 
@@ -1206,12 +1212,19 @@ function handleLoginInput(data) {
 }
 
 function performSshLogin(username, password) {
+    resetPowerTarget(currentDeviceIp);
+    const selection = powerSelection;
+    const host = currentDeviceIp;
     if (window.pywebview && window.pywebview.api) {
         // H4 FIX: Pass password directly to the API call without re-storing in any
         // wider-scope variable. Clear it from the parameter before the Promise resolves.
-        window.pywebview.api.connect_ssh(currentDeviceIp, username, password, term.cols, term.rows).then(res => {
+        powerTargetReady.then(ready => {
+            if (!ready || selection !== powerSelection) throw new Error('Device selection is unavailable');
+            return window.pywebview.api.connect_ssh(host, username, password, term.cols, term.rows, selection);
+        }).then(res => {
             // Clear the local password reference on resolution
             password = '';
+            if (selection !== powerSelection) return;
             loginPassword = '';
             currentLoginInput = '';
 
@@ -1225,7 +1238,7 @@ function performSshLogin(username, password) {
                 applyRemotePowerConfig(res && res.power_config ? res.power_config : {
                     status: 'error',
                     detail: 'SSH connected but remote power configuration was not returned',
-                });
+                }, selection);
                 loginState = 'DISCONNECTED';
 
                 // Synchronize terminal dimensions with the remote PTY
@@ -1255,6 +1268,7 @@ function performSshLogin(username, password) {
         }).catch(err => {
             // Clear password on error path too
             password = '';
+            if (selection !== powerSelection) return;
             loginPassword = '';
             currentLoginInput = '';
             term.write(`\r\n\x1b[1;31m[Error] Connection error: ${err}\x1b[0m\r\n`);
@@ -1264,6 +1278,7 @@ function performSshLogin(username, password) {
     } else {
         // Mock connection
         setTimeout(() => {
+            if (selection !== powerSelection) return;
             loginPassword = '';
             currentLoginInput = '';
             const expectedUser = document.getElementById('ssh-username').value.trim() || 'kace';
@@ -1287,9 +1302,7 @@ function performSshLogin(username, password) {
 function connectToDevice(ip, name) {
     currentDeviceIp = ip;
     currentDeviceName = name;
-    // A remote schema is authoritative only for the device it was read from.
-    remotePowerAuthority = null;
-    startPowerPolling();
+    resetPowerTarget(ip);
 
     const terminalNav = document.getElementById('terminal-nav-btn');
     terminalNav.click(); // Switch to terminal workspace tab
@@ -1767,7 +1780,7 @@ function setBootstrapStage(stageId) {
     }
 }
 
-function completeBootstrapSuccess(message) {
+function completeBootstrapSuccess(message, context) {
     bootstrapActive = false;
     BOOTSTRAP_STAGES.forEach(stage => {
         const el = document.getElementById('bstage-' + stage.id);
@@ -1786,9 +1799,7 @@ function completeBootstrapSuccess(message) {
     }
     window.updateDeviceState('BOOTSTRAPPED', 100, message || 'Bootstrap completed successfully.');
     if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.get_remote_power_config()
-            .then(result => applyRemotePowerConfig(result))
-            .catch(error => applyRemotePowerConfig({ status: 'error', detail: String(error) }));
+        refreshRemotePowerConfig(context);
     }
     setTimeout(() => {
         const tracker = document.getElementById('bootstrap-progress-tracker');
@@ -1822,7 +1833,7 @@ function completeBootstrapTerminal(state, message) {
     window.updateDeviceState(state, 0, message);
 }
 
-window.updateBootstrapEvent = function (event) {
+window.updateBootstrapEvent = function (event, context) {
     if (!event || event.protocol !== 'kace-bootstrap/v1') return false;
     const workflowId = event.workflow_id;
     const sequence = event.sequence;
@@ -1847,7 +1858,7 @@ window.updateBootstrapEvent = function (event) {
         return true;
     }
     if (eventName === 'workflow_succeeded') {
-        completeBootstrapSuccess('Bootstrap and KACE wizard completed successfully.');
+        completeBootstrapSuccess('Bootstrap and KACE wizard completed successfully.', context);
         return true;
     }
     if (eventName === 'workflow_cancelled') {
@@ -1898,7 +1909,7 @@ window.updateBootstrapDisconnected = function (workflowId, reason, expected) {
     return true;
 };
 
-function parseBootstrapProgress(data) {
+function parseBootstrapProgress(data, context) {
     bootstrapBuffer += data;
     if (bootstrapBuffer.length > 8000) {
         bootstrapBuffer = bootstrapBuffer.slice(-3000);
@@ -1924,16 +1935,16 @@ function parseBootstrapProgress(data) {
     // Detect completion banner
     if (!bootstrapAuthoritativeSeen && !bootstrapFailureHandled &&
         bootstrapBuffer.includes('Bootstrap complete! KACE wizard finished successfully.')) {
-        completeBootstrapSuccess('Bootstrap completed through the legacy compatibility marker.');
+        completeBootstrapSuccess('Bootstrap completed through the legacy compatibility marker.', context);
     }
 }
 
 // Push data from Python SSH output stream into xterm terminal
-window.writeTerminalData = function (data) {
+window.writeTerminalData = function (data, context) {
     if (term) {
         term.write(data);
     }
-    parseBootstrapProgress(data);
+    parseBootstrapProgress(data, context);
 };
 
 function updateConnectionStatus(connected) {
@@ -1986,17 +1997,73 @@ function renderPrinterPower(result) {
         (result && result.device ? `${result.device}: ${status}` : `Power: ${status}`);
 }
 
-function applyRemotePowerConfig(result) {
-    remotePowerAuthority = result && typeof result === 'object' ? result : {
-        status: 'error',
-        detail: 'Remote power configuration response is invalid',
-    };
-    refreshPrinterPower();
+function resetPowerTarget(host) {
+    powerSelection += 1;
+    powerRequestSequence += 1;
+    powerStatusRequest = null;
+    powerAuthorityRequest += 1;
+    powerContext = null;
+    remotePowerAuthority = null;
+    printerPowerRequestActive = false;
+    stopPowerPolling();
+    renderPrinterPower({ available: false, status: 'init', detail: 'Connect to this device to enable power controls' });
+    powerTargetReady = window.pywebview && window.pywebview.api
+        ? window.pywebview.api.select_power_target(host, powerSelection).catch(() => false)
+        : Promise.resolve(false);
+}
+
+function samePowerContext(left, right) {
+    return Boolean(left && right && left.host === right.host &&
+        left.selection === right.selection && left.session === right.session);
+}
+
+function currentPowerContext(context) {
+    return samePowerContext(context, powerContext) && context.selection === powerSelection &&
+        context.host === currentDeviceIp.trim().toLowerCase();
+}
+
+window.invalidatePowerSession = function(context) {
+    if (context && context.selection === powerSelection &&
+        context.host === currentDeviceIp.trim().toLowerCase() &&
+        (!powerContext || samePowerContext(context, powerContext))) {
+        resetPowerTarget(currentDeviceIp);
+    }
+};
+
+function applyRemotePowerConfig(result, selection) {
+    if (selection !== powerSelection) return;
+    const context = result && result.power_context;
+    if (!context || context.selection !== selection || !Number.isInteger(context.session) ||
+        context.host !== currentDeviceIp.trim().toLowerCase() ||
+        (powerContext && !samePowerContext(context, powerContext))) return;
+    powerContext = context;
+    remotePowerAuthority = result;
+    startPowerPolling();
+}
+
+async function refreshRemotePowerConfig(context) {
+    if (!currentPowerContext(context)) return;
+    const request = ++powerAuthorityRequest;
+    remotePowerAuthority = null;
+    powerRequestSequence += 1;
+    powerStatusRequest = null;
+    renderPrinterPower({ available: false, status: 'init', detail: 'Reading this device’s power configuration…' });
+    try {
+        const result = await window.pywebview.api.get_remote_power_config(context);
+        if (request === powerAuthorityRequest && currentPowerContext(context)) {
+            applyRemotePowerConfig(result, context.selection);
+        }
+    } catch (error) {
+        if (request === powerAuthorityRequest && currentPowerContext(context)) {
+            renderPrinterPower({ available: false, status: 'error', detail: String(error) });
+        }
+    }
 }
 
 function selectedPowerDevice() {
     const suggested = document.getElementById('power-device-name').value.trim();
-    if (remotePowerAuthority === null || remotePowerAuthority.status === 'absent') {
+    if (!currentPowerContext(powerContext) || remotePowerAuthority === null) return '';
+    if (remotePowerAuthority.status === 'absent') {
         return suggested;
     }
     if (remotePowerAuthority.status !== 'configured' ||
@@ -2007,7 +2074,7 @@ function selectedPowerDevice() {
 }
 
 async function refreshPrinterPower() {
-    if (printerPowerRequestActive || !window.pywebview || !window.pywebview.api) return;
+    if (printerPowerRequestActive || powerStatusRequest !== null || !window.pywebview || !window.pywebview.api) return;
     const powerDevice = selectedPowerDevice();
     if (!currentDeviceIp || !powerDevice) {
         const remoteDetail = remotePowerAuthority && remotePowerAuthority.status !== 'absent'
@@ -2020,19 +2087,26 @@ async function refreshPrinterPower() {
         });
         return;
     }
+    const context = powerContext;
+    const request = ++powerRequestSequence;
+    powerStatusRequest = request;
     try {
-        renderPrinterPower(
-            await window.pywebview.api.get_power_status(currentDeviceIp, powerDevice)
-        );
+        const result = await window.pywebview.api.get_power_status(context.host, powerDevice, context);
+        if (request === powerRequestSequence && currentPowerContext(context) &&
+            samePowerContext(result && result.power_context, context)) renderPrinterPower(result);
     } catch (error) {
-        renderPrinterPower({ available: false, status: 'error', detail: String(error) });
+        if (request === powerRequestSequence && currentPowerContext(context)) {
+            renderPrinterPower({ available: false, status: 'error', detail: String(error) });
+        }
+    } finally {
+        if (powerStatusRequest === request) powerStatusRequest = null;
     }
 }
 
 function startPowerPolling() {
     stopPowerPolling();
-    if (!currentDeviceIp) {
-        renderPrinterPower({ available: false, status: 'init', detail: 'Select a Moonraker device first' });
+    if (!currentPowerContext(powerContext) || !selectedPowerDevice()) {
+        renderPrinterPower({ available: false, status: 'init', detail: 'Power controls are unavailable for this connection' });
         return;
     }
     renderPrinterPower({ available: true, status: 'init', detail: 'Reading Moonraker power state…' });
@@ -2052,23 +2126,35 @@ async function togglePrinterPower() {
     if (!currentDeviceIp || !powerDevice || printerPowerRequestActive || !printerPowerAvailable ||
         !['on', 'off'].includes(printerPowerStatus)) return;
     printerPowerRequestActive = true;
+    const context = powerContext;
+    powerRequestSequence += 1;
     const action = printerPowerStatus === 'on' ? 'power_off' : 'power_on';
     renderPrinterPower({ available: true, status: 'init', detail: 'Waiting for Moonraker confirmation…' });
     try {
-        await window.pywebview.api[action](currentDeviceIp, powerDevice);
+        await window.pywebview.api[action](context.host, powerDevice, context);
     } catch (error) {
-        renderPrinterPower({ available: true, status: 'error', detail: String(error) });
+        if (currentPowerContext(context)) {
+            renderPrinterPower({ available: false, status: 'error', detail: String(error) });
+        }
     } finally {
-        printerPowerRequestActive = false;
-        // The command response is not UI state.  Re-read the same Moonraker
-        // power device that Mainsail observes and render only that result.
-        await refreshPrinterPower();
+        if (currentPowerContext(context)) {
+            printerPowerRequestActive = false;
+            // The command response is not UI state. Re-read the same Moonraker
+            // power device that Mainsail observes and render only that result.
+            await refreshPrinterPower();
+        }
     }
 }
 
 function disconnectSSH() {
+    resetPowerTarget(currentDeviceIp);
+    const selection = powerSelection;
     if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.disconnect_ssh().then(() => {
+        powerTargetReady.then(ready => {
+            if (!ready || selection !== powerSelection) return false;
+            return window.pywebview.api.disconnect_ssh(selection);
+        }).then(disconnected => {
+            if (!disconnected || selection !== powerSelection) return;
             term.write("\r\n\x1b[1;31m[KACE Workspace] SSH session disconnected by user.\x1b[0m\r\n");
             updateConnectionStatus(false);
             loginState = 'DISCONNECTED';

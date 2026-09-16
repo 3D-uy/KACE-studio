@@ -11,6 +11,19 @@ from backend.moonraker_client import MoonrakerHttpClient
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def bind_power_session(api):
+    """Install a simulated live session; integration coverage uses connect_ssh."""
+    context = {"host": "192.168.1.20", "selection": 1, "session": 1}
+    api._power_context = context
+    api._power_host = context["host"]
+    api._power_selection = api._ssh_gen = 1
+    api._power_session = api._ssh
+    api._ssh.is_connected = lambda: True
+    authority = api._remote_power_authority or {"status": "absent", "config": None}
+    api._remote_power_authority = dict(authority, power_context=context)
+    return context
+
+
 class FakeMoonrakerHttp:
     def __init__(self, states):
         self.states = list(states)
@@ -115,7 +128,7 @@ def test_http_client_uses_selected_host_and_moonraker_port(monkeypatch):
     }
 
 
-def test_pywebview_api_power_action_does_not_require_ssh(monkeypatch):
+def test_pywebview_api_power_action_requires_session_authority(monkeypatch):
     import main
 
     calls = []
@@ -135,14 +148,9 @@ def test_pywebview_api_power_action_does_not_require_ssh(monkeypatch):
     result = api.power_on("192.168.1.20", "main_psu")
 
     assert api._ssh.client is None
-    assert result == {
-        "ok": True,
-        "available": True,
-        "device": "main_psu",
-        "status": "on",
-        "detail": "",
-    }
-    assert calls == [("init", "192.168.1.20", "main_psu"), ("on", "main_psu")]
+    assert result["ok"] is False
+    assert result["available"] is False
+    assert calls == []
 
 
 def test_remote_power_identity_overrides_stale_local_suggestion(monkeypatch):
@@ -151,7 +159,7 @@ def test_remote_power_identity_overrides_stale_local_suggestion(monkeypatch):
     calls = []
 
     class FakeController:
-        def __init__(self, host, device):
+        def __init__(self, host, device, *, authorize):
             calls.append((host, device))
             self.device = device
 
@@ -166,7 +174,7 @@ def test_remote_power_identity_overrides_stale_local_suggestion(monkeypatch):
         "detail": "",
     }
 
-    result = api.get_power_status("192.168.1.20", "stale_local_name")
+    result = api.get_power_status("192.168.1.20", "stale_local_name", bind_power_session(api))
 
     assert result["device"] == "remote_psu"
     assert calls == [("192.168.1.20", "remote_psu")]
@@ -178,7 +186,7 @@ def test_confirmed_absent_remote_config_allows_local_provisioning_suggestion(mon
     calls = []
 
     class FakeController:
-        def __init__(self, host, device):
+        def __init__(self, host, device, *, authorize):
             calls.append((host, device))
             self.device = device
 
@@ -193,7 +201,7 @@ def test_confirmed_absent_remote_config_allows_local_provisioning_suggestion(mon
         "detail": "No remote KACE power configuration exists",
     }
 
-    assert api.get_power_status("192.168.1.20", "suggested_psu")["status"] == "off"
+    assert api.get_power_status("192.168.1.20", "suggested_psu", bind_power_session(api))["status"] == "off"
     assert calls == [("192.168.1.20", "suggested_psu")]
 
 
@@ -206,7 +214,7 @@ def test_disabled_or_invalid_remote_authority_blocks_local_fallback(monkeypatch)
         "config": {"enabled": False, "device": None},
         "detail": "",
     }
-    result = api.power_on("192.168.1.20", "stale_local_name")
+    result = api.power_on("192.168.1.20", "stale_local_name", bind_power_session(api))
     assert result["ok"] is False
     assert "disabled" in result["detail"]
 
@@ -215,12 +223,12 @@ def test_disabled_or_invalid_remote_authority_blocks_local_fallback(monkeypatch)
         "config": None,
         "detail": "Remote power configuration could not be read",
     }
-    result = api.power_on("192.168.1.20", "stale_local_name")
+    result = api.power_on("192.168.1.20", "stale_local_name", bind_power_session(api))
     assert result["ok"] is False
     assert "could not be read" in result["detail"]
 
 
-def test_disconnect_keeps_remote_power_authority(monkeypatch):
+def test_disconnect_invalidates_remote_power_authority(monkeypatch):
     import main
 
     api = main.Api()
@@ -233,7 +241,7 @@ def test_disconnect_keeps_remote_power_authority(monkeypatch):
     monkeypatch.setattr(api, "_interrupt_bootstrap", lambda *_args: None)
 
     assert api.disconnect_ssh() is True
-    assert api._remote_power_authority is authority
+    assert api._remote_power_authority is None
 
 
 def test_api_reads_and_validates_remote_power_schema_over_ssh():
@@ -254,12 +262,12 @@ def test_api_reads_and_validates_remote_power_schema_over_ssh():
             "off_when_shutdown": False,
         }),
     )
-    result = api.get_remote_power_config()
+    result = api.get_remote_power_config(bind_power_session(api))
     assert result["status"] == "configured"
     assert result["config"]["device"] == "remote_psu"
 
 
-def test_end_to_end_status_then_power_on_without_ssh_or_kace(monkeypatch):
+def test_end_to_end_status_then_power_on_with_session_authority(monkeypatch):
     import main
 
     get_states = iter(("off", "off", "on"))
@@ -295,8 +303,9 @@ def test_end_to_end_status_then_power_on_without_ssh_or_kace(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     api = main.Api()
 
-    initial = api.get_power_status("192.168.1.20", "main_psu")
-    powered = api.power_on("192.168.1.20", "main_psu")
+    context = bind_power_session(api)
+    initial = api.get_power_status("192.168.1.20", "main_psu", context)
+    powered = api.power_on("192.168.1.20", "main_psu", context)
 
     assert api._ssh.client is None
     assert initial["status"] == "off"
@@ -306,6 +315,7 @@ def test_end_to_end_status_then_power_on_without_ssh_or_kace(monkeypatch):
         "device": "main_psu",
         "status": "on",
         "detail": "",
+        "power_context": context,
     }
     assert [method for method, *_rest in requests] == ["GET", "GET", "POST", "GET"]
     assert requests[2][2] == {"device": "main_psu", "action": "on"}
@@ -348,10 +358,11 @@ def test_studio_on_off_and_displayed_state_share_moonraker_truth(monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     api = main.Api()
 
-    studio_on = api.power_on("192.168.1.20", "printer")
-    mainsail_on = api.get_power_status("192.168.1.20", "printer")
-    studio_off = api.power_off("192.168.1.20", "printer")
-    mainsail_off = api.get_power_status("192.168.1.20", "printer")
+    context = bind_power_session(api)
+    studio_on = api.power_on("192.168.1.20", "printer", context)
+    mainsail_on = api.get_power_status("192.168.1.20", "printer", context)
+    studio_off = api.power_off("192.168.1.20", "printer", context)
+    mainsail_off = api.get_power_status("192.168.1.20", "printer", context)
 
     assert studio_on["status"] == mainsail_on["status"] == "on"
     assert studio_off["status"] == mainsail_off["status"] == "off"
@@ -401,14 +412,14 @@ def test_runtime_power_route_cannot_execute_gpio_or_shell_commands():
     )
 
 
-def test_power_button_works_for_selected_host_without_ssh_connection():
+def test_power_button_transports_session_context():
     html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
     app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
 
     assert 'id="printer-power-btn"' in html
     assert "['on', 'off', 'init', 'error']" in app
-    assert "get_power_status(currentDeviceIp, powerDevice)" in app
-    assert "api[action](currentDeviceIp, powerDevice)" in app
+    assert "get_power_status(context.host, powerDevice, context)" in app
+    assert "api[action](context.host, powerDevice, context)" in app
     assert "selectedPowerDevice()" in app
     assert "applyRemotePowerConfig(res && res.power_config" in app
 
@@ -428,9 +439,9 @@ def test_power_button_works_for_selected_host_without_ssh_connection():
     assert "sshConnected" not in refresh
     assert "sshConnected" not in toggle
     assert "renderPrinterPower(await window.pywebview.api[action]" not in toggle
-    assert "await window.pywebview.api[action](currentDeviceIp, powerDevice)" in toggle
+    assert "await window.pywebview.api[action](context.host, powerDevice, context)" in toggle
     assert "await refreshPrinterPower()" in toggle
-    assert "startPowerPolling()" in connect
+    assert "resetPowerTarget(ip)" in connect
     assert "stopPowerPolling()" not in connection_state
 
 
@@ -446,4 +457,4 @@ def test_power_button_uses_remote_authority_after_ssh_without_hardcoded_fallback
     disconnect = app.split("function disconnectSSH", 1)[1].split(
         "function startBootstrap", 1
     )[0]
-    assert "remotePowerAuthority = null" not in disconnect
+    assert "resetPowerTarget(currentDeviceIp)" in disconnect

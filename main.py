@@ -159,6 +159,12 @@ class Api:
         self._power_target = None
         self._power_lock = threading.Lock()
         self._remote_power_authority = None
+        self._power_selection = 0
+        self._power_host = None
+        self._power_context = None
+        self._power_session = None
+        self._power_refresh_gen = 0
+        self._power_action_lock = threading.Lock()
         self._ssh_lock = threading.Lock()
         self._ssh_gen = 0
         self._ssh_attempt_gen = 0
@@ -181,7 +187,7 @@ class Api:
     def set_window(self, window):
         self._window = window
 
-    def _forward_bootstrap_event(self, event: dict, ssh_generation: int) -> None:
+    def _forward_bootstrap_event(self, event: dict, ssh_generation: int, power_context=None) -> None:
         """Project an authoritative bootstrap event and update the run guard."""
         with self._ssh_lock:
             if ssh_generation != self._ssh_gen:
@@ -206,7 +212,7 @@ class Api:
         if self._window is not None:
             try:
                 self._window.evaluate_js(
-                    f"window.updateBootstrapEvent({json.dumps(event)});"
+                    f"window.updateBootstrapEvent({json.dumps(event)}, {json.dumps(power_context)});"
                 )
             except Exception as exc:
                 print(f"[KACE] Could not forward bootstrap event: {exc}")
@@ -993,7 +999,7 @@ class Api:
             self.set_device_state("DISCOVERED", 100, f"Discovered manual target at {ip}.")
         return res
 
-    def connect_ssh(self, ip: str, username: str, password: str, cols: int = 80, rows: int = 24) -> dict:
+    def connect_ssh(self, ip: str, username: str, password: str, cols: int = 80, rows: int = 24, power_selection=None) -> dict:
         """
         Connects paramiko client and routes stream data to the terminal.
         cols/rows: actual frontend terminal dimensions for correct PTY sizing.
@@ -1008,6 +1014,18 @@ class Api:
 
         candidate = SSHSession()
         with self._ssh_lock:
+            with self._power_lock:
+                host = ip.strip().casefold()
+                if power_selection is not None and (
+                    type(power_selection) is not int
+                    or power_selection != self._power_selection or host != self._power_host
+                ):
+                    candidate.close()
+                    return {"status": "failed", "message": "Device selection is stale."}
+                if power_selection is None:
+                    self._power_selection += 1
+                    self._power_host = host
+                self._invalidate_power_locked()
             self._ssh_attempt_gen += 1
             attempt_gen = self._ssh_attempt_gen
 
@@ -1054,6 +1072,12 @@ class Api:
                     self._ssh = candidate
                     self._ssh_gen += 1
                     current_gen = self._ssh_gen
+                    with self._power_lock:
+                        self._power_context = {
+                            "host": host, "selection": self._power_selection, "session": current_gen,
+                        }
+                        self._power_session = candidate
+                        power_context = dict(self._power_context)
 
             if superseded:
                 candidate.close()
@@ -1061,15 +1085,16 @@ class Api:
 
             self._interrupt_bootstrap("SSH session was replaced before bootstrap completed.")
             previous_session.close()
-            with self._power_lock:
-                self._remote_power_authority = None
-                self._power_controller = None
-                self._power_target = None
 
             # Reachability (including an open Moonraker port) is not evidence
             # that a KACE installation workflow completed successfully.
             self.set_device_state("SSH_READY", 100, f"SSH session connected to {ip}.")
-            remote_power = self._refresh_remote_power_authority()
+            remote_power = self._refresh_remote_power_authority(power_context)
+            with self._ssh_lock:
+                current_attempt = attempt_gen == self._ssh_attempt_gen and current_gen == self._ssh_gen
+            if not current_attempt:
+                candidate.close()
+                return {"status": "failed", "message": "Connection superseded by a newer selection."}
                 
             # Write-coalescing buffer: collect rapid-fire SSH data chunks and flush
             # them as a single evaluate_js call every 15ms. This prevents interactive
@@ -1097,7 +1122,7 @@ class Api:
 
             def forward_bootstrap_event(event):
                 protocol_display_filter.enable_authoritative_bootstrap()
-                self._forward_bootstrap_event(event, current_gen)
+                self._forward_bootstrap_event(event, current_gen, power_context)
 
             workflow_parser = KaceWorkflowEventParser(forward_workflow_event)
             bootstrap_parser = BootstrapEventParser(forward_bootstrap_event)
@@ -1111,7 +1136,9 @@ class Api:
                         return
                     flush_timer[0] = None
                 escaped = json.dumps(combined)
-                self._window.evaluate_js(f"window.writeTerminalData({escaped});")
+                self._window.evaluate_js(
+                    f"window.writeTerminalData({escaped}, {json.dumps(power_context)});"
+                )
             
             # Setup bridge callbacks
             def on_data(text):
@@ -1155,6 +1182,13 @@ class Api:
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen:
                         return
+                    with self._power_lock:
+                        if self._power_context == power_context:
+                            self._invalidate_power_locked()
+                if self._window is not None:
+                    self._window.evaluate_js(
+                        f"window.invalidatePowerSession({json.dumps(power_context)})"
+                    )
                 expected_disconnect_states = {
                     "AWAITING_POWER_CYCLE",
                     "AWAITING_REENUMERATION",
@@ -1260,20 +1294,21 @@ class Api:
         """
         self._ssh.resize_pty(cols, rows)
 
-    def disconnect_ssh(self):
+    def disconnect_ssh(self, power_selection=None):
         """
         Closes current SSH session.
         """
-        self._interrupt_bootstrap("SSH session was closed before bootstrap completed.")
         with self._ssh_lock:
+            with self._power_lock:
+                if power_selection is not None and power_selection != self._power_selection:
+                    return False
+                self._invalidate_power_locked()
             previous_session = self._ssh
             self._ssh = SSHSession()
             self._ssh_attempt_gen += 1
             self._ssh_gen += 1
+        self._interrupt_bootstrap("SSH session was closed before bootstrap completed.")
         previous_session.close()
-        # Keep the last schema that was successfully read from this device.
-        # Moonraker power control is independent of the interactive SSH session;
-        # dropping this authority would silently fall back to stale local hints.
         return True
 
     def clear_stored_host_key(self, ip: str) -> bool:
@@ -1335,8 +1370,8 @@ class Api:
             "event": checkpoint_event(checkpoint),
         }
 
-    def _read_remote_power_config(self) -> dict:
-        reader = getattr(self._ssh, "read_text_file_result", None)
+    def _read_remote_power_config(self, session) -> dict:
+        reader = getattr(session, "read_text_file_result", None)
         if not callable(reader):
             return {"status": "error", "config": None, "detail": "SSH file reader is unavailable"}
         status, raw = reader(".config/kace/power.json", max_bytes=64 * 1024)
@@ -1350,21 +1385,77 @@ class Api:
             return {"status": "invalid", "config": None, "detail": str(exc)}
         return {"status": "configured", "config": config, "detail": ""}
 
-    def _refresh_remote_power_authority(self) -> dict:
-        result = self._read_remote_power_config()
-        with self._power_lock:
-            self._remote_power_authority = result
-            self._power_controller = None
-            self._power_target = None
-        return result
+    def _invalidate_power_locked(self):
+        self._remote_power_authority = None
+        self._power_controller = None
+        self._power_target = None
+        self._power_context = None
+        self._power_session = None
+        self._power_refresh_gen += 1
 
-    def get_remote_power_config(self) -> dict:
+    def select_power_target(self, host: str, selection: int) -> bool:
+        """Invalidate power before a new frontend selection can initiate work."""
+        if not isinstance(host, str) or type(selection) is not int:
+            return False
+        with self._ssh_lock:
+            with self._power_lock:
+                if selection <= self._power_selection:
+                    return False
+                self._power_selection = selection
+                self._power_host = host.strip().casefold()
+                self._ssh_attempt_gen += 1
+                self._invalidate_power_locked()
+        return True
+
+    def _require_power_context_locked(self, context, host=None):
+        if self._power_session is not None and not self._ssh_session_is_active(self._power_session):
+            self._invalidate_power_locked()
+        if (
+            not isinstance(context, dict) or context != self._power_context
+            or type(context.get("selection")) is not int or type(context.get("session")) is not int
+            or context.get("host") != self._power_host
+            or context.get("selection") != self._power_selection
+            or context.get("session") != self._ssh_gen
+            or self._power_session is not self._ssh
+            or not self._ssh_session_is_active(self._power_session)
+            or (host is not None and (
+                not isinstance(host, str) or host.strip().casefold() != self._power_host
+            ))
+        ):
+            raise PowerControllerError("Power authority does not belong to the active device/session")
+
+    def _refresh_remote_power_authority(self, context) -> dict:
+        try:
+            with self._power_lock:
+                self._require_power_context_locked(context)
+                session = self._power_session
+                self._power_refresh_gen += 1
+                refresh_gen = self._power_refresh_gen
+                self._remote_power_authority = None
+                self._power_controller = None
+                self._power_target = None
+            result = self._read_remote_power_config(session)
+            with self._power_lock:
+                self._require_power_context_locked(context)
+                if refresh_gen != self._power_refresh_gen:
+                    raise PowerControllerError("Power configuration refresh was superseded")
+                result["power_context"] = dict(context)
+                self._remote_power_authority = result
+            return result
+        except (OSError, RuntimeError) as exc:
+            return {"status": "error", "config": None, "detail": str(exc), "power_context": context}
+
+    def get_remote_power_config(self, power_context=None) -> dict:
         """Refresh the authoritative remote schema after SSH/bootstrap changes."""
-        return self._refresh_remote_power_authority()
+        return self._refresh_remote_power_authority(power_context)
 
     def _resolve_power_device(self, suggested_device: str) -> str:
         authority = self._remote_power_authority
-        if authority is None or authority.get("status") == "absent":
+        if authority is None:
+            raise PowerControllerError("Power authority has not been loaded for this session")
+        if authority.get("power_context") != self._power_context:
+            raise PowerControllerError("Power authority belongs to another session")
+        if authority.get("status") == "absent":
             return suggested_device
         if authority.get("status") != "configured":
             raise PowerControllerError(authority.get("detail") or "Remote power configuration is unavailable")
@@ -1373,16 +1464,38 @@ class Api:
             raise PowerControllerError("Remote KACE power configuration is disabled")
         return config.get("device")
 
-    def _run_power_action(self, host: str, device: str, action: str) -> dict:
-        """Run one Moonraker-only power action without depending on SSH/KACE."""
+    def _run_power_action(self, host: str, device: str, action: str, power_context=None) -> dict:
+        """Authorize each Moonraker request against the session that supplied its config."""
         try:
+            if not isinstance(host, str) or not host.strip():
+                raise PowerControllerError("Power target host is missing or invalid")
             with self._power_lock:
+                self._require_power_context_locked(power_context, host)
+                context = dict(power_context)
+                refresh_gen = self._power_refresh_gen
                 resolved_device = self._resolve_power_device(device)
-                target = (host.strip() if isinstance(host, str) else host, resolved_device)
-                if self._power_controller is None or self._power_target != target:
-                    self._power_controller = MoonrakerPowerController(host, resolved_device)
-                    self._power_target = target
-                controller = self._power_controller
+
+            def authorize():
+                with self._power_lock:
+                    self._require_power_context_locked(context, host)
+                    if refresh_gen != self._power_refresh_gen:
+                        raise PowerControllerError("Power authority was superseded")
+
+            # Never hold the state lock during HTTP; selection invalidation must
+            # also cancel queued actions and controllers polling for readiness.
+            with self._power_action_lock:
+                authorize()
+                target = (context["host"], context["selection"], context["session"], refresh_gen, resolved_device)
+                with self._power_lock:
+                    self._require_power_context_locked(context, host)
+                    if refresh_gen != self._power_refresh_gen:
+                        raise PowerControllerError("Power authority was superseded")
+                    if self._power_controller is None or self._power_target != target:
+                        self._power_controller = MoonrakerPowerController(
+                            context["host"], resolved_device, authorize=authorize,
+                        )
+                        self._power_target = target
+                    controller = self._power_controller
                 if action == "status":
                     status = controller.get_status()
                 elif action == "on":
@@ -1393,12 +1506,14 @@ class Api:
                     status = controller.wait_until_ready()
                 else:
                     raise ValueError("invalid power action")
+                authorize()
             return {
                 "ok": status != "error",
                 "available": True,
                 "device": controller.device,
                 "status": status,
                 "detail": "" if status != "error" else "Moonraker reported an error state",
+                "power_context": context,
             }
         except (PowerControllerError, TypeError, ValueError) as exc:
             return {
@@ -1407,19 +1522,20 @@ class Api:
                 "device": device if isinstance(device, str) else None,
                 "status": "error",
                 "detail": str(exc),
+                "power_context": power_context,
             }
 
-    def get_power_status(self, host: str, device: str) -> dict:
-        return self._run_power_action(host, device, "status")
+    def get_power_status(self, host: str, device: str, power_context=None) -> dict:
+        return self._run_power_action(host, device, "status", power_context)
 
-    def power_on(self, host: str, device: str) -> dict:
-        return self._run_power_action(host, device, "on")
+    def power_on(self, host: str, device: str, power_context=None) -> dict:
+        return self._run_power_action(host, device, "on", power_context)
 
-    def power_off(self, host: str, device: str) -> dict:
-        return self._run_power_action(host, device, "off")
+    def power_off(self, host: str, device: str, power_context=None) -> dict:
+        return self._run_power_action(host, device, "off", power_context)
 
-    def wait_power_ready(self, host: str, device: str) -> dict:
-        return self._run_power_action(host, device, "wait")
+    def wait_power_ready(self, host: str, device: str, power_context=None) -> dict:
+        return self._run_power_action(host, device, "wait", power_context)
 
     def get_preferences(self) -> dict:
         """

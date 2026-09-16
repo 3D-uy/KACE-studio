@@ -30,7 +30,7 @@ class FakeSession:
 def prepare_api(monkeypatch):
     api = main.Api()
     api.set_device_state = lambda *_args, **_kwargs: None
-    api._refresh_remote_power_authority = lambda: None
+    api._refresh_remote_power_authority = lambda _context: None
     return api
 
 
