@@ -84,7 +84,8 @@ log_err() {
 # BEGIN KACE_DEPENDENCY_PINS
 # Update these values only through an explicit, reviewed dependency update.
 KLIPPER_REPOSITORY="https://github.com/Klipper3d/klipper.git"
-KLIPPER_REF="9c1ae230eaebd5ec4df76d5a87537e2f35defab0"
+# Standalone bootstrap mirror of data/klipper_contract.yaml; checked by tests.
+KLIPPER_REF="fe4eb8650bd7de4c2100a14eaf09b0965c430e29"
 MOONRAKER_REPOSITORY="https://github.com/Arksine/moonraker.git"
 MOONRAKER_REF="d5ee17128bb88434aacdab90c2e9e990e2b64e4a"
 CROWSNEST_REPOSITORY="https://github.com/mainsail-crew/crowsnest.git"
