@@ -29,6 +29,7 @@ from backend.ejector import request_safe_eject
 from backend.discovery import scan_network, probe_manual_ip
 from backend.ssh_client import SSHSession
 from backend.power_controller import MoonrakerPowerController, PowerControllerError
+from backend.moonraker_authorization import moonraker_client_access
 from backend.remote_power_config import RemotePowerConfigError, parse_remote_power_config
 from backend.workflow_events import KaceWorkflowEventParser
 from backend.firmware_workflow import checkpoint_event, parse_checkpoint
@@ -1233,6 +1234,29 @@ class Api:
             else:
                 self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
             return {"status": "failed", "message": "Verify user password or network path."}
+
+    def _moonraker_access(self, power_context, approved_ip=None):
+        try:
+            with self._power_lock:
+                self._require_power_context_locked(power_context)
+                session = self._power_session
+                context = dict(power_context)
+            result = moonraker_client_access(session, approved_ip)
+            with self._power_lock:
+                self._require_power_context_locked(context)
+            return {**result, "power_context": context}
+        except Exception as exc:
+            return {"ok": False, "detail": self._sanitize_error(exc), "power_context": power_context}
+
+    def inspect_moonraker_client(self, power_context=None):
+        """Read the peer IP reported by this authenticated SSH server."""
+        return self._moonraker_access(power_context)
+
+    def authorize_moonraker_client(self, approved_ip, power_context=None):
+        """Explicit approval applies only to this IP on this SSH session."""
+        if not isinstance(approved_ip, str) or not approved_ip:
+            return {"ok": False, "detail": "A client IP must be explicitly approved"}
+        return self._moonraker_access(power_context, approved_ip)
 
     def start_bootstrap(self, dashboard_ui: str) -> dict:
         """Start exactly one guarded bootstrap command on the active SSH PTY."""

@@ -1998,6 +1998,8 @@ function renderPrinterPower(result) {
 }
 
 function resetPowerTarget(host) {
+    const accessButton = document.getElementById('authorize-moonraker-btn');
+    if (accessButton) accessButton.disabled = true;
     powerSelection += 1;
     powerRequestSequence += 1;
     powerStatusRequest = null;
@@ -2038,7 +2040,41 @@ function applyRemotePowerConfig(result, selection) {
         (powerContext && !samePowerContext(context, powerContext))) return;
     powerContext = context;
     remotePowerAuthority = result;
+    const accessButton = document.getElementById('authorize-moonraker-btn');
+    if (accessButton) accessButton.disabled = !sshConnected;
     startPowerPolling();
+}
+
+async function authorizeMoonrakerAccess() {
+    const context = powerContext;
+    if (!sshConnected || !currentPowerContext(context) || !window.pywebview?.api) return;
+    const button = document.getElementById('authorize-moonraker-btn');
+    if (!button || button.disabled) return;
+    button.disabled = true;
+    try {
+        const candidate = await window.pywebview.api.inspect_moonraker_client(context);
+        if (!currentPowerContext(context)) return;
+        if (!candidate.ok || !samePowerContext(candidate.power_context, context)) {
+            throw new Error(candidate.detail || 'Could not verify this computer’s IP');
+        }
+        if (!window.confirm(`Allow ${candidate.ip} to control Moonraker on ${context.host}?\n\n` +
+            'This grants persistent access from that IP, including Mainsail and printer power. ' +
+            'Moonraker will restart if the configuration changes. ' +
+            'Run bootstrap first if Moonraker is not installed.')) return;
+        if (!currentPowerContext(context)) return;
+        const result = await window.pywebview.api.authorize_moonraker_client(candidate.ip, context);
+        if (!currentPowerContext(context)) return;
+        if (!result.ok || !samePowerContext(result.power_context, context)) {
+            throw new Error(result.detail || 'Moonraker authorization failed');
+        }
+        window.alert(result.changed ? 'Moonraker access authorized. Mainsail can now connect from this IP.'
+            : 'This IP is already authorized in moonraker.conf.');
+        refreshPrinterPower();
+    } catch (error) {
+        if (currentPowerContext(context)) window.alert(`Moonraker access: ${error.message || error}`);
+    } finally {
+        if (currentPowerContext(context)) button.disabled = !sshConnected;
+    }
 }
 
 async function refreshRemotePowerConfig(context) {

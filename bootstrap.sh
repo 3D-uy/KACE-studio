@@ -801,11 +801,6 @@ klippy_uds_address: $socket_path
 [authorization]
 trusted_clients:
     127.0.0.1
-    10.0.0.0/8
-    127.0.0.0/8
-    172.16.0.0/12
-    192.168.0.0/16
-    FE80::/10
     ::1/128
 cors_domains:
     *.lan
