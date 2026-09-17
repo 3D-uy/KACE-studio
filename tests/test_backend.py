@@ -58,6 +58,8 @@ from backend.provisioning import ImageType
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("finalized_release_contract")
+
 
 _TEST_DISK_IDENTITY = {
     "friendly_name": "Test SD", "size_bytes": 32000000000, "bus_type": "USB",
@@ -1152,9 +1154,10 @@ class TestKaceBackend(unittest.TestCase):
                 # Ensure no \r\n (CRLF) exists in the file
                 self.assertNotIn(b"\r\n", content_bytes)
                 
-                # Verify that it starts with the KACE Bootstrap Version comment
-                lines = content_bytes.split(b"\n")
-                self.assertTrue(lines[0].startswith(b"# KACE Bootstrap Version:"))
+                # The copied script must preserve the approved release bytes.
+                from backend.imager import resolve_bootstrap_source
+                with open(resolve_bootstrap_source(), "rb") as source:
+                    self.assertEqual(content_bytes, source.read())
                 
         finally:
             shutil.rmtree(temp_boot)
@@ -1222,6 +1225,7 @@ class TestKaceBackend(unittest.TestCase):
         
         environ = {
             "PATH_INFO": "/api/sftp/list",
+            "HTTP_X_PYWEBVIEW_TOKEN": __import__('webview').token,
             "QUERY_STRING": "path=/home/kace"
         }
         

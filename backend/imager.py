@@ -49,16 +49,14 @@ def _write_text_atomically(path: str, content: str) -> None:
         raise
 
 
-def _copy_bootstrap_atomically(source_path: str, destination_path: str, version_line: str) -> None:
+def _copy_bootstrap_atomically(source_path: str, destination_path: str) -> None:
     """Copy the bootstrap to the boot partition without exposing a partial script."""
     directory = os.path.dirname(destination_path) or "."
     fd, temporary_path = tempfile.mkstemp(
         prefix=f".{os.path.basename(destination_path)}.", suffix=".part", dir=directory
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output, \
-             open(source_path, "r", encoding="utf-8", errors="ignore") as source:
-            output.write(version_line)
+        with os.fdopen(fd, "wb") as output, open(source_path, "rb") as source:
             while True:
                 chunk = source.read(65536)
                 if not chunk:
@@ -654,7 +652,7 @@ try {{
         
     return None
 
-def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive_identity=None, verify_write: bool = True) -> tuple:
+def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive_identity=None, verify_write: bool = True, *, expected_image_sha256=None, expected_image_size=None) -> tuple:
     """
     Flashes the image block-by-block onto the target drive by spawning
     the elevated helper process kace_writer.py.
@@ -681,10 +679,18 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
         )
     if not isinstance(verify_write, bool):
         return False, "Write verification setting must be a boolean."
+    if (type(expected_image_size) is not int or expected_image_size != image_size
+            or not isinstance(expected_image_sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_image_sha256)):
+        return False, "Missing or changed approved image identity."
+    if _sha256_file(image_path) != expected_image_sha256:
+        return False, "Image changed after approval; refusing to flash."
+    operation_id = uuid.uuid4().hex
     image_contract = {
+        "operation_id": operation_id,
         "disk_identity": identity,
         "image_size": image_size,
-        "image_sha256": _sha256_file(image_path),
+        "image_sha256": expected_image_sha256,
         "verify_write": verify_write,
     }
 
@@ -704,7 +710,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
         temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
         
     os.makedirs(temp_dir, exist_ok=True)
-    status_file = os.path.join(temp_dir, f"kace_flash_{disk_number}.json")
+    status_file = os.path.join(temp_dir, f"kace_flash_{disk_number}_{operation_id}.json")
     if os.path.exists(status_file):
         try:
             os.remove(status_file)
@@ -812,6 +818,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
         kernel32 = ctypes.windll.kernel32
         STILL_ACTIVE = 0x00000103
         exit_code = wintypes.DWORD(STILL_ACTIVE)
+        process_exited = False
         
         last_progress = 0
         
@@ -819,6 +826,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
             if not kernel32.GetExitCodeProcess(hProcess, ctypes.byref(exit_code)):
                 break
             if exit_code.value != STILL_ACTIVE:
+                process_exited = True
                 break
                 
             time.sleep(0.2)
@@ -826,6 +834,8 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
                 try:
                     with open(status_file, "r", encoding="utf-8") as f:
                         data = json.load(f)
+                    if data.get("operation_id") != operation_id:
+                        continue
                     
                     status = data.get("status")
                     progress = data.get("progress", 0)
@@ -835,9 +845,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
                         progress_callback(status, progress, message)
                         last_progress = progress
                         
-                    if status == "success":
-                        success = True
-                    elif status == "error":
+                    if status == "error":
                         error_msg = message
                         success = False
                 except json.JSONDecodeError as decode_err:
@@ -850,11 +858,12 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
             try:
                 with open(status_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                if data.get("status") == "success":
+                if (data.get("status") == "success" and data.get("operation_id") == operation_id
+                        and process_exited and exit_code.value == 0):
                     success = True
                 else:
                     success = False
-                    error_msg = data.get("message", "Helper reported failure.")
+                    error_msg = f"Helper failed or completion identity mismatched (exit code: {exit_code.value}). " + data.get("message", "")
                 # Clean up status file
                 os.remove(status_file)
             except Exception:
@@ -1631,38 +1640,13 @@ ssh_pwauth: {"true" if effective_password_auth else "false"}
                         print(f"[ERROR] Failed appending systemd.run to cmdline.txt: {e}", file=sys.stderr)
                         raise e
 
-        # M. Copy bootstrap.sh with version comment and Unix line endings
+        # M. Preserve the exact release-pinned bootstrap bytes.
         try:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(current_dir)
             local_bootstrap_src = resolve_bootstrap_source()
-
-            if os.path.exists(local_bootstrap_src):
-                git_hash = ""
-                try:
-                    res = subprocess.run(["git", "rev-parse", "--short", "HEAD"], 
-                                         capture_output=True, text=True, cwd=project_root)
-                    if res.returncode == 0:
-                        git_hash = res.stdout.strip()
-                except Exception:
-                    pass
-
-                if not git_hash:
-                    import datetime
-                    git_hash = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-
-                version_line = f"# KACE Bootstrap Version: {git_hash}\n"
-                dest_bootstrap_path = os.path.join(boot_path, "bootstrap.sh")
-
-                _copy_bootstrap_atomically(
-                    local_bootstrap_src, dest_bootstrap_path, version_line
-                )
-                
-                if not os.path.exists(dest_bootstrap_path):
-                    raise IOError(f"bootstrap.sh not found at: {dest_bootstrap_path}")
-                _dbg(f"Successfully verified bootstrap.sh local copy at {dest_bootstrap_path}")
-            else:
-                raise FileNotFoundError("Pinned bootstrap.sh resource is missing.")
+            dest_bootstrap_path = os.path.join(boot_path, "bootstrap.sh")
+            _copy_bootstrap_atomically(local_bootstrap_src, dest_bootstrap_path)
+            if _sha256_file(dest_bootstrap_path) != bootstrap_sha256:
+                raise IOError("Copied bootstrap.sh does not match the approved release hash")
         except Exception as e:
             print(f"[ERROR] Failed copying bootstrap.sh: {e}", file=sys.stderr)
             raise e

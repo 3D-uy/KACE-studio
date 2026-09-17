@@ -1,4 +1,7 @@
 import json
+import pytest
+
+pytestmark = pytest.mark.usefixtures("finalized_release_contract")
 
 import pytest
 

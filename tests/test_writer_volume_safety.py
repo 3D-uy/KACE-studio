@@ -1,5 +1,6 @@
 """Volume protection tests using mocked Win32 calls and storage providers."""
 
+import json
 import shutil
 import subprocess
 from types import SimpleNamespace
@@ -8,6 +9,10 @@ from unittest.mock import Mock, call
 import pytest
 
 from backend import kace_writer
+from tests.test_audit_stabilization import handle_reply
+from tests.test_drive_identity import snapshot
+
+IDENTITY = snapshot(number=99)
 
 
 PHYSICAL = r"\\.\PhysicalDrive99"
@@ -29,6 +34,9 @@ def storage(monkeypatch):
     monkeypatch.setattr(kace_writer.ctypes, "windll", SimpleNamespace(kernel32=kernel), raising=False)
     query = Mock(return_value=SimpleNamespace(returncode=0, stdout="", stderr=""))
     monkeypatch.setattr(kace_writer.subprocess, "run", query)
+    monkeypatch.setattr(kace_writer, "_validate_disk_identity", lambda *_: IDENTITY)
+    monkeypatch.setattr(kace_writer.Win32DiskWriter, "_query_handle",
+                        lambda self, *args: handle_reply(IDENTITY)(*args))
     return kernel, query
 
 
@@ -85,7 +93,7 @@ def test_missing_disk_number_cannot_skip_volume_protection(storage):
 @pytest.mark.parametrize("invalid", [None, 0, -1, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF])
 def test_volume_open_failure_aborts_even_after_read_only_fallback(storage, invalid):
     kernel, query = storage
-    query.return_value.stdout = "E:\\\n"
+    query.return_value.stdout = json.dumps(["E:\\"])
     kernel.CreateFileW.side_effect = lambda path, *_args: invalid if path == VOLUME_A else 201
     with pytest.raises(OSError, match="open volume"):
         kace_writer.Win32DiskWriter(PHYSICAL, 99)
@@ -98,7 +106,7 @@ def test_volume_open_failure_aborts_even_after_read_only_fallback(storage, inval
 @pytest.mark.parametrize("after_secured_volume", [False, True])
 def test_volume_failure_closes_all_acquired_handles(storage, monkeypatch, failure, after_secured_volume):
     kernel, query = storage
-    query.return_value.stdout = "E:\\\nF:\\\n" if after_secured_volume else "F:\\\n"
+    query.return_value.stdout = json.dumps(["E:\\"]) + "\n" + json.dumps(["F:\\"]) if after_secured_volume else "F:\\\n"
     monkeypatch.setattr(
         kace_writer.Win32DiskWriter, "_get_disk_volumes",
         lambda _self, _number: [VOLUME_A, VOLUME_B] if after_secured_volume else [VOLUME_B],
@@ -125,24 +133,24 @@ def test_volume_failure_closes_all_acquired_handles(storage, monkeypatch, failur
     kernel.CreateFileW.side_effect = open_handle
     kernel.DeviceIoControl.side_effect = ioctl
     with pytest.raises(OSError):
-        kace_writer.Win32DiskWriter(PHYSICAL, 99)
-    assert_no_physical_access(kernel)
+        with kace_writer.Win32DiskWriter(PHYSICAL, 99) as writer:
+            writer.verify_identity(IDENTITY)
+    kernel.WriteFile.assert_not_called()
     acquired = ([101] if after_secured_volume else [])
     if failure not in {"open", "open_exception"}:
         acquired.append(102)
+    if failure not in {"open", "open_exception"}:
+        acquired.append(201)
     assert sorted(entry.args[0] for entry in kernel.CloseHandle.call_args_list) == acquired
-    if after_secured_volume:
-        calls = kernel.mock_calls
-        first_locked = next(i for i, entry in enumerate(calls) if entry[0] == "DeviceIoControl" and entry.args[:2] == (101, LOCK))
-        second_opened = next(i for i, entry in enumerate(calls) if entry[0] == "CreateFileW" and entry.args[0] == VOLUME_B)
-        assert first_locked < second_opened
+    if failure in {"open", "open_exception"}:
+        kernel.DeviceIoControl.assert_not_called()
     if failure == "lock":
         assert not any(entry.args[:2] == (102, DISMOUNT) for entry in kernel.DeviceIoControl.call_args_list)
 
 
-def test_all_volumes_are_secured_before_physical_open_and_mock_write(storage):
+def test_verified_handle_precedes_volume_dismount_and_mock_write(storage):
     kernel, query = storage
-    query.return_value.stdout = "E:\\\nF:\\\n"
+    query.return_value.stdout = json.dumps(["E:\\"]) + "\n" + json.dumps(["F:\\"])
 
     def write(_handle, _buffer, size, written, _overlapped):
         written._obj.value = size
@@ -151,11 +159,15 @@ def test_all_volumes_are_secured_before_physical_open_and_mock_write(storage):
     kernel.WriteFile.side_effect = write
     with kace_writer.Win32DiskWriter(PHYSICAL, 99) as writer:
         assert writer.lock_failed is False
+        kernel.DeviceIoControl.assert_not_called()
+        with pytest.raises(OSError, match="not been verified"):
+            writer.write(b"x")
+        writer.verify_identity(IDENTITY)
         assert writer.write(b"mock sector".ljust(512, b"\0")) == 512
         writer.flush()
     calls = kernel.mock_calls
     physical_index = next(i for i, entry in enumerate(calls) if entry[0] == "CreateFileW" and entry.args[0] == PHYSICAL)
-    secured = [entry.args[:2] for entry in calls[:physical_index] if entry[0] == "DeviceIoControl"]
+    secured = [entry.args[:2] for entry in calls[physical_index:] if entry[0] == "DeviceIoControl"]
     for handle in (101, 102):
         assert [entry for entry in secured if entry[0] == handle] == [(handle, LOCK), (handle, DISMOUNT)]
     assert sorted(entry.args[0] for entry in kernel.CloseHandle.call_args_list) == [101, 102, 201]
@@ -165,10 +177,10 @@ def test_all_volumes_are_secured_before_physical_open_and_mock_write(storage):
 
 def test_successful_read_only_fallback_still_requires_lock(storage):
     kernel, query = storage
-    query.return_value.stdout = "E:\\\n"
+    query.return_value.stdout = json.dumps(["E:\\"])
     kernel.CreateFileW.side_effect = [-1, 101, 201]
-    with kace_writer.Win32DiskWriter(PHYSICAL, 99):
-        pass
+    with kace_writer.Win32DiskWriter(PHYSICAL, 99) as writer:
+        writer.verify_identity(IDENTITY)
     assert [entry.args[1] for entry in kernel.CreateFileW.call_args_list] == [
         0xC0000000, 0x80000000, 0xC0000000,
     ]
@@ -179,27 +191,49 @@ def test_successful_read_only_fallback_still_requires_lock(storage):
 @pytest.mark.parametrize("raises", [False, True])
 def test_physical_open_failure_releases_secured_volumes(storage, raises):
     kernel, query = storage
-    query.return_value.stdout = "E:\\\n"
+    query.return_value.stdout = json.dumps(["E:\\"])
     kernel.CreateFileW.side_effect = [101, OSError("physical open failed") if raises else -1]
     with pytest.raises(OSError):
         kace_writer.Win32DiskWriter(PHYSICAL, 99)
     kernel.CloseHandle.assert_called_once_with(101)
+    kernel.DeviceIoControl.assert_not_called()
     kernel.WriteFile.assert_not_called()
 
 
 def test_enumeration_preserves_normalized_paths_and_deduplicates(storage):
     _kernel, query = storage
-    query.return_value.stdout = "E:\\\nE:\\\n\\\\?\\Volume{test}\\\n"
+    query.return_value.stdout = json.dumps(["E:\\", "E:\\", "\\\\?\\Volume{test}\\"])
     writer = kace_writer.Win32DiskWriter.__new__(kace_writer.Win32DiskWriter)
-    assert set(writer._get_disk_volumes(99)) == {VOLUME_A, r"\\?\Volume{test}"}
+    assert writer._get_disk_volumes(99) == [r"\\?\Volume{test}"]
     command = query.call_args.args[0][-1]
     assert "-ErrorAction Stop" in command
+
+
+def test_letter_and_guid_alias_lock_only_one_handle(storage):
+    kernel, query = storage
+    guid = r"\\?\Volume{test}"
+    query.return_value.stdout = json.dumps(["E:\\", guid + "\\", "C:\\mount\\"])
+    kernel.CreateFileW.side_effect = lambda path, *_: {guid: 101, PHYSICAL: 201}[path]
+    locked = set()
+    def ioctl(handle, code, *_):
+        if code == LOCK:
+            if locked:
+                return False
+            locked.add(handle)
+        return True
+    kernel.DeviceIoControl.side_effect = ioctl
+    with kace_writer.Win32DiskWriter(PHYSICAL, 99) as writer:
+        writer.verify_identity(IDENTITY)
+    assert locked == {101}
+    assert [c.args[0] for c in kernel.CreateFileW.call_args_list] == [guid, PHYSICAL]
+    kernel.WriteFile.assert_not_called()
 
 
 @pytest.mark.skipif(not shutil.which("powershell"), reason="PowerShell is unavailable")
 @pytest.mark.parametrize("provider_body,expected", [
     ("return", []),
     ("[pscustomobject]@{ AccessPaths = @() }", []),
+    ("[pscustomobject]@{ AccessPaths = $null }", []),
     ("[pscustomobject]@{ AccessPaths = @('E:\\') }", [VOLUME_A]),
     ("Write-Error 'enumeration failed'", None),
     ("[pscustomobject]@{ MissingAccessPaths = 1 }", None),

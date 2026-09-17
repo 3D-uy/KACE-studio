@@ -62,12 +62,21 @@ def load_release_contract() -> dict[str, Any]:
 
 def resolve_bootstrap_source() -> Path:
     """Resolve the exact bootstrap used by source and packaged injection."""
+    require_release_ready()
     if is_frozen():
         return bundled_path("bootstrap.sh")
     sibling = (PROJECT_ROOT.parent / "KACE" / "scripts" / "bootstrap.sh").resolve()
     if sibling.is_file():
         return sibling
     return bundled_path("bootstrap.sh")
+
+
+def require_release_ready() -> None:
+    if load_release_contract().get("kace", {}).get("runtime_status") != "pinned":
+        raise ResourceContractError(
+            "KACE distribution is pending a committed, verified runtime candidate; "
+            "bootstrap delivery and Studio packaging are blocked."
+        )
 
 
 def verify_runtime_resources() -> None:

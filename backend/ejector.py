@@ -54,10 +54,23 @@ def _write_status(status_file: str, result: dict) -> None:
     os.replace(temporary, resolved)
 
 
-def _powershell_eject_command(disk_number: int) -> str:
+def _powershell_eject_command(disk_number: int, expected_identity: dict | None = None) -> str:
+    expected_json = json.dumps(expected_identity).replace("'", "''")
     return f"""
 $ErrorActionPreference = 'Stop'
 $diskNumber = {int(disk_number)}
+$expected = '{expected_json}' | ConvertFrom-Json
+function Assert-SelectedDisk($disk) {{
+    if (-not $disk -or $disk.IsSystem -or $disk.IsBoot) {{ throw 'Unsafe or absent disk' }}
+    if ($expected) {{
+        if ($disk.Number -ne $expected.number -or
+            ([string]$disk.SerialNumber).Trim() -ne $expected.serial_number -or
+            ([string]$disk.UniqueId).Trim() -ne $expected.unique_id -or
+            ([string]$disk.Path).Trim() -ne $expected.path -or
+            [long]$disk.Size -ne [long]$expected.size_bytes -or
+            [string]$disk.BusType -ne $expected.bus_type) {{ throw 'Disk identity changed during eject' }}
+    }}
+}}
 $result = [ordered]@{{
     success = $false
     method = ''
@@ -66,13 +79,9 @@ $result = [ordered]@{{
 }}
 
 function Get-MountedLetters([int]$number) {{
-    try {{
-        return @(Get-Partition -DiskNumber $number -ErrorAction Stop |
-            Where-Object {{ $_.DriveLetter -and $_.DriveLetter -ne [char]0 }} |
-            ForEach-Object {{ [string]$_.DriveLetter }})
-    }} catch {{
-        return @()
-    }}
+    return @(Get-Partition -DiskNumber $number -ErrorAction Stop |
+        Where-Object {{ $_.DriveLetter -and $_.DriveLetter -ne [char]0 }} |
+        ForEach-Object {{ [string]$_.DriveLetter }})
 }}
 
 try {{
@@ -81,6 +90,7 @@ try {{
         throw 'Refusing to eject a system or boot disk.'
     }}
 
+    Assert-SelectedDisk $disk
     $letters = @(Get-MountedLetters $diskNumber)
     $verbInvoked = $false
     if ($letters.Count -gt 0) {{
@@ -108,14 +118,15 @@ try {{
     if ($verbInvoked) {{
         for ($attempt = 0; $attempt -lt 10; $attempt++) {{
             Start-Sleep -Milliseconds 500
-            $current = Get-Disk -Number $diskNumber -ErrorAction SilentlyContinue
+            $current = Get-Disk -ErrorAction Stop | Where-Object {{ $_.Number -eq $diskNumber }}
             if (-not $current) {{
                 $result.success = $true
                 $result.method = 'ejected'
                 $result.message = 'The device was ejected and is safe to remove.'
                 break
             }}
-            if (@(Get-MountedLetters $diskNumber).Count -eq 0) {{
+            Assert-SelectedDisk $current
+            if ($current.IsOffline -and @(Get-MountedLetters $diskNumber).Count -eq 0) {{
                 $result.success = $true
                 $result.method = 'unmounted'
                 $result.message = 'All volumes were unmounted. The device is safe to remove.'
@@ -125,15 +136,17 @@ try {{
     }}
 
     if (-not $result.success) {{
-        $disk = Get-Disk -Number $diskNumber -ErrorAction SilentlyContinue
+        $disk = Get-Disk -ErrorAction Stop | Where-Object {{ $_.Number -eq $diskNumber }}
         if (-not $disk) {{
             $result.success = $true
             $result.method = 'ejected'
             $result.message = 'The device was ejected and is safe to remove.'
         }} else {{
-            Set-Disk -Number $diskNumber -IsOffline $true -ErrorAction Stop
+            Assert-SelectedDisk $disk
+            $disk | Set-Disk -IsOffline $true -ErrorAction Stop
             Start-Sleep -Milliseconds 500
-            $current = Get-Disk -Number $diskNumber -ErrorAction SilentlyContinue
+            $current = Get-Disk -ErrorAction Stop | Where-Object {{ $_.Number -eq $diskNumber }}
+            if ($current) {{ Assert-SelectedDisk $current }}
             if ($current -and -not $current.IsOffline) {{
                 throw 'Windows did not leave the disk offline.'
             }}
@@ -154,9 +167,9 @@ $result | ConvertTo-Json -Compress
 """
 
 
-def _perform_windows_eject(disk_number: int) -> dict:
+def _perform_windows_eject(disk_number: int, expected_identity: dict | None = None) -> dict:
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", _powershell_eject_command(disk_number)],
+        ["powershell", "-NoProfile", "-Command", _powershell_eject_command(disk_number, expected_identity)],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -208,7 +221,7 @@ def privileged_eject(disk_number: int, status_file: str, expected_identity: dict
             raise ValueError("Disk number does not match the expected identity.")
         if _validate_eject_identity(disk_number, expected) is None:
             raise ValueError("Disk identity changed or the target is no longer safe.")
-        result = _perform_windows_eject(disk_number)
+        result = _perform_windows_eject(disk_number, expected)
     except Exception as error:
         result = {"success": False, "error": str(error)}
     _write_status(status_file, result)

@@ -128,7 +128,7 @@ def test_windows_eject_rejects_invalid_result(monkeypatch):
 
 def test_powershell_fallback_leaves_disk_offline_and_verifies_it():
     command = ejector._powershell_eject_command(3)
-    assert "Set-Disk -Number $diskNumber -IsOffline $true" in command
+    assert "$disk | Set-Disk -IsOffline $true" in command
     assert "-IsOffline $false" not in command
     assert "-not $current.IsOffline" in command
     assert "One or more volumes remain mounted" in command

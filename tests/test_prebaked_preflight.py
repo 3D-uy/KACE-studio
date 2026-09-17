@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from backend.image_manifest import ResolvedImage
+
 import hashlib
 import json
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("finalized_release_contract")
 
 import main
 from backend.image_manifest import ImageManifest, ManifestError
@@ -164,7 +168,7 @@ def test_prebaked_preflight_runs_before_any_block_write(tmp_path, monkeypatch):
     image.write_bytes(_raw_image())
     order = []
 
-    monkeypatch.setattr(api, "_resolve_prebaked_image", lambda *_args: str(image))
+    monkeypatch.setattr(api, "_resolve_prebaked_image", lambda *_args: ResolvedImage(str(image), "a" * 64, image.stat().st_size))
     monkeypatch.setattr(api, "_validate_raw_image", lambda *_args: len(_raw_image()))
     monkeypatch.setattr(
         api,
@@ -172,7 +176,7 @@ def test_prebaked_preflight_runs_before_any_block_write(tmp_path, monkeypatch):
         lambda *_args: order.append("preflight"),
         raising=False,
     )
-    monkeypatch.setattr(main, "flash_drive", lambda *_args: (order.append("flash") or True, ""))
+    monkeypatch.setattr(main, "flash_drive", lambda *_args, **_kwargs: (order.append("flash") or True, ""))
     monkeypatch.setattr(main, "inject_config", lambda *_args, **_kwargs: order.append("inject") or True)
 
     api._flash_worker(8, _provisioning(), {"number": 8})
@@ -187,7 +191,7 @@ def test_prebaked_preflight_failure_blocks_writer_and_injection(tmp_path, monkey
     calls = []
     states = []
 
-    monkeypatch.setattr(api, "_resolve_prebaked_image", lambda *_args: str(image))
+    monkeypatch.setattr(api, "_resolve_prebaked_image", lambda *_args: ResolvedImage(str(image), "a" * 64, image.stat().st_size))
     monkeypatch.setattr(api, "_validate_raw_image", lambda *_args: len(_raw_image()))
     monkeypatch.setattr(api, "set_device_state", lambda state, *_args: states.append(state))
     monkeypatch.setattr(

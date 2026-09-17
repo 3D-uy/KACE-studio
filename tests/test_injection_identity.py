@@ -1,3 +1,4 @@
+from backend.image_manifest import ResolvedImage
 """Injection identity regressions; storage is simulated, files stay in tmp_path."""
 
 import json
@@ -7,6 +8,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("finalized_release_contract")
 
 import main
 from backend import imager
@@ -195,7 +198,7 @@ def test_worker_transports_authorized_identity_to_both_stages(monkeypatch):
         image_type="raspios_vanilla", hostname="printer", image_path="default_lite",
         wifi_ssid="", wifi_password="", ssh_password="validpass123", dashboard_ui="mainsail",
     )
-    monkeypatch.setattr(api, "_resolve_default_image", lambda _arch: "fake.img")
+    monkeypatch.setattr(api, "_resolve_default_image", lambda _arch: ResolvedImage("fake.img", "a" * 64, 512))
     monkeypatch.setattr(api, "_validate_raw_image", lambda _path: 1024)
     flash = Mock(return_value=(True, ""))
     injection = Mock(return_value=True)

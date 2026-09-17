@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import uuid
+import secrets
 import webview
 
 # Adjust path to allow absolute imports
@@ -34,15 +35,19 @@ from backend.remote_power_config import RemotePowerConfigError, parse_remote_pow
 from backend.workflow_events import KaceWorkflowEventParser
 from backend.firmware_workflow import checkpoint_event, parse_checkpoint
 from backend.bootstrap_events import BootstrapEventParser, MachineProtocolDisplayFilter
-from backend.resources import bundled_path, verify_runtime_resources
+from backend.resources import (
+    bundled_path, verify_runtime_resources, ResourceContractError,
+    require_release_ready, load_release_contract,
+)
 from backend.app_paths import application_cache_dir
-from backend.image_manifest import ImageManifest
+from backend.image_manifest import ImageManifest, ResolvedImage
 from backend.prebaked_preflight import load_custom_attestation
 import mimetypes
 
 HTTP_TIMEOUT_SECONDS = 30
 PYWEBVIEW_SMOKE_TIMEOUT_SECONDS = 30
 IMAGE_PROVENANCE_SCHEMA = "kace-studio-image-provenance/v1"
+XZ_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024
 
 # Prevent Windows registry pollution from overriding MIME types
 mimetypes.add_type('application/javascript', '.js')
@@ -58,10 +63,13 @@ class KaceWsgiApp:
     PyWebView binds its internal WSGI server to localhost/127.0.0.1 on a randomly assigned high port.
     It does not bind to 0.0.0.0 or any external network interface, ensuring that the local file access
     and SFTP API routes (/api/sftp/list) are only accessible locally and not exposed to the local network.
+    Loopback is not authentication: SFTP additionally requires the session token
+    injected by PyWebView into its trusted renderer, never served as a static asset.
     """
     def __init__(self, web_dir, api_instance):
         self.web_dir = os.path.realpath(os.path.abspath(web_dir))
         self.api = api_instance
+        self._api_token = getattr(webview, 'token', '')
 
     def __call__(self, environ, start_response):
         path = environ.get('PATH_INFO', '')
@@ -74,6 +82,17 @@ class KaceWsgiApp:
                     ('Content-Type', 'application/json'),
                     ('Content-Length', str(len(data))),
                     ('Allow', 'GET'),
+                ])
+                return [data]
+            supplied = environ.get('HTTP_X_PYWEBVIEW_TOKEN', '')
+            if (not isinstance(self._api_token, str) or not self._api_token
+                    or not isinstance(supplied, str)
+                    or not secrets.compare_digest(supplied.encode('utf-8'), self._api_token.encode('utf-8'))):
+                data = b'{"error":"Forbidden"}'
+                start_response('403 Forbidden', [
+                    ('Content-Type', 'application/json'),
+                    ('Content-Length', str(len(data))),
+                    ('Cache-Control', 'no-store'),
                 ])
                 return [data]
             import urllib.parse
@@ -89,20 +108,21 @@ class KaceWsgiApp:
                 sftp_path = '/' + sftp_path
 
             try:
-                files = self.api._ssh.list_directory(sftp_path)
-                data = json.dumps({"path": sftp_path, "items": files}).encode('utf-8')
+                data = json.dumps(self.api.list_sftp_directory(sftp_path)).encode('utf-8')
                 # M2 FIX: Removed wildcard CORS header. This is a localhost-only
                 # internal API — no cross-origin access needed or permitted.
                 start_response('200 OK', [
                     ('Content-Type', 'application/json'),
                     ('Content-Length', str(len(data))),
+                    ('Cache-Control', 'no-store'),
                 ])
                 return [data]
             except Exception as e:
                 err_msg = json.dumps({"error": self.api._sanitize_error(e)}).encode('utf-8')
                 start_response('500 Internal Server Error', [
                     ('Content-Type', 'application/json'),
-                    ('Content-Length', str(len(err_msg)))
+                    ('Content-Length', str(len(err_msg))),
+                    ('Cache-Control', 'no-store'),
                 ])
                 return [err_msg]
         # Serve static files from web_dir
@@ -426,7 +446,7 @@ class Api:
                 target_size_bytes=selected_snapshot.get("size_bytes"),
                 cache_free_bytes=cache_free_bytes,
             )
-        except (OSError, ProvisioningValidationError, ValueError) as exc:
+        except (OSError, ProvisioningValidationError, ValueError, ResourceContractError) as exc:
             self.set_device_state("ERROR", 0, f"Provisioning preflight failed: {self._sanitize_error(exc)}")
             return False
 
@@ -567,23 +587,43 @@ class Api:
                             f"ZIP image size mismatch: expected {expected_size} bytes, extracted {bytes_written}."
                         )
             elif cached_file.lower().endswith((".xz", ".img.xz")):
-                decompressor = lzma.LZMADecompressor()
+                decompressor = lzma.LZMADecompressor(memlimit=XZ_MEMORY_LIMIT_BYTES)
                 compressed_size = os.path.getsize(cached_file)
                 bytes_read = 0
                 chunk_size = 4 * 1024 * 1024
 
                 with open(cached_file, "rb") as source, open(target_part, "wb") as target:
-                    while True:
+                    while not decompressor.eof:
                         self._check_cancelled()
-                        chunk = source.read(chunk_size)
-                        if not chunk:
-                            break
-                        bytes_read += len(chunk)
-                        data = decompressor.decompress(chunk)
+                        chunk = b''
+                        if decompressor.needs_input:
+                            chunk = source.read(chunk_size)
+                            if not chunk:
+                                break
+                            bytes_read += len(chunk)
+                        # Bound expanded output as well as compressed input.
+                        # Drain internal input with b'' before reading more.
+                        data = decompressor.decompress(chunk, max_length=chunk_size)
                         if data:
                             target.write(data)
                         pct = int((bytes_read / compressed_size) * 100) if compressed_size else 0
                         self.set_device_state("FLASHING", pct, f"{status_prefix}: {pct}%")
+                    if decompressor.eof:
+                        # Do not silently publish only the first stream of a
+                        # concatenated archive. XZ stream padding is all zero
+                        # bytes and its length must be a multiple of four.
+                        trailing = decompressor.unused_data
+                        padding_size = 0
+                        while True:
+                            self._check_cancelled()
+                            if trailing.strip(b'\x00'):
+                                raise ValueError("XZ archive contains unexpected trailing data or multiple streams.")
+                            padding_size += len(trailing)
+                            trailing = source.read(chunk_size)
+                            if not trailing:
+                                break
+                        if padding_size % 4:
+                            raise ValueError("XZ archive contains invalid stream padding.")
                 if not decompressor.eof:
                     raise ValueError("XZ archive ended before a complete compressed stream was read.")
             else:
@@ -695,7 +735,7 @@ class Api:
             )
         return entry.attestation
 
-    def _resolve_prebaked_image(self, image_type: ImageType, os_arch: str) -> str:
+    def _resolve_prebaked_image(self, image_type: ImageType, os_arch: str) -> ResolvedImage:
         """
         Resolves an immutable, checksummed pre-baked image manifest entry.
         Downloads, caches, verifies, and decompresses as needed.
@@ -706,7 +746,7 @@ class Api:
             raise ValueError(f"Unsupported automatic pre-baked image type: {image_type.value}")
         return self._resolve_manifest_image(image_type.value, os_arch, cache_dir)
 
-    def _resolve_manifest_image(self, image_type: str, os_arch: str, cache_dir: str) -> str:
+    def _resolve_manifest_image(self, image_type: str, os_arch: str, cache_dir: str) -> ResolvedImage:
         entry = ImageManifest.load_bundled().resolve(image_type, os_arch)
         self.set_device_state(
             "FLASHING", 0, f"Resolving pinned {image_type} image {entry.version}..."
@@ -753,7 +793,11 @@ class Api:
         self._validate_raw_image(target_img)
         if not self._image_provenance_is_valid(target_img, entry):
             raise ValueError("Prepared image provenance verification failed.")
-        return target_img
+        with open(target_img + ".sha256", encoding="utf-8") as source:
+            expected_image_sha256 = source.read().strip().split()[0].lower()
+        if self._compute_sha256(target_img, "Verifying prepared image") != expected_image_sha256:
+            raise ValueError("Prepared image changed after validation")
+        return ResolvedImage(target_img, expected_image_sha256, os.path.getsize(target_img))
 
     def _download_os_image(self, download_url: str, cached_xz: str, cached_xz_sha: str, remote_sha256: str, redirected_url: str, arch_suffix: str):
         """Downloads and atomically publishes a validated image archive."""
@@ -838,7 +882,7 @@ class Api:
             self._remove_file_if_present(checksum_part)
             raise
 
-    def _resolve_default_image(self, os_arch: str) -> str:
+    def _resolve_default_image(self, os_arch: str) -> ResolvedImage:
         """
         Resolves the default Raspberry Pi OS Lite image path.
         Downloads, caches, verifies, and decompresses as needed.
@@ -847,7 +891,7 @@ class Api:
         cache_dir = application_cache_dir()
         return self._resolve_manifest_image(ImageType.RASPIOS_VANILLA.value, os_arch, cache_dir)
 
-    def _resolve_custom_image(self, image_path: str) -> str:
+    def _resolve_custom_image(self, image_path: str) -> ResolvedImage:
         """Validate a custom raw image against a mandatory external SHA-256."""
         if not os.path.exists(image_path):
             raise ValueError(f"Custom image file not found: {image_path}")
@@ -891,7 +935,7 @@ class Api:
             )
 
         self._validate_raw_image(image_path)
-        return image_path
+        return ResolvedImage(image_path, expected_custom_sha, os.path.getsize(image_path))
 
     # ── Flash Worker Orchestrator ─────────────────────────────────────────
 
@@ -913,6 +957,8 @@ class Api:
             else:
                 image_path = self._resolve_custom_image(image_path)
 
+            resolved_image = image_path
+            image_path = resolved_image.path
             self._check_cancelled()
             self._validate_raw_image(image_path)
             if provisioning.image_type.is_prebaked:
@@ -931,6 +977,8 @@ class Api:
                 progress_callback,
                 drive_identity,
                 provisioning.verify_write,
+                expected_image_sha256=resolved_image.sha256,
+                expected_image_size=resolved_image.size_bytes,
             )
             if not success:
                 self.set_device_state("ERROR", 0, f"Flashing failed: {err_msg}")
@@ -1112,7 +1160,7 @@ class Api:
                 self._last_kace_workflow_state = str(event.get("state") or "")
                 try:
                     self._window.evaluate_js(
-                        f"window.updateKaceWorkflowEvent({json.dumps(event)});"
+                        f"window.updateKaceWorkflowEvent({json.dumps(event)}, {current_gen});"
                     )
                 except Exception as exc:
                     # Rendering progress is observational and must never interrupt
@@ -1221,7 +1269,7 @@ class Api:
                     self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
                 
             candidate.run_command_stream("bash", on_data, on_close, cols=cols, rows=rows)
-            return {"status": "success", "power_config": remote_power}
+            return {"status": "success", "power_config": remote_power, "generation": current_gen}
         else:
             candidate.close()
             with self._ssh_lock:
@@ -1262,6 +1310,13 @@ class Api:
         """Start exactly one guarded bootstrap command on the active SSH PTY."""
         if dashboard_ui not in {"mainsail", "fluidd", "both"}:
             return {"status": "failed", "message": "Invalid dashboard selection."}
+        try:
+            require_release_ready()
+            bootstrap_sha = load_release_contract()["kace"]["bootstrap_sha256"]
+            if not re.fullmatch(r"[0-9a-f]{64}", bootstrap_sha):
+                raise ResourceContractError("Bootstrap digest is invalid")
+        except (ResourceContractError, KeyError, TypeError) as exc:
+            return {"status": "failed", "message": str(exc)}
 
         workflow_id = f"bootstrap-{uuid.uuid4().hex}"
         with self._bootstrap_lock:
@@ -1289,12 +1344,23 @@ class Api:
             "=== KACE_BOOTSTRAP_EVENT: "
             f"{json.dumps(missing_event, separators=(',', ':'))} ==="
         )
+        mismatch_marker = "=== KACE_BOOTSTRAP_EVENT: " + json.dumps(
+            {**missing_event, "code": "BOOTSTRAP_CONTRACT_MISMATCH"}, separators=(',', ':'),
+        ) + " ==="
+
+        def verified_launch(path):
+            return (
+                f"if printf '%s  %s\\n' '{bootstrap_sha}' '{path}' | sha256sum --status --check; then "
+                f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' KACE_BOOTSTRAP_EVENT_STREAM=1 bash '{path}' --dashboard {dashboard_ui}; "
+                f"else printf '%s\\n' '{mismatch_marker}'; fi; "
+            )
+
         command = (
             f"KACE_STUDIO_LAUNCH=1; if [ -f /boot/firmware/bootstrap.sh ]; then "
-            f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' KACE_BOOTSTRAP_EVENT_STREAM=1 bash /boot/firmware/bootstrap.sh --dashboard {dashboard_ui}; "
-            f"elif [ -f /boot/bootstrap.sh ]; then "
-            f"KACE_BOOTSTRAP_WORKFLOW_ID='{workflow_id}' KACE_BOOTSTRAP_EVENT_STREAM=1 bash /boot/bootstrap.sh --dashboard {dashboard_ui}; "
-            f"else printf '%s\\n' '{missing_marker}'; fi\n"
+            + verified_launch("/boot/firmware/bootstrap.sh")
+            + "elif [ -f /boot/bootstrap.sh ]; then "
+            + verified_launch("/boot/bootstrap.sh")
+            + f"else printf '%s\\n' '{missing_marker}'; fi\n"
         )
 
         self.set_device_state("BOOTSTRAPPING", 0, "Starting KACE bootstrap.")
@@ -1343,12 +1409,25 @@ class Api:
         return clear_host_key(ip)
 
 
-    def download_file(self, remote_path: str) -> bool:
+    def list_sftp_directory(self, path: str) -> dict:
+        with self._ssh_lock:
+            session, generation = self._ssh, self._ssh_gen
+        items = session.list_directory(path)
+        with self._ssh_lock:
+            if session is not self._ssh or generation != self._ssh_gen:
+                raise RuntimeError("SSH session changed while listing directory")
+        return {"path": path, "items": items, "generation": generation}
+
+    def download_file(self, remote_path: str, generation=None) -> bool:
         """
         Exposes a native save file dialog to select target location and downloads the file.
         """
         if not self._window:
             return False
+        with self._ssh_lock:
+            session, selected_generation = self._ssh, self._ssh_gen
+            if generation is None or generation != selected_generation:
+                return False
         
         filename = os.path.basename(remote_path)
         chosen_path = self._window.create_file_dialog(
@@ -1365,11 +1444,19 @@ class Api:
             else:
                 return False
                 
-        return self._ssh.download_file(remote_path, chosen_path)
+        with self._ssh_lock:
+            if session is not self._ssh or selected_generation != self._ssh_gen:
+                return False
+        return session.download_file(remote_path, chosen_path)
 
     def get_firmware_deployment_manifest(self):
         """Return KACE's non-secret firmware manifest for reconnect recovery."""
-        raw = self._ssh.read_text_file("kace/deployment-manifest.json")
+        with self._ssh_lock:
+            session, generation = self._ssh, self._ssh_gen
+        raw = session.read_text_file("kace/deployment-manifest.json")
+        with self._ssh_lock:
+            if session is not self._ssh or generation != self._ssh_gen:
+                return None
         if not raw:
             return None
         try:
@@ -1381,17 +1468,23 @@ class Api:
         deployment = manifest.get("deployment")
         if not isinstance(deployment, dict):
             return None
-        return manifest
+        return {**manifest, "generation": generation}
 
     def get_firmware_workflow_checkpoint(self):
         """Return a validated read-only projection of KACE's resume checkpoint."""
-        raw = self._ssh.read_text_file("kace/firmware-workflow.json")
+        with self._ssh_lock:
+            session, generation = self._ssh, self._ssh_gen
+        raw = session.read_text_file("kace/firmware-workflow.json")
+        with self._ssh_lock:
+            if session is not self._ssh or generation != self._ssh_gen:
+                return None
         checkpoint = parse_checkpoint(raw)
         if checkpoint is None:
             return None
         return {
             "checkpoint": checkpoint,
             "event": checkpoint_event(checkpoint),
+            "generation": generation,
         }
 
     def _read_remote_power_config(self, session) -> dict:

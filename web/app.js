@@ -1235,6 +1235,7 @@ function performSshLogin(username, password) {
                 connectedUsername = username;
                 term.write("\x1b[1;32m[KACE Workspace] SSH connection established successfully.\x1b[0m\r\n");
                 updateConnectionStatus(true);
+                firmwareGeneration = Number.isInteger(res.generation) ? res.generation : null;
                 applyRemotePowerConfig(res && res.power_config ? res.power_config : {
                     status: 'error',
                     detail: 'SSH connected but remote power configuration was not returned',
@@ -1245,11 +1246,14 @@ function performSshLogin(username, password) {
                 if (window.pywebview && window.pywebview.api) {
                     window.pywebview.api.resize_ssh_pty(term.cols, term.rows);
                     window.pywebview.api.get_firmware_deployment_manifest()
-                        .then(manifest => restoreKaceDeploymentManifest(manifest))
+                        .then(manifest => {
+                            if (selection === powerSelection && sshConnected) restoreKaceDeploymentManifest(manifest);
+                        })
                         .catch(err => console.debug('No firmware deployment manifest available:', err));
                     window.pywebview.api.get_firmware_workflow_checkpoint()
                         .then(result => {
-                            if (result && result.event) window.updateKaceWorkflowEvent(result.event);
+                            if (selection === powerSelection && sshConnected && result && result.event)
+                                window.updateKaceWorkflowEvent(result.event, result.generation);
                         })
                         .catch(err => console.debug('No firmware workflow checkpoint available:', err));
                 }
@@ -1518,6 +1522,7 @@ function kaceWorkflowDefinition(kind) {
                 PREPARING_ARTIFACT: [0, 1],
                 ARTIFACT_READY: [1, 2],
                 AWAITING_USER_ACTION: [1, 2],
+                MEDIA_PREPARED: [1, 2],
                 AWAITING_FLASH: [1, 2],
                 ACTION_REQUIRED: [1, 2],
                 FLASHING: [1, 2],
@@ -1585,7 +1590,10 @@ function renderKaceWorkflow(view) {
 
     const isDone = view.state === 'DONE' || view.state === 'COMPLETE';
     const isActionRequired = view.kind === 'firmware_deployment' &&
-        ['COMPILE_REQUIRED', 'ARTIFACT_READY', 'AWAITING_FLASH', 'ACTION_REQUIRED'].includes(view.state);
+        [
+            'COMPILE_REQUIRED', 'ARTIFACT_READY', 'AWAITING_USER_ACTION',
+            'MEDIA_PREPARED', 'AWAITING_FLASH', 'ACTION_REQUIRED',
+        ].includes(view.state);
     const isError = KACE_TERMINAL_ERRORS.has(view.state);
     const positionState = isError ? (view.progressState || view.state) : view.state;
     const definition = kaceWorkflowDefinition(view.kind);
@@ -1639,6 +1647,8 @@ function renderKaceWorkflow(view) {
     if (downloadButton) {
         downloadButton.style.display = downloadablePath ? 'inline-flex' : 'none';
         downloadButton.dataset.remotePath = downloadablePath;
+        downloadButton.dataset.generation = Number.isInteger(view.generation) ? String(view.generation) : '';
+        downloadButton.disabled = !Number.isInteger(view.generation) || view.generation !== firmwareGeneration;
     }
 
     steps.replaceChildren();
@@ -1662,8 +1672,10 @@ function renderKaceWorkflow(view) {
     setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 0);
 }
 
-window.updateKaceWorkflowEvent = function (event) {
+let firmwareGeneration = null;
+window.updateKaceWorkflowEvent = function (event, generation = null) {
     if (!event || typeof event !== 'object') return false;
+    if (generation !== null && generation !== firmwareGeneration) return false;
     const workflowId = event.workflow_id;
     const sequence = event.sequence;
     const state = event.state;
@@ -1677,6 +1689,7 @@ window.updateKaceWorkflowEvent = function (event) {
     const previous = kaceWorkflowViews.get(workflowId);
     if (previous && sequence <= previous.sequence) return false;
     const view = {
+        generation,
         workflowId,
         sequence,
         state,
@@ -1717,17 +1730,20 @@ function restoreKaceDeploymentManifest(manifest) {
             instructions: deployment.instructions,
             automation: deployment.automation,
         },
-    });
+    }, manifest.generation);
 }
 
 window.downloadKaceFirmwareArtifact = function () {
     const button = document.getElementById('kace-firmware-download');
     const remotePath = button ? button.dataset.remotePath : '';
-    if (!remotePath || !window.pywebview || !window.pywebview.api) return false;
+    const generation = button && button.dataset.generation ? Number(button.dataset.generation) : null;
+    if (!remotePath || !sshConnected || !Number.isInteger(generation) || generation !== firmwareGeneration || !window.pywebview || !window.pywebview.api) return false;
     button.disabled = true;
-    window.pywebview.api.download_file(remotePath)
+    window.pywebview.api.download_file(remotePath, generation)
         .catch(err => console.error('Firmware download failed:', err))
-        .finally(() => { button.disabled = false; });
+        .finally(() => {
+            if (firmwareGeneration === generation && button.dataset.generation === String(generation)) button.disabled = false;
+        });
     return true;
 };
 
@@ -1948,6 +1964,11 @@ window.writeTerminalData = function (data, context) {
 };
 
 function updateConnectionStatus(connected) {
+    firmwareGeneration = null;
+    kaceWorkflowViews.clear();
+    sftpRequestSequence++;
+    sftpGeneration = null;
+    clearSftpSelection();
     sshConnected = connected;
     const bootstrapBtn = document.getElementById('bootstrap-btn');
     const disconnectBtn = document.getElementById('disconnect-btn');
@@ -1998,6 +2019,7 @@ function renderPrinterPower(result) {
 }
 
 function resetPowerTarget(host) {
+    firmwareGeneration = null;
     const accessButton = document.getElementById('authorize-moonraker-btn');
     if (accessButton) accessButton.disabled = true;
     powerSelection += 1;
@@ -2633,6 +2655,8 @@ function showFlashNotification() {
 
 let sftpCurrentPath = "/home/kace";
 let sftpSelectedFile = null;
+let sftpRequestSequence = 0;
+let sftpGeneration = null;
 
 function clearSftpSelection() {
     sftpSelectedFile = null;
@@ -2653,6 +2677,8 @@ window.refreshSftpBrowser = function () {
         panel.style.display = 'flex';
         loadSftpDirectory(sftpCurrentPath);
     } else {
+        sftpRequestSequence++;
+        sftpGeneration = null;
         panel.style.display = 'none';
         clearSftpSelection();
         sftpCurrentPath = "/home/kace";
@@ -2662,11 +2688,19 @@ window.refreshSftpBrowser = function () {
 };
 
 window.loadSftpDirectory = function (path) {
+    const request = ++sftpRequestSequence;
+    sftpGeneration = null;
+    clearSftpSelection();
+    const pendingList = document.getElementById('sftp-file-list');
+    if (pendingList) pendingList.innerHTML = '';
     sftpCurrentPath = path;
     const pathInput = document.getElementById('sftp-current-path');
     if (pathInput) pathInput.value = sftpCurrentPath;
 
-    fetch(`/api/sftp/list?path=${encodeURIComponent(path)}`)
+    fetch(`/api/sftp/list?path=${encodeURIComponent(path)}`, {
+        headers: { 'X-Pywebview-Token': window.pywebview?.token || '' },
+        cache: 'no-store',
+    })
         .then(response => {
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -2674,9 +2708,14 @@ window.loadSftpDirectory = function (path) {
             return response.json();
         })
         .then(data => {
+            if (request !== sftpRequestSequence || !sshConnected) return;
+            sftpCurrentPath = data.path;
+            sftpGeneration = data.generation;
+            if (pathInput) pathInput.value = data.path;
             renderSftpList(data.items);
         })
         .catch(err => {
+            if (request !== sftpRequestSequence || !sshConnected) return;
             console.error("Failed to load SFTP directory:", err);
             const listContainer = document.getElementById('sftp-file-list');
             if (listContainer) {
@@ -2768,6 +2807,7 @@ window.downloadSelectedSftpFile = function () {
 };
 
 window.downloadSftpFile = function (fileName) {
+    if (sftpGeneration === null || !sshConnected) return;
     const fullPath = sftpCurrentPath === "/" ? "/" + fileName : sftpCurrentPath + "/" + fileName;
     console.log(`SFTP Native Download requested for file: ${fullPath}`);
 
@@ -2775,7 +2815,7 @@ window.downloadSftpFile = function (fileName) {
     if (dlBtn) dlBtn.disabled = true;
 
     if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.download_file(fullPath)
+        window.pywebview.api.download_file(fullPath, sftpGeneration)
             .then(success => {
                 if (success) {
                     console.log(`Successfully downloaded ${fileName} natively.`);

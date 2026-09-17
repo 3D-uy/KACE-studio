@@ -27,6 +27,14 @@ class ManifestError(ValueError):
 
 
 @dataclass(frozen=True)
+class ResolvedImage:
+    """Image identity approved by the resolver, carried to the elevated writer."""
+    path: str
+    sha256: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
 class ImageManifestEntry:
     image_type: str
     architecture: str

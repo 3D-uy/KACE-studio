@@ -666,18 +666,32 @@ class SSHSession:
         sftp = self.get_sftp()
         if not sftp:
             return False
+        temporary_path = None
         try:
             import os
+            import tempfile
             # Ensure local parent directories exist
             local_dir = os.path.dirname(local_path)
             if local_dir:
                 os.makedirs(local_dir, exist_ok=True)
-            sftp.get(remote_path, local_path)
+            # A failed or interrupted transfer must never truncate a backup.
+            with tempfile.NamedTemporaryFile(dir=local_dir or ".", prefix=".kace-download-", delete=False) as temporary:
+                temporary_path = temporary.name
+            sftp.get(remote_path, temporary_path)
+            with open(temporary_path, "r+b") as temporary:
+                os.fsync(temporary.fileno())
+            os.replace(temporary_path, local_path)
+            temporary_path = None
             return True
         except Exception as e:
             print(f"SFTP download_file error from '{remote_path}' to '{local_path}': {e}")
             return False
         finally:
+            if temporary_path is not None:
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
             if sftp:
                 try:
                     sftp.close()

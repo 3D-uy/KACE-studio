@@ -5,6 +5,7 @@ import hashlib
 import re
 import subprocess
 import ctypes
+import struct
 from pathlib import Path
 from ctypes import wintypes
 
@@ -25,6 +26,7 @@ class Win32DiskWriter:
         self.handle = None
         self.volume_handles = []
         self.lock_failed = False
+        self._identity_verified = False
         
         GENERIC_READ = 0x80000000
         GENERIC_WRITE = 0x40000000
@@ -127,16 +129,8 @@ class Win32DiskWriter:
                     raise OSError(f"Failed to open volume {vol_path}: GetLastError {err_code}")
                 # Register ownership before either IOCTL can fail or raise.
                 self.volume_handles.append(h_vol)
-                bytes_returned = wintypes.DWORD(0)
-                if not self._DeviceIoControl(h_vol, 0x00090018, None, 0, None, 0, ctypes.byref(bytes_returned), None):
-                    err_code = kernel32.GetLastError()
-                    raise OSError(f"Failed to lock volume {vol_path}: GetLastError {err_code}")
-                if not self._DeviceIoControl(h_vol, 0x00090020, None, 0, None, 0, ctypes.byref(bytes_returned), None):
-                    err_code = kernel32.GetLastError()
-                    raise OSError(f"Failed to dismount volume {vol_path}: GetLastError {err_code}")
-                safe_print_out(f"STATUS: Locked and dismounted volume {vol_path}")
 
-            # Open the physical drive only after every volume has been secured.
+            # Open without dismounting anything. Verification owns destructive IOCTLs.
             self.handle = self._CreateFileW(
                 self.physical_path,
                 GENERIC_READ | GENERIC_WRITE,
@@ -159,6 +153,75 @@ class Win32DiskWriter:
     def _is_invalid(self, handle):
         return handle is None or handle == 0 or handle == -1 or handle == 0xFFFFFFFF or handle == 0xFFFFFFFFFFFFFFFF
 
+    def _query_handle(self, code, size, request=None):
+        output = ctypes.create_string_buffer(size)
+        returned = wintypes.DWORD(0)
+        input_buffer = ctypes.create_string_buffer(request) if request is not None else None
+        if not self._DeviceIoControl(
+            self.handle, code, input_buffer, len(request) if request is not None else 0,
+            output, size, ctypes.byref(returned), None,
+        ) or returned.value > size:
+            raise OSError("Could not read identity from the opened disk handle")
+        return output.raw[:returned.value]
+
+    def verify_identity(self, expected_identity):
+        """Bind authorization to the handle used by WriteFile, not a reused number."""
+        self._identity_verified = False
+        expected = _normalize_identity(expected_identity)
+        number = self._query_handle(0x002D1080, 12)  # IOCTL_STORAGE_GET_DEVICE_NUMBER
+        length = self._query_handle(0x0007405C, 8)  # IOCTL_DISK_GET_LENGTH_INFO
+        if len(number) != 12 or len(length) != 8:
+            raise OSError("Incomplete opened disk identity")
+        device_type, device_number, _partition = struct.unpack("<III", number)
+        if device_type != 7 or device_number != expected["number"] or struct.unpack("<q", length)[0] != expected["size_bytes"]:
+            raise OSError("Opened disk number or capacity differs from selected disk")
+        request = struct.pack("<III", 0, 0, 0)  # StorageDeviceProperty / PropertyStandardQuery
+        header = self._query_handle(0x002D1400, 8, request)
+        if len(header) != 8:
+            raise OSError("Incomplete storage descriptor header")
+        size = struct.unpack("<II", header)[1]
+        if not 36 <= size <= 65536:
+            raise OSError("Invalid storage descriptor length")
+        descriptor = self._query_handle(0x002D1400, size, request)
+        if len(descriptor) < size:
+            raise OSError("Incomplete storage descriptor")
+        serial_offset, bus_type = struct.unpack_from("<II", descriptor, 24)
+        if not 36 <= serial_offset < len(descriptor) or b"\0" not in descriptor[serial_offset:]:
+            raise OSError("Opened disk has no usable serial identity")
+        serial = descriptor[serial_offset:].split(b"\0", 1)[0].decode("ascii").strip()
+        buses = {4: "1394", 7: "USB", 12: "SD", 13: "MMC"}
+        if serial != expected["serial_number"] or buses.get(bus_type) != expected["bus_type"]:
+            raise OSError("Opened disk serial or bus differs from selected disk")
+        if _validate_disk_identity(expected["number"], expected) is None:
+            raise OSError("Selected disk identity or safety flags changed before writing")
+        # Bind every volume handle to the same physical device before locking or
+        # dismounting. A reusable DiskNumber from enumeration is not authority.
+        for volume in self.volume_handles:
+            physical = self.handle
+            try:
+                self.handle = volume
+                data = self._query_handle(0x002D1080, 12)
+                descriptor_header = self._query_handle(0x002D1400, 8, request)
+                if len(data) != 12 or data != number:
+                    # PartitionNumber differs for a volume, DeviceNumber must not.
+                    if len(data) != 12 or struct.unpack("<III", data)[:2] != (7, expected["number"]):
+                        raise OSError("Volume belongs to another physical disk")
+                if len(descriptor_header) != 8 or struct.unpack("<II", descriptor_header)[1] != size:
+                    raise OSError("Volume storage identity is unavailable")
+                if self._query_handle(0x002D1400, size, request) != descriptor:
+                    raise OSError("Volume storage identity differs from selected disk")
+            finally:
+                self.handle = physical
+            # Confirm the selected handle is still alive, never reopen by number.
+            if self._query_handle(0x002D1080, 12) != number:
+                raise OSError("Selected disk changed before securing volumes")
+            returned = wintypes.DWORD(0)
+            for code in (0x00090018, 0x00090020):
+                if not self._DeviceIoControl(volume, code, None, 0, None, 0, ctypes.byref(returned), None):
+                    raise OSError("Failed to lock or dismount verified volume")
+        self._identity_verified = True
+
+
     def _get_disk_volumes(self, disk_number):
         # SEC FIX: Runtime guard replacing assert (assert is disabled with -O).
         if not isinstance(disk_number, int):
@@ -169,7 +232,9 @@ class Win32DiskWriter:
             "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
             "Get-CimInstance -Namespace root/Microsoft/Windows/Storage "
             f"-ClassName MSFT_Partition -Filter 'DiskNumber = {disk_number}' -ErrorAction Stop "
-            "| Select-Object -ExpandProperty AccessPaths -ErrorAction Stop"
+            "| ForEach-Object { "
+            "if (-not $_.PSObject.Properties['AccessPaths']) { throw 'Missing AccessPaths' }; "
+            "ConvertTo-Json -InputObject @($_.AccessPaths | Where-Object { $_ }) -Compress } -ErrorAction Stop"
         )
         res = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
@@ -179,16 +244,30 @@ class Win32DiskWriter:
             raise OSError(f"Failed to enumerate volumes for disk {disk_number}: {res.stderr.strip()}")
         paths = []
         for line in res.stdout.splitlines():
-            line = line.strip()
-            if line:
-                if line.endswith("\\"):
-                    line = line[:-1]
-                if len(line) == 2 and line.endswith(":"):
-                    paths.append(f"\\\\.\\{line}")
-                else:
-                    paths.append(line)
-        return list(set(paths))
+            if not line.strip():
+                continue
+            try:
+                aliases = json.loads(line)
+            except ValueError as exc:
+                raise OSError("Failed to enumerate volumes: invalid partition paths") from exc
+            if not isinstance(aliases, list) or any(not isinstance(p, str) for p in aliases):
+                raise OSError("Failed to enumerate volumes: invalid partition paths")
+            aliases = {p.rstrip("\\") for p in aliases if p}
+            if not aliases:
+                continue
+            # AccessPaths are aliases of ONE partition, not separate volumes.
+            # Prefer its canonical GUID, including when only folder mounts exist.
+            guids = {p for p in aliases if re.fullmatch(r"\\\\\?\\Volume\{[^}]+\}", p, re.I)}
+            if len(guids) == 1:
+                paths.append(guids.pop())
+            elif not guids and len(aliases) == 1 and re.fullmatch(r"[A-Za-z]:", next(iter(aliases))):
+                paths.append("\\\\.\\" + aliases.pop())
+            else:
+                raise OSError("Failed to enumerate volumes: ambiguous partition identity")
+        return list({path.casefold(): path for path in paths}.values())
     def write(self, data: bytes):
+        if not self._identity_verified:
+            raise OSError("Disk identity and volumes have not been verified")
         if self._is_invalid(self.handle):
             raise OSError("Handle is closed or invalid.")
         
@@ -334,6 +413,9 @@ def write_status(file_path, status, progress=0, message=""):
             "progress": progress,
             "message": message
         }
+        match = re.fullmatch(r"kace_flash_\d+_([0-9a-f]{32})\.json", os.path.basename(file_path))
+        if match:
+            data["operation_id"] = match.group(1)
         # Write to a temp file then atomically replace the target.
         # Path.replace() is atomic on both POSIX and Windows (unlike os.remove + os.rename).
         temp_path = file_path + ".tmp"
@@ -441,18 +523,40 @@ def _validate_disk_identity(disk_number: int, expected_identity: dict = None):
         return None
 
 
-def _expected_status_path(disk_number: int) -> str:
+def _expected_status_path(disk_number: int, operation_id: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{32}", operation_id):
+        raise ValueError("invalid flash operation identity")
     user_profile = os.environ.get("USERPROFILE")
     if user_profile and os.path.exists(user_profile):
         temp_dir = os.path.join(user_profile, ".kace", "temp")
     else:
         temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
-    return os.path.realpath(os.path.join(temp_dir, f"kace_flash_{disk_number}.json"))
+    return os.path.realpath(os.path.join(temp_dir, f"kace_flash_{disk_number}_{operation_id}.json"))
 
 
 def _open_verified_image(image_path: str, expected_size: int, expected_sha256: str):
     """Opens, verifies, rewinds, and returns the same handle used for writing."""
-    source = open(image_path, "rb")
+    if sys.platform == "win32":
+        # Deny writes/deletion for the lifetime of this handle, including from
+        # already-open writers. The same immutable handle supplies every byte.
+        import msvcrt
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        create = kernel.CreateFileW
+        create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                          ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        create.restype = wintypes.HANDLE
+        handle = create(os.path.abspath(image_path), 0x80000000, 1, None, 3, 0x80, None)
+        if handle == ctypes.c_void_p(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+        except BaseException:
+            kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel.CloseHandle(handle)
+            raise
+        source = os.fdopen(descriptor, "rb")
+    else:
+        source = open(image_path, "rb")
     try:
         actual_size = os.fstat(source.fileno()).st_size
         if actual_size != expected_size:
@@ -490,12 +594,11 @@ def main():
         
     image_path = sys.argv[2]
     status_file = sys.argv[3]
-    expected_status = _expected_status_path(disk_number)
-    if os.path.normcase(os.path.realpath(status_file)) != os.path.normcase(expected_status):
-        safe_print_err("ERROR: Status file path is outside the application-owned flash directory.")
-        sys.exit(1)
     try:
         write_contract = json.loads(sys.argv[4])
+        expected_status = _expected_status_path(disk_number, write_contract["operation_id"])
+        if os.path.normcase(os.path.realpath(status_file)) != os.path.normcase(expected_status):
+            raise ValueError("Status file path is outside the application-owned flash operation")
         expected_identity = write_contract["disk_identity"]
         _normalize_identity(expected_identity)
         expected_image_size = int(write_contract["image_size"])
@@ -507,7 +610,7 @@ def main():
             raise ValueError("verify_write must be a boolean")
     except (KeyError, json.JSONDecodeError, TypeError, ValueError) as contract_error:
         safe_print_err(f"ERROR: Invalid write contract: {contract_error}")
-        write_status(status_file, "error", message="Invalid or incomplete write contract.")
+        # Never write a status to an unvalidated caller-selected path.
         sys.exit(1)
 
     if not os.path.exists(image_path):
@@ -545,32 +648,25 @@ def main():
         write_status(status_file, "error", message=err_msg)
         sys.exit(1)
 
-    physical_path = rf"\\.\PhysicalDrive{disk_number}"
+    # Get-Disk.Path is the selected device interface, unlike PhysicalDriveN
+    # which can be reassigned after removal. Verify the opened handle as well.
+    physical_path = current_identity["path"]
     
     try:
-        # 1. Take disk offline to release file system locks (non-fatal)
-        safe_print_out("STATUS: Taking disk offline...")
-        write_status(status_file, "taking_offline", progress=0, message="Taking disk offline to release volume locks...")
-        try:
-            subprocess.run(
-                ["powershell", "-Command", f"Set-Disk -Number {disk_number} -IsOffline $true"],
-                check=True, capture_output=True, **SUBPROCESS_FLAGS
-            )
-        except Exception as offline_err:
-            # Non-fatal warning - log and continue to let raw file open handle sharing check
-            warn_msg = f"Warning: Failed to offline disk {disk_number}: {offline_err}"
-            safe_print_err(warn_msg)
-            write_status(status_file, "taking_offline", progress=0, message="Disk offline warning (proceeding)...")
+        # Volume locking/dismounting is performed by Win32DiskWriter. Avoid
+        # Set-Disk by number: hotplug could redirect that action to another disk.
         
         # 2. Write blocks
         safe_print_out("STATUS: Starting physical block write...")
         write_status(status_file, "writing", progress=0, message="Writing blocks...")
         
         bytes_written = 0
+        written_digest = hashlib.sha256()
         chunk_size = 4 * 1024 * 1024  # 4MB chunks
         
         last_pct = -1
         with verified_source as src, Win32DiskWriter(physical_path, disk_number) as dest:
+            dest.verify_identity(expected_identity)
             # Verify exclusive lock was obtained on all volumes
             if dest.lock_failed:
                 raise OSError(
@@ -578,12 +674,13 @@ def main():
                     "Close any File Explorer windows or applications accessing "
                     "the SD card and try again."
                 )
-            while True:
-                chunk = src.read(chunk_size)
+            while bytes_written < image_size:
+                chunk = src.read(min(chunk_size, image_size - bytes_written))
                 if not chunk:
                     break
                 
                 chunk_len = len(chunk)
+                written_digest.update(chunk)
                 # Sector alignment validation & padding for Windows physical drive writing
                 if chunk_len % 512 != 0:
                     padding_len = 512 - (chunk_len % 512)
@@ -603,6 +700,9 @@ def main():
                     write_status(status_file, "writing", progress=pct, message=f"Writing blocks: {pct}%")
                     last_pct = pct
 
+            if (bytes_written != image_size or src.read(1)
+                    or written_digest.hexdigest() != expected_image_sha256.lower()):
+                raise OSError("Source image changed while writing; flashing is incomplete")
             dest.flush()
             if verify_write:
                 safe_print_out("STATUS: Verifying physical disk readback...")
@@ -636,18 +736,6 @@ def main():
             else:
                 safe_print_out("STATUS: Physical disk readback verification skipped by user.")
 
-        # 3. Bring disk back online to allow Windows to mount partitions (non-fatal)
-        safe_print_out("STATUS: Bringing disk back online...")
-        write_status(status_file, "bringing_online", progress=95, message="Bringing disk online...")
-        try:
-            subprocess.run(
-                ["powershell", "-Command", f"Set-Disk -Number {disk_number} -IsOffline $false"],
-                check=True, capture_output=True, **SUBPROCESS_FLAGS
-            )
-        except Exception as online_err:
-            warn_msg = f"Warning: Failed to online disk {disk_number}: {online_err}"
-            safe_print_err(warn_msg)
-        
         # 4. Request Windows to mount partition and refresh drive list (non-fatal)
         safe_print_out("STATUS: Refreshing host storage cache...")
         write_status(status_file, "bringing_online", progress=98, message="Refreshing host storage cache...")
@@ -672,27 +760,11 @@ def main():
         err_msg = f"System command failed (exit {e.returncode}): {stderr_msg if stderr_msg else 'No output.'}"
         safe_print_err(f"ERROR: {err_msg}")
         write_status(status_file, "error", message=err_msg)
-        # Attempt to online disk in case of failure
-        try:
-            subprocess.run(
-                ["powershell", "-Command", f"Set-Disk -Number {disk_number} -IsOffline $false"],
-                capture_output=True, **SUBPROCESS_FLAGS
-            )
-        except Exception as online_err:
-            safe_print_err(f"Warning: Failed to re-online disk after error: {online_err}")
         sys.exit(2)
     except Exception as e:
         err_msg = str(e)
         safe_print_err(f"ERROR: {err_msg}")
         write_status(status_file, "error", message=err_msg)
-        # Attempt to online disk in case of failure
-        try:
-            subprocess.run(
-                ["powershell", "-Command", f"Set-Disk -Number {disk_number} -IsOffline $false"],
-                capture_output=True, **SUBPROCESS_FLAGS
-            )
-        except Exception as online_err:
-            safe_print_err(f"Warning: Failed to re-online disk after error: {online_err}")
         sys.exit(2)
 
 if __name__ == "__main__":

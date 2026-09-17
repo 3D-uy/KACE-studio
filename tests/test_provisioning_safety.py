@@ -1,5 +1,7 @@
 import pytest
 
+pytestmark = pytest.mark.usefixtures("finalized_release_contract")
+
 from backend.imager import inject_config
 from backend.provisioning import ImageType, ProvisioningValidationError
 

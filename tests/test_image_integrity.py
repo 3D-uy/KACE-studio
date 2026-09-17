@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from backend.image_manifest import ResolvedImage
+
 import hashlib
 import io
 import lzma
@@ -10,6 +12,8 @@ import zipfile
 from types import SimpleNamespace
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("finalized_release_contract")
 
 import main
 from backend.provisioning import ImageType, validate_provisioning
@@ -72,6 +76,76 @@ def test_truncated_xz_is_rejected_without_publishing_cache(api, tmp_path, bytes_
     assert not (tmp_path / "image.img.sha256").exists()
 
 
+def test_xz_expansion_is_bounded_and_drained_without_more_input(api, tmp_path, monkeypatch):
+    content = bytearray(12 * 1024 * 1024)
+    content[510:512] = b'\x55\xaa'
+    archive = tmp_path / 'dense.img.xz'
+    archive.write_bytes(lzma.compress(content))
+    target = tmp_path / 'dense.img'
+    real_decompressor = lzma.LZMADecompressor
+    calls = []
+
+    class BoundedDecompressor:
+        def __init__(self, **kwargs):
+            assert 0 < kwargs['memlimit'] <= 256 * 1024 * 1024
+            self.inner = real_decompressor(**kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def decompress(self, chunk, max_length=-1):
+            assert 0 < max_length <= 4 * 1024 * 1024
+            calls.append(len(chunk))
+            return self.inner.decompress(chunk, max_length=max_length)
+
+    monkeypatch.setattr(lzma, 'LZMADecompressor', BoundedDecompressor)
+    digest = api._decompress_archive(str(archive), str(target))
+    assert target.read_bytes() == content
+    assert digest == hashlib.sha256(content).hexdigest()
+    assert 0 in calls  # Drain buffered compressed input before reading again.
+
+
+def test_cancellation_during_xz_buffer_drain_preserves_existing_image(api, tmp_path, monkeypatch):
+    content = bytearray(12 * 1024 * 1024)
+    content[510:512] = b'\x55\xaa'
+    archive = tmp_path / 'dense.img.xz'
+    archive.write_bytes(lzma.compress(content))
+    target = tmp_path / 'dense.img'
+    target.write_bytes(b'previous cache')
+    checks = []
+
+    def cancel():
+        checks.append(True)
+        if len(checks) == 3:
+            raise ValueError('cancelled while draining')
+
+    monkeypatch.setattr(api, '_check_cancelled', cancel)
+    with pytest.raises(ValueError, match='cancelled while draining'):
+        api._decompress_archive(str(archive), str(target))
+    assert target.read_bytes() == b'previous cache'
+    assert not target.with_suffix('.img.part').exists()
+
+
+@pytest.mark.parametrize('trailing', [b'junk', lzma.compress(b'another stream'), b'\x00'])
+def test_xz_never_silently_discards_trailing_content(api, tmp_path, trailing):
+    archive = tmp_path / 'image.xz'
+    archive.write_bytes(lzma.compress(raw_image()) + trailing)
+    target = tmp_path / 'image.img'
+    with pytest.raises(ValueError, match='trailing data|padding'):
+        api._decompress_archive(str(archive), str(target))
+    assert not target.exists()
+    assert not target.with_suffix('.img.part').exists()
+
+
+def test_xz_allows_valid_stream_padding(api, tmp_path):
+    content = raw_image()
+    archive = tmp_path / 'image.xz'
+    archive.write_bytes(lzma.compress(content) + b'\x00' * 8)
+    target = tmp_path / 'image.img'
+    api._decompress_archive(str(archive), str(target))
+    assert target.read_bytes() == content
+
+
 def test_zip_member_size_mismatch_is_rejected(api, tmp_path, monkeypatch):
     content = raw_image()
 
@@ -130,7 +204,7 @@ def test_partial_cached_image_without_sidecar_is_reextracted(api, tmp_path, monk
     monkeypatch.setattr(main.ImageManifest, "load_bundled", lambda: manifest)
 
     resolved = api._resolve_prebaked_image(ImageType.MAINSAILOS_PREBAKED, "32bit")
-    assert resolved == str(target)
+    assert resolved.path == str(target)
     assert target.read_bytes() == content
     assert api._cached_file_is_valid(str(target), raw_image=True)
 
@@ -205,7 +279,7 @@ def test_custom_raw_image_requires_plausible_partition_table(api, tmp_path):
     (tmp_path / "valid.img.sha256").write_text(
         hashlib.sha256(valid.read_bytes()).hexdigest() + "\n", encoding="utf-8"
     )
-    assert api._resolve_custom_image(str(valid)) == str(valid)
+    assert api._resolve_custom_image(str(valid)).path == str(valid)
 
 
 def test_custom_prebaked_family_reaches_injection_without_vanilla_inference(
@@ -223,10 +297,10 @@ def test_custom_prebaked_family_reaches_injection_without_vanilla_inference(
         dashboard_ui="mainsail",
     )
     captured = {}
-    monkeypatch.setattr(api, "_resolve_custom_image", lambda path: path)
+    monkeypatch.setattr(api, "_resolve_custom_image", lambda path: ResolvedImage(path, "a" * 64, 512))
     monkeypatch.setattr(api, "_validate_raw_image", lambda _path: 1024)
     monkeypatch.setattr(api, "_preflight_prebaked_image", lambda *_args: None)
-    def fake_flash(*args):
+    def fake_flash(*args, **image_contract):
         captured["verify_write"] = args[4]
         return True, ""
 

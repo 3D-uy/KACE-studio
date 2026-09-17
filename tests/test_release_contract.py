@@ -23,6 +23,9 @@ def test_runtime_resources_do_not_depend_on_working_directory(tmp_path, monkeypa
 
 def test_frozen_runtime_requires_and_uses_meipass(tmp_path, monkeypatch):
     (tmp_path / "bootstrap.sh").write_bytes(b"bootstrap")
+    (tmp_path / "release-contract.json").write_text(json.dumps({
+        "schema": "kace-studio-release-contract/v1", "kace": {"runtime_status": "pinned"},
+    }))
     monkeypatch.setattr(resources.sys, "frozen", True, raising=False)
     monkeypatch.setattr(resources.sys, "_MEIPASS", str(tmp_path), raising=False)
     assert resources.resolve_bootstrap_source() == tmp_path / "bootstrap.sh"

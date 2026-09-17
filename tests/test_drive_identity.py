@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("finalized_release_contract")
+
 import main
 from backend import imager, kace_writer
 
@@ -161,7 +163,7 @@ def test_helper_capacity_failure_never_opens_physical_drive(tmp_path, monkeypatc
     image = tmp_path / "large.img"
     image.write_bytes(b"X" * 1024)
     expected = snapshot(size_bytes=512)
-    status = tmp_path / ".kace" / "temp" / "kace_flash_3.json"
+    status = tmp_path / ".kace" / "temp" / ("kace_flash_3_" + "a" * 32 + ".json")
     status.parent.mkdir(parents=True)
     opened = False
 
@@ -175,6 +177,7 @@ def test_helper_capacity_failure_never_opens_physical_drive(tmp_path, monkeypatc
     monkeypatch.setattr(kace_writer, "Win32DiskWriter", ForbiddenWriter)
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     write_contract = {
+        "operation_id": "a" * 32,
         "disk_identity": expected,
         "image_size": image.stat().st_size,
         "image_sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
@@ -195,9 +198,10 @@ def test_helper_rejects_changed_image_before_opening_physical_drive(tmp_path, mo
     image = tmp_path / "image.img"
     image.write_bytes(b"original")
     expected = snapshot()
-    status = tmp_path / ".kace" / "temp" / "kace_flash_3.json"
+    status = tmp_path / ".kace" / "temp" / ("kace_flash_3_" + "a" * 32 + ".json")
     status.parent.mkdir(parents=True)
     contract = {
+        "operation_id": "a" * 32,
         "disk_identity": expected,
         "image_size": image.stat().st_size,
         "image_sha256": hashlib.sha256(image.read_bytes()).hexdigest(),

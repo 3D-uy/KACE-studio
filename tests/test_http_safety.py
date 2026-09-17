@@ -1,11 +1,13 @@
 import json
+from unittest.mock import Mock
+import main
 
 import pytest
 
 from main import Api, HTTP_TIMEOUT_SECONDS, KaceWsgiApp
 
 
-def _call_wsgi(app, path, method="GET", query=""):
+def _call_wsgi(app, path, method="GET", query="", **headers):
     captured = {}
 
     def start_response(status, headers):
@@ -16,8 +18,31 @@ def _call_wsgi(app, path, method="GET", query=""):
         "PATH_INFO": path,
         "QUERY_STRING": query,
         "REQUEST_METHOD": method,
+        **headers,
     }, start_response))
     return captured, body
+
+
+@pytest.mark.parametrize("token", [None, "wrong", "évil"])
+def test_sftp_requires_bridge_session_token_before_touching_ssh(tmp_path, token):
+    api = Api()
+    api._ssh.list_directory = Mock(return_value=[])
+    headers = {} if token is None else {"HTTP_X_PYWEBVIEW_TOKEN": token}
+    response, body = _call_wsgi(KaceWsgiApp(str(tmp_path), api), '/api/sftp/list', **headers)
+    assert response['status'] == '403 Forbidden'
+    assert json.loads(body) == {'error': 'Forbidden'}
+    api._ssh.list_directory.assert_not_called()
+
+
+def test_sftp_accepts_bridge_token_and_never_caches_listing(tmp_path):
+    api = Api()
+    api._ssh.list_directory = Mock(return_value=[])
+    response, body = _call_wsgi(KaceWsgiApp(str(tmp_path), api), '/api/sftp/list',
+                               HTTP_X_PYWEBVIEW_TOKEN=main.webview.token)
+    assert response['status'] == '200 OK'
+    assert response['headers']['Cache-Control'] == 'no-store'
+    assert json.loads(body)['items'] == []
+    api._ssh.list_directory.assert_called_once_with('/home/kace')
 
 
 def test_static_sibling_prefix_cannot_escape_web_root(tmp_path):
@@ -58,6 +83,7 @@ def test_sftp_route_sanitizes_internal_paths(tmp_path):
         KaceWsgiApp(str(tmp_path), api),
         "/api/sftp/list",
         query="path=/home/kace",
+        HTTP_X_PYWEBVIEW_TOKEN=main.webview.token,
     )
 
     assert headers["status"] == "500 Internal Server Error"

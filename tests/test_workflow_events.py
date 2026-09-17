@@ -242,6 +242,7 @@ def test_simulated_kace_transcripts_keep_terminal_semantics_observational():
     assert "tracker.classList.toggle('success', isDone);" in app_js
     assert "tracker.classList.toggle('action-required', isActionRequired);" in app_js
     assert "isDone || isActionRequired" not in app_js
+    assert "'MEDIA_PREPARED', 'AWAITING_FLASH', 'ACTION_REQUIRED'" in app_js
 
     # Reconnect recovery remains a read-only SSH/SFTP projection of KACE's
     # persisted manifest; it cannot advance or rewrite the workflow.
@@ -269,7 +270,7 @@ def test_simulated_kace_transcripts_keep_terminal_semantics_observational():
 
     api = Api()
     api._ssh = ReadOnlySsh()
-    assert api.get_firmware_deployment_manifest() == persisted
+    assert api.get_firmware_deployment_manifest() == {**persisted, "generation": 0}
     assert api._ssh.calls == ["kace/deployment-manifest.json"]
 
 
