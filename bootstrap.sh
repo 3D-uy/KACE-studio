@@ -105,8 +105,8 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="243d020457942dac9335c411a1b860cbeee6d099"
-KACE_INSTALL_SHA256="0a27bfc3064bc6baf35b02a3960dbbfa37b5c0e7d1d989e22eb97230a698c9e4"
+KACE_INSTALL_REF="a0cc0f542d6c61e38de5bb5a414e48dadba07df3"
+KACE_INSTALL_SHA256="de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
 readonly CROWSNEST_REPOSITORY CROWSNEST_REF MAINSAIL_VERSION MAINSAIL_URL MAINSAIL_SHA256
@@ -410,25 +410,28 @@ rollback_power_reconciliation() {
     if [ "$POWER_RECONCILIATION_COMMITTED" -eq 1 ] || [ -z "$POWER_RECONCILE_CONFIG" ]; then
         return 0
     fi
-    if [ "$POWER_RECONCILE_BACKUP" = "__ABSENT__" ]; then
-        rm -f "$POWER_RECONCILE_CONFIG"
-    elif [ -n "$POWER_RECONCILE_BACKUP" ] && [ -f "$POWER_RECONCILE_BACKUP" ]; then
-        mv -f "$POWER_RECONCILE_BACKUP" "$POWER_RECONCILE_CONFIG"
-    fi
-    if [ -n "$POWER_RECONCILE_STATE" ]; then
-        if [ "$POWER_RECONCILE_STATE_BACKUP" = "__ABSENT__" ]; then
-            rm -f "$POWER_RECONCILE_STATE"
-        elif [ -n "$POWER_RECONCILE_STATE_BACKUP" ] && [ -f "$POWER_RECONCILE_STATE_BACKUP" ]; then
-            mv -f "$POWER_RECONCILE_STATE_BACKUP" "$POWER_RECONCILE_STATE"
+    # A backup is evidence, not permission to overwrite a later editor. There
+    # is no atomic content-conditional restore for these ordinary files.
+    # Keep both live paths and backups, including evidence of prior absence.
+    local path backup conflict=0
+    for path in "$POWER_RECONCILE_CONFIG" "$POWER_RECONCILE_STATE"; do
+        [ -z "$path" ] && continue
+        if [ "$path" = "$POWER_RECONCILE_CONFIG" ]; then
+            backup="$POWER_RECONCILE_BACKUP"
+        else
+            backup="$POWER_RECONCILE_STATE_BACKUP"
         fi
-    fi
-    POWER_RECONCILIATION_COMMITTED=1
-    log_warn "Rolled back moonraker.conf and power.json because power reconciliation did not commit."
-    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet moonraker 2>/dev/null; then
-        if ! $SUDO systemctl restart moonraker; then
-            log_warn "Moonraker could not be restarted after restoring its previous configuration."
+        if [ "$backup" = "__ABSENT__" ]; then
+            [ ! -e "$path" ] && [ ! -L "$path" ] && continue
+        elif [ -n "$backup" ] && [ -f "$backup" ] && cmp -s "$backup" "$path"; then
+            continue
         fi
-    fi
+        log_err "Power reconciliation requires manual recovery: live file preserved: $path; original: $backup"
+        conflict=1
+    done
+    [ "$conflict" -eq 0 ] || return 1
+    log_warn "Power reconciliation aborted; original bytes are already present. Backups retained."
+    return 0
 }
 
 commit_power_reconciliation() {
@@ -1389,7 +1392,8 @@ cleanup() {
 exit_handler() {
     local exit_status=$?
     if [ "$exit_status" -ne 0 ]; then
-        rollback_power_reconciliation
+        # Report the original failure even when manual recovery is required.
+        rollback_power_reconciliation || true
     fi
     if [ "$BOOTSTRAP_TERMINAL_EMITTED" -ne 1 ]; then
         if [ "$exit_status" -eq 2 ]; then

@@ -10,11 +10,31 @@
 
 <p align="center">
   <a href="https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml"><img src="https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <img src="https://img.shields.io/badge/status-pre--1.0-yellow" alt="Project status: pre-1.0">
+  <img src="https://img.shields.io/badge/release-0.5.0--rc.1-orange" alt="Project status: pre-1.0">
   <img src="https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue" alt="Python 3.11 and 3.12">
   <img src="https://img.shields.io/badge/platform-Windows-0078D4" alt="Windows">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0 license"></a>
 </p>
+
+## Platforms and firmware
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=for-the-badge" alt="Windows 10 and 11">
+  <img src="https://img.shields.io/badge/Raspberry_Pi-provisioning-A22846?style=for-the-badge&amp;logo=raspberrypi&amp;logoColor=white" alt="Raspberry Pi provisioning">
+  <img src="https://img.shields.io/badge/Klipper-via_KACE-F2A900?style=for-the-badge" alt="Klipper via KACE">
+  <img src="https://img.shields.io/badge/Moonraker-API-2471A3?style=for-the-badge" alt="Moonraker API">
+</p>
+
+| Component | Current capability | Boundary |
+| --- | --- | --- |
+| 🪟 Windows 10/11 | PyWebView desktop, imaging, SSH/SFTP | WebView2 and administrator approval for the isolated disk writer. |
+| 🍓 Raspberry Pi OS | Pinned 32/64-bit image provisioning | Exact images and hashes in `image-manifest.json`. |
+| 🌐 MainsailOS / dashboards | Attested pre-baked image entries; Mainsail/Fluidd bootstrap selection | An unavailable image family is rejected; dashboard support is not an image attestation. |
+| ⚙️ Klipper + KACE | Host provisioning and firmware workflow display | KACE owns firmware decisions; Studio does not authorize MCU flashing. |
+| 🧪 Linux | Non-destructive backend tests | No Linux physical writer or packaged desktop release. |
+
+> [!IMPORTANT]
+> **0.5.0-rc.1 is a controlled test candidate paired with KACE 0.9.4-rc.2.** Physical qualification remains pending. A local unsigned executable is usable only as an explicitly trusted test artifact with its matching manifest; it does not satisfy the signed-release gate. Follow the [release checklist](RELEASE_CHECKLIST.md) and KACE's [hardware qualification guide](https://github.com/3D-uy/KACE/blob/main/docs/HARDWARE_TESTING.md).
 
 ## Overview
 
@@ -49,7 +69,7 @@ Manual CI exposes a separate `release_candidate` gate. It is fail-closed: public
 
 KACE Studio is in active pre-1.0 development. Its backend tests run on Windows and Linux with Python 3.11 and 3.12, and CI builds a Windows executable after the tests pass. Automated tests use mocks and temporary files: they do not write to physical disks or validate a complete printer installation on real hardware.
 
-The `main` branch and CI artifacts are development outputs, not a stable compatibility promise or a published release process.
+The versioned release candidate is for controlled qualification. `main` remains mutable, and an automated pass does not establish physical compatibility. See [CHANGELOG.md](CHANGELOG.md) for the stabilization changes.
 
 ## Features
 
@@ -98,17 +118,21 @@ git clone https://github.com/3D-uy/KACE-studio.git
 Set-Location KACE-studio
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements.lock
 python main.py
 ```
 
 ### Build the Windows executable
 
 ```powershell
-python -m pip install -r requirements.txt
-python -m pip install -r requirements-dev.txt
-pyinstaller --clean -y main.spec
+# Use exactly Python 3.12.10 and a clean, published checkout.
+python -m pip install --require-hashes -r requirements.lock
+python scripts/release.py fetch-bootstrap
+python scripts/release.py verify-remote-installer
+python scripts/release.py verify-inputs
+$env:PYTHONHASHSEED = '1'
+$env:SOURCE_DATE_EPOCH = (git show -s --format=%ct HEAD)
+python -m PyInstaller --clean -y main.spec
 ```
 
 Before building, place the bootstrap file verified against the pinned KACE commit and SHA-256 at `bootstrap.sh`. The CI workflow performs that download and verification automatically. See [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the complete contract check.
@@ -159,8 +183,7 @@ The application normally runs without elevation. Only the physical writer helper
 Install both runtime and development dependencies, then run:
 
 ```powershell
-python -m pip install -r requirements.txt
-python -m pip install -r requirements-dev.txt
+python -m pip install --require-hashes -r requirements.lock
 python -m pytest -v
 ```
 
@@ -193,6 +216,19 @@ CI does not publish a release or flash physical media. Normal CI builds remain u
 
 ## Compatibility and limits
 
+- The local `/api/sftp/list` endpoint requires the current PyWebView session token
+  in `X-Pywebview-Token`. The renderer receives this token through the native bridge;
+  it is not embedded in static assets or query strings. Listings are not cached.
+- XZ extraction bounds expanded output to 4 MiB per call and decoder memory to
+  256 MiB, checking cancellation between output blocks. It requires one complete
+  stream, permits valid XZ zero padding, and rejects extra streams/trailing data
+  rather than silently publishing a truncated image. Dictionary requirements above
+  the memory limit fail before publication; use a smaller XZ dictionary or raw IMG.
+- A locally rebuilt executable needs a new release manifest. Older manifests and
+  independent-build attestations must stay with their original executable; they
+  do not attest a rebuild from a modified worktree. Local validation does not
+  replace the signing and independent-builder release gates described above.
+
 - Physical imaging is Windows-only.
 - Automated official-image paths handle the ZIP/XZ formats implemented by the acquisition pipeline.
 - Manually selected custom images must already be raw `.img` files; compressed custom files are rejected before the writer.
@@ -219,3 +255,47 @@ Issues and pull requests are managed in the [KACE Studio repository](https://git
 ## License
 
 KACE Studio is licensed under the [GNU General Public License v3.0](LICENSE).
+
+## Versioned runtime and recovery contract
+
+`release-contract.json` binds the installed KACE runtime and installer to the same
+immutable commit, and binds bootstrap delivery to a separate immutable commit
+containing that runtime pin. Every required runtime file is verified against its
+committed hash. `runtime_status: pinned` permits packaging only after this binding
+is finalized; a future `pending_commit` state deliberately blocks delivery,
+launch and packaging until the next candidate is committed and verified.
+
+Source mode checks the sibling bootstrap; packaged mode checks the bundled copy.
+Remote launch also checks its bytes, so media prepared by an older Studio cannot
+silently launch a different bootstrap. Preserve the EXE and its own external
+manifest together; a manifest from another commit does not attest a rebuild.
+
+KACE may stop with a reviewed configuration proposal when a transport cannot
+atomically protect existing files from concurrent edits. It may also require
+manual recovery with preserved snapshots. Studio reports these states rather
+than treating transferred files, media preparation or an SSH reconnect as success.
+
+Raw disk writes open the selected device interface and validate the number,
+capacity, bus and serial on the same Windows handle used for writing. Missing or
+conflicting evidence blocks writing. Number-based offline/online commands are no
+longer used. SFTP listings/downloads carry the SSH generation; downloads publish
+via an atomic replacement only after transfer completion.
+
+Image resolution carries the approved raw-image SHA-256 and size through to the
+elevated writer. Windows denies modifications to the source handle while it is
+verified and copied. Each flash operation uses its own status path and identity;
+completion requires both its matching report and a successful helper exit.
+The bootstrap copy preserves the exact approved bytes, including its shebang.
+Firmware artifact downloads also retain the originating SSH generation, and
+reconnect recovery discards replies from superseded sessions.
+
+Disk volume locking/dismounting occurs only after the opened physical handle and
+each opened volume's device number/storage descriptor match the authorized disk.
+Writes remain disabled until that protection completes; constructor or identity
+failure closes handles without dismounting unverified volumes.
+
+Safe eject distinguishes a successful empty disk enumeration from an inspection
+error. Query failures, identity changes, and online disks with no drive letters
+cannot produce a safe-removal result. The fallback operates on the inspected disk
+object and requires verified offline state. These paths are tested with simulated
+Win32 devices and the real PowerShell script against fake storage providers.

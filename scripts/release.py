@@ -133,6 +133,15 @@ def verify_inputs(contract: dict | None = None, root: Path = ROOT) -> dict:
     if signing.get("expected_certificate_sha256_env") != "KACE_SIGNING_CERT_SHA256":
         raise ReleaseContractError("release signer identity environment is invalid")
     kace = contract.get("kace", {})
+    if kace.get("runtime_status") not in {"pending_commit", "pinned"}:
+        raise ReleaseContractError("KACE runtime_status must be pending_commit or pinned")
+    required_runtime = kace.get("required_runtime_files")
+    if not isinstance(required_runtime, dict) or not required_runtime:
+        raise ReleaseContractError("KACE runtime content contract is missing")
+    for name, digest in required_runtime.items():
+        if not isinstance(name, str) or Path(name).is_absolute() or ".." in Path(name).parts or "\\" in name:
+            raise ReleaseContractError("Unsafe KACE runtime contract path")
+        _require_pattern(digest, SHA256, f"runtime file {name}")
     candidate_ref = _require_pattern(kace.get("candidate_ref"), FULL_SHA, "candidate_ref")
     bootstrap_ref = _require_pattern(kace.get("bootstrap_ref"), FULL_SHA, "bootstrap_ref")
     bootstrap_hash = _require_pattern(
@@ -180,6 +189,7 @@ def verify_inputs(contract: dict | None = None, root: Path = ROOT) -> dict:
     files = resource_files(contract, root)
     return {
         "candidate_ref": candidate_ref,
+        "runtime_status": kace["runtime_status"],
         "bootstrap_ref": bootstrap_ref,
         "bootstrap_sha256": bootstrap_hash,
         "installer_ref": installer_ref,
@@ -380,6 +390,8 @@ def build_manifest(
 ) -> dict:
     contract = load_contract(root / "release-contract.json")
     inputs = verify_inputs(contract, root)
+    if inputs["runtime_status"] != "pinned":
+        raise ReleaseContractError("KACE runtime candidate is pending; release manifest cannot be published")
     inventory = verify_bundle(artifact, contract, root)
     windows_metadata = verify_windows_metadata(artifact, contract)
     head = _git("rev-parse", "HEAD", root=root)
@@ -696,6 +708,7 @@ def fetch_bootstrap(contract: dict | None = None, destination: Path | None = Non
 
 def verify_remote_installer(contract: dict | None = None) -> str:
     contract = contract or load_contract()
+    verify_inputs(contract)
     kace = contract["kace"]
     candidate_ref = _require_pattern(kace.get("candidate_ref"), FULL_SHA, "candidate_ref")
     ref = _require_pattern(kace.get("installer_ref"), FULL_SHA, "installer_ref")
@@ -707,7 +720,22 @@ def verify_remote_installer(contract: dict | None = None) -> str:
     url = f"https://raw.githubusercontent.com/3D-uy/KACE/{ref}/install.sh"
     with tempfile.TemporaryDirectory(prefix="kace-studio-installer-contract-") as directory:
         _download_verified(url, Path(directory) / "install.sh", expected)
+        for name, digest in kace.get("required_runtime_files", {}).items():
+            _download_verified(
+                f"https://raw.githubusercontent.com/3D-uy/KACE/{ref}/{name}",
+                Path(directory) / "runtime-file", digest,
+            )
     return expected
+
+
+def verify_local_candidate(source: Path, ref: str, contract: dict | None = None) -> None:
+    """Validate a real commit, never the dirty working tree or an invented SHA."""
+    contract = contract or load_contract()
+    _require_pattern(ref, FULL_SHA, "candidate_ref")
+    for name, expected in contract["kace"]["required_runtime_files"].items():
+        result = subprocess.run(["git", "-C", str(source), "show", f"{ref}:{name}"], capture_output=True)
+        if result.returncode or sha256_bytes(result.stdout) != expected:
+            raise ReleaseContractError(f"KACE candidate does not contain the required runtime: {name}")
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -716,6 +744,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     subparsers.add_parser("verify-inputs")
     subparsers.add_parser("fetch-bootstrap")
     subparsers.add_parser("verify-remote-installer")
+    candidate = subparsers.add_parser("verify-local-candidate")
+    candidate.add_argument("source", type=Path)
+    candidate.add_argument("ref")
     bundle = subparsers.add_parser("verify-bundle")
     bundle.add_argument("artifact", type=Path)
     metadata = subparsers.add_parser("verify-metadata")
@@ -761,6 +792,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             fetch_bootstrap()
         elif args.command == "verify-remote-installer":
             verify_remote_installer()
+        elif args.command == "verify-local-candidate":
+            verify_local_candidate(args.source, args.ref)
         elif args.command == "verify-bundle":
             verify_bundle(args.artifact)
         elif args.command == "verify-metadata":

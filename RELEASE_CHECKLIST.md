@@ -1,6 +1,22 @@
 # KACE Studio release checklist
 
-KACE Studio is currently pre-1.0. This checklist defines the evidence required before a future release; following it does not itself publish, tag, sign, or release anything.
+KACE Studio is currently pre-1.0. This checklist distinguishes the `0.5.0-rc.1`
+controlled test candidate from a signed, independently reproduced release.
+Following it does not itself publish, tag, sign, or release anything.
+
+## Controlled test candidate
+
+An explicitly approved unsigned local candidate may be built once from clean,
+published source for controlled qualification. It must pass contract, bundle,
+PE metadata and packaged renderer checks and carry its own external manifest and
+SHA-256. Record the actual test results, CI gaps and unsigned status. Leave
+same-runner/independent reproduction unverified unless matching evidence exists;
+never reuse an older artifact's attestation. This does not weaken the signed
+publication gates below or claim physical qualification.
+
+Read KACE's [hardware qualification guide](https://github.com/3D-uy/KACE/blob/main/docs/HARDWARE_TESTING.md).
+Existing configuration replacement may stop with a reviewed proposal; recovery
+may require manual intervention. Resolve those states before claiming completion.
 
 ## 1. Clean inputs
 
@@ -18,6 +34,10 @@ KACE is the source of `scripts/bootstrap.sh`. Studio must not maintain an indepe
 - [ ] Calculate SHA-256 from the downloaded bytes.
 - [ ] Update `candidate_ref`, `bootstrap_ref`, `bootstrap_sha256`, `installer_ref`, and `installer_sha256` together in `release-contract.json`; `candidate_ref` and `installer_ref` must be identical, and CI must not duplicate them as environment variables.
 - [ ] Confirm the bootstrap's internal installer URL, revision, and SHA-256 identify an already published KACE `install.sh`.
+- [ ] Hash required runtime files from the committed Git bytes and run
+      `python scripts/release.py verify-local-candidate ../KACE <runtime-commit>`.
+- [ ] Run `fetch-bootstrap`, `verify-remote-installer` and `verify-inputs`; only then
+      set `runtime_status` to `pinned`. Publish Studio's final commit before building.
 - [ ] Fetch the remote installer and verify its SHA-256 without executing it.
 - [ ] Run the tests that reject a mismatched or mutable contract.
 
@@ -51,7 +71,9 @@ python -m pytest -v
 
 ## 4. Windows build
 
-Install only the hashed lock, fetch/verify the contract bootstrap, then build:
+Use exactly the Python and PyInstaller versions in `release-contract.json`.
+Install only the hashed lock, fetch/verify the contract bootstrap, then build from
+the clean, published Studio commit:
 
 ```powershell
 python -m pip install --require-hashes -r requirements.lock
@@ -72,7 +94,8 @@ python scripts/release.py write-manifest dist/KACE-studio.exe dist/KACE-studio.r
 - [ ] The executable launches without using files from the source checkout.
 - [ ] The packaged PyWebView smoke loads the real DOM and JavaScript bridge before its external 45-second deadline; `--verify-package` alone does not satisfy this gate.
 - [ ] The exact bootstrap, release contract, and every tracked `web/` byte are extracted from the PyInstaller archive and compared with the verified inputs.
-- [ ] The comparison accounts for Studio's intentional boot-partition version comment and LF normalization at injection time; those transformed bytes are tested separately from the packaged input.
+- [ ] Boot-partition injection preserves the approved bootstrap bytes exactly,
+      including the shebang; source and packaged copies match the contract.
 - [ ] The executable contains no unexpected development paths, caches, logs, or credentials.
 - [ ] PE numeric/string version metadata matches `release-contract.json` exactly.
 

@@ -2,6 +2,11 @@
 
 import json
 from pathlib import Path
+import sys
+
+sys.path.insert(0, SPECPATH)
+from backend.resources import require_release_ready
+require_release_ready()
 
 from PyInstaller.utils.win32.versioninfo import (
     FixedFileInfo,
