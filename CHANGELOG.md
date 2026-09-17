@@ -27,6 +27,8 @@ Physical qualification and signed stable distribution remain separate gates.
 ### Documentation
 - Add platform/firmware badges, a current capability table, immutable release
   instructions and the controlled hardware qualification path.
+- Reorganize the README around the guided desktop journey, supported Pi/image
+  matrices, concise safety guidance and direct KACE ecosystem navigation.
 - Separate unsigned local test-candidate evidence from signed, independently
   reproduced release evidence. Each executable carries its own external manifest.
 
