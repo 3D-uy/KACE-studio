@@ -4,6 +4,7 @@ import json
 import hashlib
 import io
 import re
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,53 @@ from scripts import release
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_contract_download_retries_transport_failure_with_fresh_verified_bytes(tmp_path, monkeypatch):
+    payload = b"verified contract"
+    calls = []
+    def download(*_args, **_kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ConnectionResetError("connection reset")
+        return io.BytesIO(payload)
+    monkeypatch.setattr(release.urllib.request, "urlopen", download)
+    monkeypatch.setattr(release.time, "sleep", lambda _: None)
+    destination = tmp_path / "contract"
+    release._download_verified("https://example.invalid/contract", destination, hashlib.sha256(payload).hexdigest())
+    assert destination.read_bytes() == payload
+    assert len(calls) == 2
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+def test_contract_download_retry_is_bounded_and_preserves_previous_file(tmp_path, monkeypatch):
+    calls = []
+    def unavailable(*_args, **_kwargs):
+        calls.append(1)
+        raise urllib.error.URLError("offline")
+    monkeypatch.setattr(release.urllib.request, "urlopen", unavailable)
+    monkeypatch.setattr(release.time, "sleep", lambda _: None)
+    destination = tmp_path / "contract"
+    destination.write_bytes(b"previous")
+    with pytest.raises(urllib.error.URLError):
+        release._download_verified("https://example.invalid/contract", destination, "0" * 64)
+    assert len(calls) == 3
+    assert destination.read_bytes() == b"previous"
+    assert list(tmp_path.iterdir()) == [destination]
+
+
+def test_contract_download_never_retries_hash_mismatch(tmp_path, monkeypatch):
+    calls = []
+    def wrong_bytes(*_args, **_kwargs):
+        calls.append(1)
+        return io.BytesIO(b"wrong")
+    monkeypatch.setattr(release.urllib.request, "urlopen", wrong_bytes)
+    destination = tmp_path / "contract"
+    destination.write_bytes(b"previous")
+    with pytest.raises(release.ReleaseContractError, match="SHA-256 mismatch"):
+        release._download_verified("https://example.invalid/contract", destination, "0" * 64)
+    assert len(calls) == 1
+    assert destination.read_bytes() == b"previous"
 
 
 def test_runtime_resources_do_not_depend_on_working_directory(tmp_path, monkeypatch):

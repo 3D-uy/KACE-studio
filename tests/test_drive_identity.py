@@ -18,7 +18,9 @@ from backend import imager, kace_writer
 @pytest.fixture(autouse=True)
 def windows_disk_api(monkeypatch):
     """Exercise the mocked Windows disk path on every CI platform."""
-    monkeypatch.setattr(imager.sys, "platform", "win32")
+    # Do not change process-wide sys.platform: the real temporary-file image
+    # reader must keep using its host OS while the disk API is simulated.
+    monkeypatch.setattr(imager, "sys", SimpleNamespace(**{**vars(imager.sys), "platform": "win32"}))
 
 
 def powershell_disk(**overrides):

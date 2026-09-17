@@ -12,7 +12,7 @@ from unittest.mock import Mock
 import pytest
 
 import main
-from backend import imager, kace_writer
+from backend import imager, kace_writer, resources
 from tests.test_drive_identity import snapshot
 
 
@@ -28,7 +28,7 @@ def test_changed_custom_image_cannot_be_reapproved_by_flash_drive(tmp_path, monk
     approved = main.Api()._resolve_custom_image(str(path))
     path.write_bytes(b"B" * 510 + b"\x55\xaa")
     elevate = Mock(side_effect=AssertionError("No elevation allowed"))
-    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(shell32=SimpleNamespace(ShellExecuteExW=elevate)))
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(shell32=SimpleNamespace(ShellExecuteExW=elevate)), raising=False)
     ok, detail = imager.flash_drive(3, approved.path, drive_identity=snapshot(),
         expected_image_sha256=approved.sha256, expected_image_size=approved.size_bytes)
     assert not ok and "changed after approval" in detail
@@ -37,6 +37,7 @@ def test_changed_custom_image_cannot_be_reapproved_by_flash_drive(tmp_path, monk
 
 @pytest.mark.parametrize("exit_code,foreign,success", [(0, False, True), (2, False, False), (0, True, False)])
 def test_completion_requires_own_operation_and_successful_exit(tmp_path, monkeypatch, exit_code, foreign, success):
+    monkeypatch.setattr(imager, "sys", SimpleNamespace(**{**vars(imager.sys), "platform": "win32"}))
     path = image_file(tmp_path)
     approved = main.Api()._resolve_custom_image(str(path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -59,7 +60,7 @@ def test_completion_requires_own_operation_and_successful_exit(tmp_path, monkeyp
         return True
     monkeypatch.setattr(ctypes, "windll", SimpleNamespace(
         shell32=SimpleNamespace(ShellExecuteExW=launch),
-        kernel32=SimpleNamespace(GetExitCodeProcess=exited, CloseHandle=Mock())))
+        kernel32=SimpleNamespace(GetExitCodeProcess=exited, CloseHandle=Mock())), raising=False)
     for _ in range(2):
         ok, _ = imager.flash_drive(3, approved.path, drive_identity=snapshot(),
             expected_image_sha256=approved.sha256, expected_image_size=approved.size_bytes)
@@ -80,7 +81,7 @@ def test_verified_source_handle_denies_later_external_writes(tmp_path):
 def test_injected_bootstrap_preserves_exact_release_bytes(tmp_path):
     root = Path(__file__).resolve().parents[1]
     contract = json.loads((root / "release-contract.json").read_text())
-    source = root.parent / "KACE/scripts/bootstrap.sh"
+    source = resources.resolve_bootstrap_source()
     destination = tmp_path / "bootstrap.sh"
     imager._copy_bootstrap_atomically(str(source), str(destination))
     assert destination.read_bytes() == source.read_bytes()

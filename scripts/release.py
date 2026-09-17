@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import importlib.metadata
 import json
 import os
@@ -14,6 +15,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Iterable
@@ -664,6 +667,21 @@ def write_json_atomically(path: Path, data: dict) -> None:
 
 
 def _download_verified(url: str, destination: Path, expected_sha256: str) -> Path:
+    # Immutable GETs may be retried after transport failures. Each attempt starts
+    # from fresh bytes; digest/size/HTTP policy failures never become acceptable.
+    for attempt in range(3):
+        try:
+            return _download_verified_once(url, destination, expected_sha256)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {429, 500, 502, 503, 504} or attempt == 2:
+                raise
+        except (urllib.error.URLError, ConnectionError, TimeoutError, http.client.IncompleteRead):
+            if attempt == 2:
+                raise
+        time.sleep(attempt + 1)
+
+
+def _download_verified_once(url: str, destination: Path, expected_sha256: str) -> Path:
     request = urllib.request.Request(url, headers={"User-Agent": "KACE-Studio-release-contract/1"})
     fd, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".download", dir=destination.parent

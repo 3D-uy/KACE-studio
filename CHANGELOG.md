@@ -20,6 +20,9 @@ Physical qualification and signed stable distribution remain separate gates.
   successful KACE completion in the UI.
 - Bind distribution to committed KACE runtime files, installer and bootstrap bytes;
   retain clean-tree, exact-toolchain, PE metadata and bundled-resource checks.
+- Retry transient release-contract download failures at most three times, always
+  checking fresh bytes; checksum/size mismatches and permanent HTTP errors remain
+  terminal. Make simulated Windows tests portable to standalone Linux checkouts.
 
 ### Documentation
 - Add platform/firmware badges, a current capability table, immutable release
