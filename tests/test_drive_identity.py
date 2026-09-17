@@ -21,6 +21,14 @@ def windows_disk_api(monkeypatch):
     # Do not change process-wide sys.platform: the real temporary-file image
     # reader must keep using its host OS while the disk API is simulated.
     monkeypatch.setattr(imager, "sys", SimpleNamespace(**{**vars(imager.sys), "platform": "win32"}))
+    native_platform = kace_writer.sys.platform
+    native_open_image = kace_writer._open_verified_image
+    monkeypatch.setattr(kace_writer, "sys", SimpleNamespace(**{**vars(kace_writer.sys), "platform": "win32"}))
+    def open_temporary_image(*args):
+        with monkeypatch.context() as file_context:
+            file_context.setattr(kace_writer.sys, "platform", native_platform)
+            return native_open_image(*args)
+    monkeypatch.setattr(kace_writer, "_open_verified_image", open_temporary_image)
 
 
 def powershell_disk(**overrides):
@@ -194,6 +202,7 @@ def test_helper_capacity_failure_never_opens_physical_drive(tmp_path, monkeypatc
         kace_writer.main()
     assert exit_info.value.code == 1
     assert opened is False
+    assert "too large" in json.loads(status.read_text())["message"]
 
 
 def test_helper_rejects_changed_image_before_opening_physical_drive(tmp_path, monkeypatch):
@@ -227,6 +236,7 @@ def test_helper_rejects_changed_image_before_opening_physical_drive(tmp_path, mo
         kace_writer.main()
     assert exit_info.value.code == 1
     assert opened is False
+    assert "checksum changed" in json.loads(status.read_text())["message"]
 
 
 def test_physical_disk_readback_must_match_the_source_hash():
