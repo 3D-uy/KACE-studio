@@ -35,10 +35,10 @@
   },
   "kace": {
     "repository": "https://github.com/3D-uy/KACE.git",
-    "candidate_ref": "47a00c15739ac9c4d477f78dd9d71446d1c8d932",
-    "bootstrap_ref": "007f48b4fd627a0b3e81233e766c6289dc024ffa",
-    "bootstrap_sha256": "b8b3aa2477f8b05d93405b077b66f69766df7d490edce8a3504c4ea2584953b1",
-    "installer_ref": "47a00c15739ac9c4d477f78dd9d71446d1c8d932",
+    "candidate_ref": "8d46568ae87268af23dfd27e1b0e4de44dce4df7",
+    "bootstrap_ref": "e19883b1374db4913ce41d68981f1e6b89e4655e",
+    "bootstrap_sha256": "e16f24ca00a8b346b5996e35edee3d9e1e46c7629c6aac29616668bedd8d06d2",
+    "installer_ref": "8d46568ae87268af23dfd27e1b0e4de44dce4df7",
     "installer_sha256": "de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500",
     "runtime_status": "pinned",
     "required_runtime_files": {
@@ -47,7 +47,7 @@
       "core/bed_mesh.py": "58837c852db9de300cc1c0d5915cd84eece82905081639f34d320b7df409270c",
       "core/board_contract_deployment.py": "ae66bc4156e5e10202e7336d688c0fdc2aa46f10ec8470ac32f7a021523ba353",
       "core/capabilities.py": "186edb94ddc7b451e43be96b0523580d27af907419ff9ad82af51178f1a5aada",
-      "core/config_transaction.py": "b9a0a01f1e598b4e7a583a84e4a2723cdf346d78bedf76aa860faa5135667d78",
+      "core/config_transaction.py": "557bdddd4bf8384af21f149663adf2fdf468245a373c4fb376d643ec345c4be3",
       "core/configuration_review.py": "1ef2d90f0f28fbaeba61bc22dd0e539dd7741be5b1495b28b6cb0770808ca676",
       "core/custom_probe.py": "bfe9ce24c444ff87bea6ab69847bbd2c91d4b328f05a0a18079e255f85500f48",
       "core/dashboard.py": "e9d54055eba60565a06b9259c34a615fb51c7545e7248d7134e26e3f53eb7a40",
