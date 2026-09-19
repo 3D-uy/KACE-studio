@@ -641,7 +641,7 @@ function startFlashing() {
     // Image configuration
     const imageSource = document.getElementById('image-source-select').value;
     let imagePath = "default_prebaked";
-    let imageType = dashboardUi === 'fluidd' ? 'fluiddpi_prebaked' : 'mainsailos_prebaked';
+    let imageType = dashboardUi === 'fluidd' ? 'fluidd_prebaked' : 'mainsailos_prebaked';
     if (imageSource === 'custom') {
         imagePath = document.getElementById('custom-image-path').value;
         imageType = document.getElementById('custom-image-type').value;

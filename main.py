@@ -676,7 +676,12 @@ class Api:
     def _image_provenance_payload(entry, image_sha256: str) -> dict:
         return {
             "schema": IMAGE_PROVENANCE_SCHEMA,
-            "image_type": entry.image_type,
+            # Cache provenance describes the actual OS, independently of the
+            # dashboard installed later. Mainsail and Fluidd share these bytes.
+            "image_type": (
+                f"{entry.attestation.family}_prebaked"
+                if entry.attestation is not None else entry.image_type
+            ),
             "architecture": entry.architecture,
             "version": entry.version,
             "archive_sha256": entry.sha256,
@@ -720,7 +725,7 @@ class Api:
             return load_custom_attestation(image_path)
         if provisioning.image_type not in {
             ImageType.MAINSAILOS_PREBAKED,
-            ImageType.FLUIDDPI_PREBAKED,
+            ImageType.FLUIDD_PREBAKED,
         }:
             raise ValueError("Pre-baked preflight received a non-pre-baked image type.")
 
@@ -742,7 +747,7 @@ class Api:
         Returns the path to the ready-to-flash .img file.
         """
         cache_dir = application_cache_dir()
-        if image_type not in {ImageType.MAINSAILOS_PREBAKED, ImageType.FLUIDDPI_PREBAKED}:
+        if image_type not in {ImageType.MAINSAILOS_PREBAKED, ImageType.FLUIDD_PREBAKED}:
             raise ValueError(f"Unsupported automatic pre-baked image type: {image_type.value}")
         return self._resolve_manifest_image(image_type.value, os_arch, cache_dir)
 
@@ -818,7 +823,7 @@ class Api:
                 f"Not enough disk space: {free_bytes // 1024**2} MB available, ~5 GB required."
             )
 
-        self.set_device_state("FLASHING", 0, "Downloading latest official Raspberry Pi OS Lite...")
+        self.set_device_state("FLASHING", 0, "Downloading pinned OS image...")
         archive_part = cached_xz + ".part"
         checksum_part = cached_xz_sha + ".part"
         self._remove_file_if_present(archive_part)
@@ -947,7 +952,7 @@ class Api:
             image_path = provisioning.image_path
             if provisioning.image_type in {
                 ImageType.MAINSAILOS_PREBAKED,
-                ImageType.FLUIDDPI_PREBAKED,
+                ImageType.FLUIDD_PREBAKED,
             }:
                 image_path = self._resolve_prebaked_image(
                     provisioning.image_type, provisioning.os_arch

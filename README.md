@@ -109,10 +109,17 @@ The authoritative image list and checksums live in [`image-manifest.json`](image
 | --- | --- | --- | --- |
 | Raspberry Pi OS Lite | 32-bit / 64-bit | `2026-06-18` | Pinned archive SHA-256; configured on first boot |
 | MainsailOS | 32-bit / 64-bit | `3.0.0` | Pinned archive and raw-image SHA-256 plus image-bound capability attestation |
+| Fluidd (MainsailOS base) | 32-bit / 64-bit | Base `3.0.0`, Fluidd `v1.37.3` | Same verified base and attestation; SHA-256 verified Fluidd installation during provisioning |
 | Custom raw image | As supplied by the user | User-managed | Uncompressed `.img` plus an external `.sha256` sidecar |
 | Custom pre-baked image | As supplied by the user | User-managed | Raw-image checksum plus a compatible `.kace-attestation.json` |
 
-Mainsail and Fluidd are available as dashboard choices during provisioning. Only MainsailOS is currently offered as a verified pre-baked image.
+Select **Fluidd** with **Pre-baked OS Image** to use the verified MainsailOS base
+with Klipper and Moonraker already installed. Provisioning installs the pinned
+Fluidd release and serves it on port 80 automatically. Studio shares the image
+download/cache and attestation with MainsailOS; it does not maintain a separate
+Fluidd image or use the archived FluiddPI project. Raspberry Pi OS Lite still
+supports installing Mainsail, Fluidd, or both during provisioning.
+See [image provisioning and upstream evidence](docs/IMAGE_PROVISIONING.md).
 
 ### Raspberry Pi models
 

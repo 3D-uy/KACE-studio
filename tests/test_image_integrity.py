@@ -198,7 +198,7 @@ def test_partial_cached_image_without_sidecar_is_reextracted(api, tmp_path, monk
         url="https://invalid/fixture.zip",
         filename="fixture.zip",
         sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
-        attestation=SimpleNamespace(image_sha256=hashlib.sha256(content).hexdigest()),
+        attestation=SimpleNamespace(family="mainsailos", image_sha256=hashlib.sha256(content).hexdigest()),
     )
     manifest = SimpleNamespace(resolve=lambda *_args: entry)
     monkeypatch.setattr(main.ImageManifest, "load_bundled", lambda: manifest)

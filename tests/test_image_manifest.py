@@ -56,3 +56,28 @@ def test_manifest_resolves_a_fixed_image_without_latest_lookup():
     assert entry.version == "3.0.0"
     assert "/releases/download/3.0.0/" in entry.url
     assert entry.filename.endswith(".img.xz")
+
+
+@pytest.mark.parametrize("architecture", ["32bit", "64bit"])
+def test_fluidd_uses_the_exact_verified_mainsailos_base(architecture):
+    manifest = ImageManifest.load_bundled()
+    fluidd = manifest.resolve("fluidd_prebaked", architecture)
+    mainsail = manifest.resolve("mainsailos_prebaked", architecture)
+    assert fluidd.url == mainsail.url
+    assert fluidd.sha256 == mainsail.sha256
+    assert fluidd.version == mainsail.version
+    assert fluidd.attestation == mainsail.attestation
+    assert fluidd.attestation.family == "mainsailos"
+
+
+@pytest.mark.parametrize("field", ["family", "source_commit", "archive_sha256", "image_sha256", "services", "capabilities"])
+def test_fluidd_attestation_cannot_bypass_base_identity(tmp_path, field):
+    from backend.resources import bundled_path
+
+    payload = json.loads(bundled_path("image-manifest.json").read_text())
+    entry = next(item for item in payload["images"] if item["image_type"] == "fluidd_prebaked")
+    entry["attestation"][field] = [] if field in {"services", "capabilities"} else "invalid"
+    path = tmp_path / "images.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ManifestError, match="attestation"):
+        ImageManifest.load(path)

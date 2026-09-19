@@ -28,7 +28,8 @@ REQUIRED_CAPABILITIES = frozenset(
 )
 AUTOMATIC_FAMILIES = {
     "mainsailos_prebaked": "mainsailos",
-    "fluiddpi_prebaked": "fluiddpi",
+    # Fluidd is provisioned on the same reviewed MainsailOS image.
+    "fluidd_prebaked": "mainsailos",
 }
 
 # Identities published by the upstream MainsailOS 3.0.0 release. Keeping them

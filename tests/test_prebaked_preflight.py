@@ -25,7 +25,7 @@ REQUIRED_CAPABILITIES = {
 }
 
 
-def _provisioning(image_type=ImageType.MAINSAILOS_PREBAKED, image_path="default_prebaked"):
+def _provisioning(image_type=ImageType.MAINSAILOS_PREBAKED, image_path="default_prebaked", architecture="64bit"):
     return validate_provisioning(
         image_type=image_type,
         image_path=image_path,
@@ -33,8 +33,8 @@ def _provisioning(image_type=ImageType.MAINSAILOS_PREBAKED, image_path="default_
         wifi_ssid="",
         wifi_password="",
         ssh_password="validpass123",
-        dashboard_ui="mainsail",
-        os_arch="64bit",
+        dashboard_ui="fluidd" if image_type is ImageType.FLUIDD_PREBAKED else "mainsail",
+        os_arch=architecture,
     )
 
 
@@ -162,7 +162,8 @@ def test_manifest_rejects_incompatible_prebaked_attestation(tmp_path, field, val
         ImageManifest.load(path)
 
 
-def test_prebaked_preflight_runs_before_any_block_write(tmp_path, monkeypatch):
+@pytest.mark.parametrize("image_type", [ImageType.MAINSAILOS_PREBAKED, ImageType.FLUIDD_PREBAKED])
+def test_prebaked_preflight_runs_before_any_block_write(tmp_path, monkeypatch, image_type):
     api = main.Api()
     image = tmp_path / "mainsail.img"
     image.write_bytes(_raw_image())
@@ -179,12 +180,13 @@ def test_prebaked_preflight_runs_before_any_block_write(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "flash_drive", lambda *_args, **_kwargs: (order.append("flash") or True, ""))
     monkeypatch.setattr(main, "inject_config", lambda *_args, **_kwargs: order.append("inject") or True)
 
-    api._flash_worker(8, _provisioning(), {"number": 8})
+    api._flash_worker(8, _provisioning(image_type), {"number": 8})
 
     assert order == ["preflight", "flash", "inject"]
 
 
-def test_prebaked_preflight_failure_blocks_writer_and_injection(tmp_path, monkeypatch):
+@pytest.mark.parametrize("image_type", [ImageType.MAINSAILOS_PREBAKED, ImageType.FLUIDD_PREBAKED])
+def test_prebaked_preflight_failure_blocks_writer_and_injection(tmp_path, monkeypatch, image_type):
     api = main.Api()
     image = tmp_path / "mainsail.img"
     image.write_bytes(_raw_image())
@@ -203,7 +205,7 @@ def test_prebaked_preflight_failure_blocks_writer_and_injection(tmp_path, monkey
     monkeypatch.setattr(main, "flash_drive", lambda *_args: calls.append("flash"))
     monkeypatch.setattr(main, "inject_config", lambda *_args, **_kwargs: calls.append("inject"))
 
-    api._flash_worker(8, _provisioning(), {"number": 8})
+    api._flash_worker(8, _provisioning(image_type), {"number": 8})
 
     assert calls == []
     assert states[-1] == "ERROR"
@@ -271,12 +273,14 @@ def test_custom_prebaked_rejects_attestation_for_different_image(tmp_path):
         )
 
 
-def test_automatic_prebaked_preflight_rehashes_the_resolved_image(tmp_path, monkeypatch):
+@pytest.mark.parametrize("image_type", [ImageType.MAINSAILOS_PREBAKED, ImageType.FLUIDD_PREBAKED])
+@pytest.mark.parametrize("architecture", ["32bit", "64bit"])
+def test_automatic_prebaked_preflight_rehashes_the_resolved_image(tmp_path, monkeypatch, image_type, architecture):
     api = main.Api()
     image = tmp_path / "mainsail.img"
     content = _raw_image()
     image.write_bytes(content)
-    entry = ImageManifest.load_bundled().resolve("mainsailos_prebaked", "64bit")
+    entry = ImageManifest.load_bundled().resolve(image_type.value, architecture)
     image_sha256 = entry.attestation.image_sha256
     (tmp_path / "mainsail.img.sha256").write_text(image_sha256 + "\n", encoding="utf-8")
     (tmp_path / "mainsail.img.provenance.json").write_text(
@@ -285,7 +289,7 @@ def test_automatic_prebaked_preflight_rehashes_the_resolved_image(tmp_path, monk
     )
 
     monkeypatch.setattr(api, "_compute_sha256", lambda *_args: image_sha256)
-    assert api._preflight_prebaked_image(str(image), _provisioning()).version == "3.0.0"
+    assert api._preflight_prebaked_image(str(image), _provisioning(image_type, architecture=architecture)).version == "3.0.0"
 
     tampered = bytearray(content)
     tampered[1024] = 1
@@ -296,7 +300,7 @@ def test_automatic_prebaked_preflight_rehashes_the_resolved_image(tmp_path, monk
         lambda *_args: hashlib.sha256(bytes(tampered)).hexdigest(),
     )
     with pytest.raises(ValueError, match="attestation"):
-        api._preflight_prebaked_image(str(image), _provisioning())
+        api._preflight_prebaked_image(str(image), _provisioning(image_type, architecture=architecture))
 
 
 def test_custom_prebaked_rejects_unvalidated_distribution_version(tmp_path):

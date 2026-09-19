@@ -19,7 +19,7 @@ from backend.prebaked_preflight import (
 SCHEMA = "kace-studio-image-manifest/v2"
 SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 SUPPORTED_ARCHITECTURES = {"32bit", "64bit"}
-SUPPORTED_IMAGE_TYPES = {"raspios_vanilla", "mainsailos_prebaked", "fluiddpi_prebaked"}
+SUPPORTED_IMAGE_TYPES = {"raspios_vanilla", "mainsailos_prebaked", "fluidd_prebaked"}
 
 
 class ManifestError(ValueError):

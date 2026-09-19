@@ -18,7 +18,7 @@ MIN_AUTOMATIC_TARGET_BYTES = 8_000_000_000
 class ImageType(str, Enum):
     RASPIOS_VANILLA = "raspios_vanilla"
     MAINSAILOS_PREBAKED = "mainsailos_prebaked"
-    FLUIDDPI_PREBAKED = "fluiddpi_prebaked"
+    FLUIDD_PREBAKED = "fluidd_prebaked"
     CUSTOM_VANILLA = "custom_vanilla"
     CUSTOM_PREBAKED = "custom_prebaked"
 
@@ -26,7 +26,7 @@ class ImageType(str, Enum):
     def is_prebaked(self) -> bool:
         return self in {
             ImageType.MAINSAILOS_PREBAKED,
-            ImageType.FLUIDDPI_PREBAKED,
+            ImageType.FLUIDD_PREBAKED,
             ImageType.CUSTOM_PREBAKED,
         }
 
@@ -191,8 +191,8 @@ def validate_provisioning(
         _invalid("dashboard_ui", "Dashboard must be mainsail, fluidd, or both.")
     if resolved_image_type is ImageType.MAINSAILOS_PREBAKED and normalized_dashboard not in {"mainsail", "both"}:
         _invalid("dashboard_ui", "MainsailOS supports the Mainsail or both-dashboard provisioning modes.")
-    if resolved_image_type is ImageType.FLUIDDPI_PREBAKED and normalized_dashboard != "fluidd":
-        _invalid("dashboard_ui", "FluiddPi supports only the Fluidd provisioning mode.")
+    if resolved_image_type is ImageType.FLUIDD_PREBAKED and normalized_dashboard != "fluidd":
+        _invalid("dashboard_ui", "The Fluidd image profile supports only the Fluidd provisioning mode.")
 
     normalized_pi_model = str(pi_model or "pi4").strip().lower()
     normalized_arch = str(os_arch or "64bit").strip().lower()
@@ -201,8 +201,6 @@ def validate_provisioning(
         _invalid("pi_model", "Select a supported Raspberry Pi model.")
     if normalized_arch not in allowed_arches:
         _invalid("os_arch", f"{normalized_pi_model} does not support the selected {normalized_arch} image.")
-    if resolved_image_type is ImageType.FLUIDDPI_PREBAKED and normalized_arch != "32bit":
-        _invalid("os_arch", "FluiddPi provides only a 32-bit Raspberry Pi image.")
 
     boolean_fields = {
         "ssh_enabled": ssh_enabled,

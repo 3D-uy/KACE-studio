@@ -61,7 +61,7 @@ def test_validator_returns_normalized_immutable_data():
     [
         (ImageType.RASPIOS_VANILLA, "default_lite", "mainsail"),
         (ImageType.MAINSAILOS_PREBAKED, "default_prebaked", "both"),
-        (ImageType.FLUIDDPI_PREBAKED, "default_prebaked", "fluidd"),
+        (ImageType.FLUIDD_PREBAKED, "default_prebaked", "fluidd"),
         (ImageType.CUSTOM_VANILLA, "custom.img", "mainsail"),
         (ImageType.CUSTOM_PREBAKED, "custom.img", "mainsail"),
     ],
@@ -74,10 +74,30 @@ def test_every_explicit_image_family_has_a_supported_contract(
         image_type=image_type,
         image_path=image_path,
         dashboard_ui=dashboard,
-        os_arch="32bit" if image_type is ImageType.FLUIDDPI_PREBAKED else "64bit",
+        os_arch="64bit",
         image_size_bytes=1024 * 1024 if custom else None,
     ))
     assert result.image_type is image_type
+
+
+@pytest.mark.parametrize("architecture,model", [("32bit", "pi3"), ("64bit", "pi5")])
+def test_fluidd_profile_supports_both_verified_base_architectures(architecture, model):
+    result = validate_provisioning(**valid_request(
+        image_type=ImageType.FLUIDD_PREBAKED, dashboard_ui="fluidd",
+        os_arch=architecture, pi_model=model,
+    ))
+    assert result.image_type.is_prebaked
+    assert result.dashboard_ui == "fluidd"
+
+
+@pytest.mark.parametrize("dashboard", ["mainsail", "fluidd", "both"])
+def test_raspios_lite_retains_all_dashboard_choices(dashboard):
+    result = validate_provisioning(**valid_request(
+        image_type=ImageType.RASPIOS_VANILLA, image_path="default_lite",
+        dashboard_ui=dashboard,
+    ))
+    assert not result.image_type.is_prebaked
+    assert result.dashboard_ui == dashboard
 
 
 @pytest.mark.parametrize(
@@ -90,7 +110,8 @@ def test_every_explicit_image_family_has_a_supported_contract(
         ({"wifi_password": "short"}, "wifi_password"),
         ({"dashboard_ui": "other"}, "dashboard_ui"),
         ({"pi_model": "pizerow", "os_arch": "64bit"}, "os_arch"),
-        ({"image_type": ImageType.FLUIDDPI_PREBAKED, "dashboard_ui": "fluidd", "os_arch": "64bit"}, "os_arch"),
+        ({"image_type": ImageType.FLUIDD_PREBAKED, "dashboard_ui": "mainsail"}, "dashboard_ui"),
+        ({"image_type": "fluiddpi_prebaked", "dashboard_ui": "fluidd"}, "image_type"),
         ({"bootstrap_exists": False}, "bootstrap"),
         ({"bootstrap_sha256": "0" * 64}, "bootstrap"),
         ({"cache_free_bytes": 1024}, "free_space"),
@@ -248,5 +269,5 @@ def test_frontend_sends_explicit_image_family_and_wifi_security():
     index_html = open(main.os.path.join(web_dir, "index.html"), encoding="utf-8").read()
     assert "custom_prebaked" in index_html
     assert "mainsailos_prebaked" in app_js
-    assert "fluiddpi_prebaked" in app_js
+    assert "fluidd_prebaked" in app_js
     assert "imageType,\n            wifiSecurity" in app_js

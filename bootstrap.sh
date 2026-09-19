@@ -1603,8 +1603,9 @@ fi
 # ── 2. System Packages ───────────────────────────────────────────────────────
 log_stage "PACKAGES" "Updating System Packages"
 if [ "$PREBAKED" = "true" ]; then
-    # We still need to install git and unzip if we are installing Fluidd on top of MainsailOS (both case)
-    if [ "$DASHBOARD" = "both" ]; then
+    # PREBAKED covers Klipper/Moonraker; Fluidd is installed on the verified
+    # MainsailOS base for either Fluidd dashboard selection.
+    if [ "$DASHBOARD" = "fluidd" ] || [ "$DASHBOARD" = "both" ]; then
         wait_for_apt_locks
         $SUDO apt-get -o DPkg::Lock::Timeout=300 update -y
         $SUDO apt-get -o DPkg::Lock::Timeout=300 install -y git unzip file
@@ -1738,8 +1739,7 @@ if [ "$PREBAKED" = "true" ]; then
         log_ok "Mainsail already pre-installed (skipped)."
         DEFAULT_UI="mainsail"
     elif [ "$DASHBOARD" = "fluidd" ]; then
-        log_stage "FLUIDD" "Installing Fluidd"
-        log_ok "Fluidd already pre-installed (skipped)."
+        setup_fluidd
         DEFAULT_UI="fluidd"
     elif [ "$DASHBOARD" = "both" ]; then
         # MainsailOS is the base, so Mainsail is preinstalled.
@@ -1838,7 +1838,7 @@ log_ok "UI client config ready."
 # ── 8. Nginx ──────────────────────────────────────────────────────────────────
 log_stage "NGINX" "Configuring Nginx"
 
-if [ "$PREBAKED" = "true" ] && [ "$DASHBOARD" != "both" ]; then
+if [ "$PREBAKED" = "true" ] && [ "$DASHBOARD" = "mainsail" ]; then
     log_ok "Nginx already configured on pre-baked image (skipped)."
 else
     for unmanaged_web_service in apache2 lighttpd; do
@@ -1849,6 +1849,10 @@ else
         fi
     done
     NGINX_CONF="/etc/nginx/sites-available/kace-printer"
+    MAINSAIL_WEB_ROOT="/var/www/mainsail"
+    if [ "$PREBAKED" = "true" ]; then
+        MAINSAIL_WEB_ROOT="$PRINTER_HOME/mainsail"
+    fi
 
     # Check if IPv6 is supported by checking if /proc/net/if_inet6 exists
     listen_ipv6=""
@@ -1865,7 +1869,7 @@ server {
     listen 80 default_server;
     $listen_ipv6
 
-    root /var/www/mainsail;
+    root $MAINSAIL_WEB_ROOT;
     index index.html;
     server_name _;
 
@@ -1980,6 +1984,20 @@ upstream kace_apiserver {
 EOF
     fi
 
+    # The reviewed MainsailOS image enables this vendor site on port 80.
+    # Keep the vendor configuration and restore its link if validation fails.
+    MAINSAIL_SITE="/etc/nginx/sites-enabled/mainsail"
+    MAINSAIL_SITE_TARGET=""
+    if [ "$PREBAKED" = "true" ] && { [ -e "$MAINSAIL_SITE" ] || [ -L "$MAINSAIL_SITE" ]; }; then
+        if [ ! -L "$MAINSAIL_SITE" ] || \
+           [ "$(readlink "$MAINSAIL_SITE")" != "/etc/nginx/sites-available/mainsail" ]; then
+            log_err "Unexpected Mainsail site; refusing to replace an unmanaged Nginx configuration."
+            exit 1
+        fi
+        MAINSAIL_SITE_TARGET=$(readlink "$MAINSAIL_SITE")
+        $SUDO rm "$MAINSAIL_SITE"
+    fi
+
     # Link the new configuration and remove the default/conflicting configurations
     $SUDO rm -f /etc/nginx/sites-enabled/default
     $SUDO rm -f /etc/nginx/sites-enabled/kace-printer
@@ -1990,6 +2008,9 @@ EOF
         log_err "Nginx configuration test failed. Aborting."
         # Rollback symlink on failure to avoid leaving nginx in a broken state
         $SUDO rm -f /etc/nginx/sites-enabled/kace-printer
+        if [ -n "$MAINSAIL_SITE_TARGET" ]; then
+            $SUDO ln -s "$MAINSAIL_SITE_TARGET" "$MAINSAIL_SITE"
+        fi
         exit 1
     fi
 
@@ -2025,8 +2046,12 @@ if ! systemctl is-active --quiet moonraker 2>/dev/null; then
     log_err "Moonraker did not remain active after restart."
     exit 1
 fi
-if [ "$PREBAKED" = "false" ] || [ "$DASHBOARD" = "both" ]; then
-    $SUDO systemctl restart nginx || true
+if [ "$PREBAKED" = "false" ] || [ "$DASHBOARD" != "mainsail" ]; then
+    $SUDO systemctl restart nginx
+    if ! systemctl is-active --quiet nginx; then
+        log_err "Nginx did not remain active after restart."
+        exit 1
+    fi
 fi
 log_ok "Services restarted."
 
