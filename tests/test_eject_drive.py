@@ -1,5 +1,9 @@
 import json
+import re
+import shutil
+import subprocess
 from types import SimpleNamespace
+import pytest
 
 import main
 from backend import ejector
@@ -166,3 +170,45 @@ def test_request_safe_eject_reads_failure_status_from_nonzero_helper(monkeypatch
         "success": False,
         "error": "The volume is in use.",
     }
+
+
+@pytest.mark.parametrize('post_identity', ['absent', 'empty', 'changed'])
+def test_confirmed_native_eject_does_not_reinspect_or_operate_again(post_identity):
+    shell = shutil.which('powershell')
+    if not shell:
+        pytest.skip('PowerShell runtime required')
+    command = ejector._powershell_eject_command(3, disk_identity())
+    # Execute production PowerShell control flow with a fake native API and
+    # enumeration. No real disk API or destructive command can run.
+    fake_native = '''Add-Type -TypeDefinition @'
+using System.Text;
+public static class KaceEject {
+ public static uint CM_Locate_DevNodeW(out uint node, string id, uint flags) {node=42;return 0;}
+ public static uint CM_Request_Device_EjectW(uint node, out uint veto, StringBuilder name, uint length, uint flags) {veto=0;return 0;}
+}
+'@'''
+    command = re.sub(r"Add-Type -TypeDefinition @'.*?'@", lambda _: fake_native, command, flags=re.S)
+    identity = json.dumps(disk_identity()).replace("'", "''")
+    mocks = f'''
+$script:reads = 0
+function Get-Disk {{
+ $script:reads++
+ if ($script:reads -gt 2) {{ throw 'Post-eject identity {post_identity} must not be inspected' }}
+ $d = '{identity}' | ConvertFrom-Json
+ [pscustomobject]@{{Number=3;SerialNumber=$d.serial_number;UniqueId=$d.unique_id;Path=$d.path;Size=$d.size_bytes;BusType=$d.bus_type;IsSystem=$false;IsBoot=$false}}
+}}
+function Get-CimInstance {{ [pscustomobject]@{{PNPDeviceID='TEST-ONLY'}} }}
+function Set-Disk {{ throw 'A confirmed eject must never fall back to another operation' }}
+function Get-Partition {{ throw 'No partition enumeration after confirmed eject' }}
+'''
+    result = subprocess.run([shell, '-NoProfile', '-Command', mocks + command], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)['success'] is True
+
+
+def test_different_disk_never_reaches_native_eject(monkeypatch, tmp_path):
+    monkeypatch.setattr(ejector, '_validate_status_path', lambda path: path)
+    monkeypatch.setattr(ejector, '_write_status', lambda *_: None)
+    native = lambda *_: pytest.fail('wrong disk must never reach native eject')
+    monkeypatch.setattr(ejector, '_perform_windows_eject', native)
+    assert ejector.privileged_eject(4, str(tmp_path / 'status.json'), disk_identity()) is False

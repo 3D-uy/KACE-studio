@@ -508,6 +508,9 @@
                             <button class="btn btn-primary" onclick="triggerScan()" style="padding: 8px 20px;">
                                 <i class="fa-solid fa-magnifying-glass"></i> Scan Subnet Now
                             </button>
+                            <button id="start-first-boot-scan" class="btn" onclick="startFirstBootDiscovery()">First-boot search</button>
+                            <button class="btn" id="stop-first-boot-scan" onclick="stopFirstBootDiscovery()" hidden>Stop search</button>
+                            <span id="first-boot-scan-progress"></span>
                             <span id="scan-status-text" style="font-size: 13px; color: var(--text-secondary); font-weight: 500;"></span>
                         </div>
                     </div>
@@ -661,7 +664,8 @@
                             </div>
                         </div>
                         <ol id="kace-workflow-steps" class="kace-workflow-steps"></ol>
-                        <div id="kace-workflow-detail" class="kace-workflow-detail"></div>
+                        <details><summary>Technical details / Detalles técnicos / Detalhes técnicos</summary><pre id="kace-workflow-advanced"></pre></details>
+                            <div id="kace-workflow-detail" class="kace-workflow-detail"></div>
                     </section>
 
                     <!-- Terminal Search Bar -->

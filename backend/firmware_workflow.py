@@ -85,6 +85,9 @@ def checkpoint_event(checkpoint: Mapping[str, object]) -> dict:
     artifact = checkpoint.get("artifact")
     data = {
         "firmware_authority": "durable_checkpoint",
+        "last_error": checkpoint.get("last_error", ""),
+        "language": checkpoint.get("wizard_data", {}).get("language", "English"),
+        "download_available": checkpoint["state"] in {"ARTIFACT_READY", "AWAITING_FLASH", "VERIFYING_MCU"},
         "board": checkpoint["hardware"]["board"],
         "mcu": checkpoint["hardware"]["mcu"],
         "verified_serial_path": checkpoint["hardware"].get("verified_serial_path", ""),

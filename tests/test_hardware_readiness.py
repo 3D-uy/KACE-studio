@@ -42,13 +42,14 @@ def test_real_eject_script_never_converts_storage_errors_to_safe_removal(mode, s
     mocks = r'''
 $script:diskReads=0
 $script:partReads=0
+function Get-CimInstance { [pscustomobject]@{PNPDeviceID=$null} }
 function Get-Disk {
     param($Number)
     $script:diskReads++
-    if ($script:diskReads -gt 1 -and $mode -eq 'disk_error') { throw 'disk query failed' }
-    if ($script:diskReads -gt 1 -and $mode -eq 'removed') { return }
+    if ($script:diskReads -gt 2 -and $mode -eq 'disk_error') { throw 'disk query failed' }
+    if ($script:diskReads -gt 2 -and $mode -eq 'removed') { return }
     $serial = $identity.serial_number
-    if ($script:diskReads -gt 1 -and $mode -eq 'changed_identity') { $serial='OTHER' }
+    if ($script:diskReads -gt 2 -and $mode -eq 'changed_identity') { $serial='OTHER' }
     [pscustomobject]@{Number=3; IsSystem=$false; IsBoot=$false;
         IsOffline=($mode -ne 'online'); SerialNumber=$serial;
         UniqueId=$identity.unique_id; Path=$identity.path;

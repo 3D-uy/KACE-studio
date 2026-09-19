@@ -78,11 +78,19 @@ def test_verified_source_handle_denies_later_external_writes(tmp_path):
         assert source.read() == expected
 
 
-def test_injected_bootstrap_preserves_exact_release_bytes(tmp_path):
+def test_injected_bootstrap_preserves_exact_release_bytes(tmp_path, monkeypatch):
     root = Path(__file__).resolve().parents[1]
     contract = json.loads((root / "release-contract.json").read_text())
-    source = resources.resolve_bootstrap_source()
     destination = tmp_path / "bootstrap.sh"
+    if contract["kace"]["runtime_status"] != "pinned":
+        with pytest.raises(resources.ResourceContractError):
+            resources.resolve_bootstrap_source()
+        assert not destination.exists()
+    # Exercise the copy on a release-ready fixture, while retaining the real
+    # pending-candidate rejection above. Never alter the checkout's contract.
+    approved = {**contract, "kace": {**contract["kace"], "runtime_status": "pinned"}}
+    monkeypatch.setattr(resources, "load_release_contract", lambda: approved)
+    source = resources.resolve_bootstrap_source()
     imager._copy_bootstrap_atomically(str(source), str(destination))
     assert destination.read_bytes() == source.read_bytes()
     assert hashlib.sha256(destination.read_bytes()).hexdigest() == contract["kace"]["bootstrap_sha256"]

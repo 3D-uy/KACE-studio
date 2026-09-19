@@ -91,6 +91,33 @@ try {{
     }}
 
     Assert-SelectedDisk $disk
+    # CONFIGRET success is authoritative. Do not re-query a removed devnode or
+    # operate on a disk number that Windows may already have reassigned.
+    Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class KaceEject {{
+    [DllImport("cfgmgr32.dll", CharSet=CharSet.Unicode)]
+    public static extern uint CM_Locate_DevNodeW(out uint node, string id, uint flags);
+    [DllImport("cfgmgr32.dll", CharSet=CharSet.Unicode)]
+    public static extern uint CM_Request_Device_EjectW(uint node, out uint veto, StringBuilder name, uint length, uint flags);
+}}
+'@
+    $pnp = Get-CimInstance Win32_DiskDrive -Filter "Index=$diskNumber" -ErrorAction Stop
+    Assert-SelectedDisk (Get-Disk -Number $diskNumber -ErrorAction Stop)
+    [uint32]$node = 0
+    [uint32]$veto = 0
+    $vetoName = [System.Text.StringBuilder]::new(260)
+    if ($pnp.PNPDeviceID -and [KaceEject]::CM_Locate_DevNodeW([ref]$node, $pnp.PNPDeviceID, 0) -eq 0) {{
+        if ([KaceEject]::CM_Request_Device_EjectW($node, [ref]$veto, $vetoName, 260, 0) -eq 0) {{
+            $result.success = $true
+            $result.method = 'ejected'
+            $result.message = 'Windows confirmed safe removal.'
+            $result | ConvertTo-Json -Compress
+            exit 0
+        }}
+    }}
     $letters = @(Get-MountedLetters $diskNumber)
     $verbInvoked = $false
     if ($letters.Count -gt 0) {{
@@ -219,9 +246,10 @@ def privileged_eject(disk_number: int, status_file: str, expected_identity: dict
         expected = _normalize_disk_identity(expected_identity)
         if expected["number"] != disk_number:
             raise ValueError("Disk number does not match the expected identity.")
-        if _validate_eject_identity(disk_number, expected) is None:
+        current = _validate_eject_identity(disk_number, expected)
+        if current is None:
             raise ValueError("Disk identity changed or the target is no longer safe.")
-        result = _perform_windows_eject(disk_number, expected)
+        result = _perform_windows_eject(disk_number, current)
     except Exception as error:
         result = {"success": False, "error": str(error)}
     _write_status(status_file, result)

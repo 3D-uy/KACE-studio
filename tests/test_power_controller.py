@@ -417,7 +417,7 @@ def test_power_button_transports_session_context():
     app = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
 
     assert 'id="printer-power-btn"' in html
-    assert "['on', 'off', 'init', 'error']" in app
+    assert "['on', 'off', 'init', 'error', 'pending']" in app
     assert "get_power_status(context.host, powerDevice, context)" in app
     assert "api[action](context.host, powerDevice, context)" in app
     assert "selectedPowerDevice()" in app

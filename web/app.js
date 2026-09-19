@@ -742,11 +742,12 @@ window.updateDeviceState = function (state, progress, message) {
     switch (state) {
         case 'UNKNOWN':
             break;
+        case 'VERIFYING_IMAGE':
         case 'FLASHING':
             const statusContainer = document.getElementById('flash-status-container');
             if (statusContainer) statusContainer.style.display = 'flex';
             flashBtn.disabled = true;
-            updateProgress(progress, message);
+            updateProgress(progress, message, state);
 
             // Disable cancel once block writing starts (to prevent SD corruption)
             const cancelBtnFlashing = document.getElementById('cancel-flash-btn');
@@ -755,6 +756,7 @@ window.updateDeviceState = function (state, progress, message) {
             }
             break;
         case 'FLASHED':
+            startFirstBootDiscovery();
             flashBtn.disabled = false;
             updateProgress(100, message);
 
@@ -847,7 +849,7 @@ function showTroubleshootingPrompt(errorMsg) {
 function updateTrackerBar(state) {
     const steps = [
         { id: 'step-unknown', states: ['UNKNOWN'] },
-        { id: 'step-flashing', states: ['FLASHING'] },
+        { id: 'step-flashing', states: ['FLASHING', 'VERIFYING_IMAGE'] },
         { id: 'step-booting', states: ['FLASHED', 'BOOTING'] },
         { id: 'step-discovered', states: ['DISCOVERED', 'CONNECTING'] },
         { id: 'step-ssh', states: ['SSH_READY', 'BOOTSTRAPPING', 'BOOTSTRAP_FAILED', 'BOOTSTRAP_CANCELLED'] },
@@ -884,7 +886,7 @@ function updateTrackerBar(state) {
     });
 }
 
-function updateProgress(percent, message) {
+function updateProgress(percent, message, stage = 'FLASHING') {
     const fill = document.getElementById('btn-progress-fill');
     const textContent = document.getElementById('btn-text-content');
     const msg = document.getElementById('flasher-status-msg');
@@ -892,12 +894,14 @@ function updateProgress(percent, message) {
     if (fill) {
         fill.style.width = `${percent}%`;
     }
-    if (textContent) {
+    if (textContent && stage === 'VERIFYING_IMAGE') {
+        textContent.textContent = `${studioText('verifying')} ${parseInt(percent, 10) || 0}%`;
+    } else if (textContent) {
         // MED-03 FIX: Coerce percent to integer before innerHTML interpolation to
         // ensure it cannot carry embedded HTML from an unexpected string value.
         const safePct = parseInt(percent, 10);
         if (safePct > 0 && safePct < 100) {
-            textContent.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Writing... ${safePct}%`;
+            textContent.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${stage === 'VERIFYING_IMAGE' ? studioText('verifying') : studioText('writing')} ${safePct}%`;
         } else {
             textContent.innerHTML = `<i class="fa-solid fa-fire"></i> Write`;
         }
@@ -931,12 +935,16 @@ function startDiscoveryScanTimer() {
 }
 
 function stopDiscoveryScanTimer() {
+    discoveryScanInFlight = false;
     if (discoveryScanTimer) window.clearInterval(discoveryScanTimer);
     discoveryScanTimer = null;
     discoveryScanStartedAt = null;
 }
 
+let discoveryScanInFlight = false;
 function triggerScan() {
+    if (discoveryScanInFlight) return;
+    discoveryScanInFlight = true;
     const visual = document.getElementById('scanner-visual');
     const text = document.getElementById('scan-status-text');
     const list = document.getElementById('discovered-device-list');
@@ -1008,6 +1016,11 @@ function triggerScan() {
 }
 
 function populateDevices(devices) {
+    devices = Array.isArray(devices) ? [...new Map(devices.map(device => [device.ip, device])).values()] : [];
+    if (firstBootDiscovery) {
+        devices.forEach(device => firstBootDiscovery.devices.set(device.ip, device));
+        devices = [...firstBootDiscovery.devices.values()];
+    }
     const list = document.getElementById('discovered-device-list');
     list.innerHTML = '';
 
@@ -1250,6 +1263,7 @@ function performSshLogin(username, password) {
                             if (selection === powerSelection && sshConnected) restoreKaceDeploymentManifest(manifest);
                         })
                         .catch(err => console.debug('No firmware deployment manifest available:', err));
+                    startFirmwareCheckpointWatch();
                     window.pywebview.api.get_firmware_workflow_checkpoint()
                         .then(result => {
                             if (selection === powerSelection && sshConnected && result && result.event)
@@ -1592,12 +1606,14 @@ function renderKaceWorkflow(view) {
     const isActionRequired = view.kind === 'firmware_deployment' &&
         [
             'COMPILE_REQUIRED', 'ARTIFACT_READY', 'AWAITING_USER_ACTION',
-            'MEDIA_PREPARED', 'AWAITING_FLASH', 'ACTION_REQUIRED',
+            'MEDIA_PREPARED', 'AWAITING_FLASH', 'ACTION_REQUIRED', 'READY_TO_DEPLOY',
         ].includes(view.state);
-    const isError = KACE_TERMINAL_ERRORS.has(view.state);
+    const isRecovery = !isDone && Boolean(view.data && view.data.last_error);
+    const isError = KACE_TERMINAL_ERRORS.has(view.state) || isRecovery || Boolean(view.bootstrapFailed);
     const positionState = isError ? (view.progressState || view.state) : view.state;
     const definition = kaceWorkflowDefinition(view.kind);
-    const [completedThrough, currentIndex] = kaceWorkflowPosition(view, positionState);
+    let [completedThrough, currentIndex] = kaceWorkflowPosition(view, positionState);
+    if (isRecovery && view.state === 'READY_TO_DEPLOY') [completedThrough, currentIndex] = [4, 5];
 
     tracker.style.display = 'block';
     tracker.classList.toggle('success', isDone);
@@ -1607,45 +1623,25 @@ function renderKaceWorkflow(view) {
     title.textContent = view.kind === 'firmware_deployment'
         ? `Firmware deployment${method ? ` · ${method}` : ''}`
         : `Installation ${view.workflowId.slice(0, 8)}`;
-    status.textContent = isDone ? 'Completed' :
-        (isActionRequired ? 'Action required' :
-            (isError ? view.state.replace(/_/g, ' ') : 'In progress'));
+    status.textContent = workflowText(isDone ? 'completed' : isRecovery ? 'recovery' : isError ? 'failed' : isActionRequired ? 'action' : 'running', view);
 
-    const detailLines = [view.detail || view.state.replace(/_/g, ' ')];
-    if (view.data) {
-        if (typeof view.data.final_filename === 'string') {
-            detailLines.push(`Final filename: ${view.data.final_filename}`);
-        }
-        if (typeof view.data.staged_path === 'string') {
-            detailLines.push(`Artifact: ${view.data.staged_path}`);
-        }
-        if (Array.isArray(view.data.instructions)) {
-            view.data.instructions.forEach((instruction, index) => {
-                if (instruction && typeof instruction.text === 'string') {
-                    detailLines.push(`${index + 1}. ${instruction.text}`);
-                }
-            });
-        }
-        const identity = view.data.identity_assessment;
-        if (identity && typeof identity === 'object') {
-            if (Number.isInteger(identity.score) && Number.isInteger(identity.automatic_threshold)) {
-                detailLines.push(`MCU identity evidence: ${identity.score}/${identity.automatic_threshold}`);
-            }
-            if (Array.isArray(identity.reasons)) {
-                identity.reasons.forEach(reason => {
-                    if (typeof reason === 'string') detailLines.push(`Identity: ${reason}`);
-                });
-            }
-        }
-        if (view.data.manually_confirmed === true) {
-            detailLines.push('MCU identity physically confirmed by the operator');
-        }
-    }
+    title.textContent = workflowText('title', view);
+    const detailLines = [workflowText(isDone ? 'completeDetail' : isRecovery ? 'recoveryDetail' : isError ? 'failedDetail' : 'continueDetail', view)];
+    const advanced = document.getElementById('kace-workflow-advanced');
+    if (advanced) advanced.textContent = [view.detail, view.data && view.data.last_error,
+        view.data && `Final filename: ${view.data.final_filename || ''}`,
+        view.data && view.data.staged_path,
+        view.data && view.data.identity_assessment && `MCU identity evidence: ${JSON.stringify(view.data.identity_assessment)}`,
+        view.data && view.data.manually_confirmed && 'MCU identity physically confirmed by the operator',
+        view.data && JSON.stringify(view.data.instructions || []),
+    ].filter(Boolean).join('\n');
     detail.textContent = detailLines.join('\n');
     const downloadablePath = view.kind === 'firmware_deployment' && view.data &&
+        ['ARTIFACT_READY', 'AWAITING_FLASH', 'VERIFYING_MCU', 'ACTION_REQUIRED', 'MEDIA_PREPARED', 'AWAITING_USER_ACTION'].includes(view.state) &&
         typeof view.data.staged_path === 'string' ? view.data.staged_path : '';
     if (downloadButton) {
         downloadButton.style.display = downloadablePath ? 'inline-flex' : 'none';
+        downloadButton.textContent = studioText('download', view.data && view.data.language);
         downloadButton.dataset.remotePath = downloadablePath;
         downloadButton.dataset.generation = Number.isInteger(view.generation) ? String(view.generation) : '';
         downloadButton.disabled = !Number.isInteger(view.generation) || view.generation !== firmwareGeneration;
@@ -1664,7 +1660,7 @@ function renderKaceWorkflow(view) {
             icon = isError ? 'fa-solid fa-circle-xmark' : 'fa-solid fa-spinner fa-spin';
         }
         item.innerHTML = `<i class="${icon}"></i><span></span>`;
-        item.querySelector('span').textContent = label;
+        item.querySelector('span').textContent = workflowStep(label, view);
         steps.appendChild(item);
     });
 
@@ -1878,7 +1874,7 @@ window.updateBootstrapEvent = function (event, context) {
         return true;
     }
     if (eventName === 'workflow_cancelled') {
-        const pendingActivation = event.code === 'PENDING_ACTIVATION';
+        const pendingActivation = ['PENDING_ACTIVATION', 'RECOVERY_AVAILABLE'].includes(event.code);
         completeBootstrapTerminal(
             'BOOTSTRAP_CANCELLED',
             pendingActivation
@@ -1888,6 +1884,7 @@ window.updateBootstrapEvent = function (event, context) {
         return true;
     }
     if (eventName === 'workflow_failed') {
+        kaceWorkflowViews.forEach(view => { if (!['COMPLETE', 'DONE'].includes(view.state)) { view.bootstrapFailed = true; renderKaceWorkflow(view); } });
         completeBootstrapTerminal(
             'BOOTSTRAP_FAILED',
             `Bootstrap failed${event.code ? ` at ${event.code}` : ''}.`,
@@ -2005,13 +2002,13 @@ function renderPrinterPower(result) {
     const stateLabel = document.getElementById('printer-power-state');
     if (!button || !stateLabel) return;
 
-    const validStates = ['on', 'off', 'init', 'error'];
+    const validStates = ['on', 'off', 'init', 'error', 'pending'];
     const status = validStates.includes(result && result.status) ? result.status : 'error';
     printerPowerStatus = status;
     printerPowerAvailable = Boolean(result && result.available);
     button.classList.remove('state-on', 'state-off', 'state-init', 'state-error');
     button.classList.add(`state-${status}`);
-    stateLabel.textContent = status;
+    stateLabel.textContent = status === 'pending' ? studioText('powerPending') : status;
     button.disabled = !currentDeviceIp || printerPowerRequestActive ||
         !printerPowerAvailable || !['on', 'off'].includes(status);
     button.title = (result && result.detail) ||
@@ -2905,3 +2902,121 @@ function handleTerminalPaste(text) {
 function finishSetup() {
     window.location.reload();
 }
+
+
+let checkpointWatchToken = 0;
+function startFirmwareCheckpointWatch() {
+    const token = ++checkpointWatchToken;
+    const generation = firmwareGeneration;
+    const deadline = Date.now() + 2 * 60 * 60 * 1000;
+    async function observe() {
+        if (token !== checkpointWatchToken || !sshConnected || generation !== firmwareGeneration || Date.now() >= deadline) return;
+        try {
+            const result = await window.pywebview.api.get_firmware_workflow_checkpoint();
+            if (token !== checkpointWatchToken || !sshConnected || generation !== firmwareGeneration) return;
+            if (result && result.generation === generation && result.event) {
+                window.updateKaceWorkflowEvent(result.event, generation);
+            }
+        } catch (error) { console.debug('Checkpoint observation unavailable', error); }
+        window.setTimeout(observe, 3000);
+    }
+    window.setTimeout(observe, 3000);
+}
+
+const WORKFLOW_TEXT = {
+    English: {
+        title: 'KACE installation', completed: 'Completed', recovery: 'Recovery required', failed: 'Failed', action: 'Action required', running: 'In progress',
+        completeDetail: 'MCU verified. Configuration installed. Klipper ready. Next: hardware commissioning.',
+        recoveryDetail: 'Installation needs attention. Continue the pending installation in the terminal. Technical details are available below.',
+        failedDetail: 'Installation stopped. Review the error and continue in the terminal.',
+        continueDetail: 'Follow the installation instructions in the terminal.',
+    },
+    'Español': {
+        title: 'Instalación de KACE', completed: 'Completada', recovery: 'Recuperación necesaria', failed: 'Falló', action: 'Acción requerida', running: 'En curso',
+        completeDetail: 'MCU verificada. Configuración instalada. Klipper listo. Siguiente paso: commissioning del hardware.',
+        recoveryDetail: 'La instalación necesita atención. Continuá la instalación pendiente en la terminal. Abajo están los detalles técnicos.',
+        failedDetail: 'La instalación se detuvo. Revisá el error y continuá en la terminal.',
+        continueDetail: 'Seguí las instrucciones de instalación en la terminal.',
+    },
+    'Português': {
+        title: 'Instalação do KACE', completed: 'Concluída', recovery: 'Recuperação necessária', failed: 'Falhou', action: 'Ação necessária', running: 'Em andamento',
+        completeDetail: 'MCU verificada. Configuração instalada. Klipper pronto. Próximo passo: comissionamento do hardware.',
+        recoveryDetail: 'A instalação precisa de atenção. Continue a instalação pendente no terminal. Os detalhes técnicos estão abaixo.',
+        failedDetail: 'A instalação parou. Revise o erro e continue no terminal.',
+        continueDetail: 'Siga as instruções de instalação no terminal.',
+    },
+};
+function workflowText(key, view) {
+    const language = view.data && view.data.language;
+    return (WORKFLOW_TEXT[language || studioLanguage()] || WORKFLOW_TEXT.English)[key];
+}
+function workflowStep(label, view) {
+    const translations = {
+        'Español': ['Hardware seleccionado', 'Firmware compilado', 'Firmware instalado', 'MCU verificada', 'Configuración generada', 'Preparación del despliegue', 'Verificación de la instalación', 'Instalación completada'],
+        'Português': ['Hardware selecionado', 'Firmware compilado', 'Firmware instalado', 'MCU verificada', 'Configuração gerada', 'Preparação da instalação', 'Verificação da instalação', 'Instalação concluída'],
+    };
+    const language = (view.data && view.data.language) || studioLanguage();
+    const installationLabels = {
+        'Español': ['Firmware entregado', 'Esperando al controlador', 'MCU desconectada', 'Esperando la MCU', 'Confirmando identidad de la MCU', 'MCU detectada', 'Moonraker conectado', 'Klipper listo', 'MCU registrada', 'Firmware verificado', 'Configuración instalada', 'Instalación completada'],
+        'Português': ['Firmware entregue', 'Aguardando o controlador', 'MCU desconectada', 'Aguardando a MCU', 'Confirmando identidade da MCU', 'MCU detectada', 'Moonraker conectado', 'Klipper pronto', 'MCU registrada', 'Firmware verificado', 'Configuração instalada', 'Instalação concluída'],
+    };
+    const installationIndex = KACE_INSTALLATION_STEPS.indexOf(label);
+    if (view.kind !== 'firmware_deployment' && installationLabels[language] && installationIndex >= 0) return installationLabels[language][installationIndex];
+    const labels = translations[language];
+    const index = KACE_FIRMWARE_DEPLOYMENT_STEPS.indexOf(label);
+    return labels && index >= 0 ? labels[index] : label;
+}
+
+
+let firstBootDiscovery = null;
+function stopFirstBootDiscovery() {
+    if (firstBootDiscovery) window.clearInterval(firstBootDiscovery.timer);
+    firstBootDiscovery = null;
+    const button = document.getElementById('stop-first-boot-scan');
+    if (button) button.hidden = true;
+}
+function startFirstBootDiscovery() {
+    stopFirstBootDiscovery();
+    const started = Date.now();
+    firstBootDiscovery = { started, devices: new Map(), lastScan: 0, timer: null };
+    const button = document.getElementById('stop-first-boot-scan');
+    if (button) button.hidden = false;
+    function tick() {
+        if (!firstBootDiscovery) return;
+        const elapsed = Date.now() - started;
+        if (elapsed >= 10 * 60 * 1000) {
+            stopFirstBootDiscovery();
+            const status = document.getElementById('scan-status-text');
+            if (status) status.textContent = studioText('searchDone');
+            return;
+        }
+        if (!discoveryScanInFlight && Date.now() - firstBootDiscovery.lastScan >= 15000) {
+            firstBootDiscovery.lastScan = Date.now();
+            triggerScan();
+        }
+        const progress = document.getElementById('first-boot-scan-progress');
+        if (progress) progress.textContent = `${studioText('search')}: ${Math.floor(elapsed / 1000)}s / 600s`;
+    }
+    firstBootDiscovery.timer = window.setInterval(tick, 1000);
+    tick();
+}
+
+
+const STUDIO_INSTALLATION_TEXT = {
+    English: {powerPending: 'Pending setup', verifying: 'Verifying image...', writing: 'Writing...', search: 'First-boot search', searchDone: 'First-boot search finished. Manual scan remains available.', stop: 'Stop search', download: 'Download firmware'},
+    'Español': {powerPending: 'Pendiente de configuración', verifying: 'Verificando imagen...', writing: 'Grabando...', search: 'Buscar durante el primer arranque', searchDone: 'Terminó la búsqueda automática. Podés seguir buscando manualmente.', stop: 'Detener búsqueda', download: 'Descargar firmware'},
+    'Português': {powerPending: 'Configuração pendente', verifying: 'Verificando imagem...', writing: 'Gravando...', search: 'Buscar durante a primeira inicialização', searchDone: 'A busca automática terminou. A busca manual continua disponível.', stop: 'Parar busca', download: 'Baixar firmware'},
+};
+function studioLanguage() {
+    const locale = typeof navigator === 'undefined' ? 'en' : navigator.language;
+    return /^es/i.test(locale) ? 'Español' : /^pt/i.test(locale) ? 'Português' : 'English';
+}
+function studioText(key, language = studioLanguage()) {
+    return (STUDIO_INSTALLATION_TEXT[language] || STUDIO_INSTALLATION_TEXT.English)[key];
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const start = document.getElementById('start-first-boot-scan');
+    const stop = document.getElementById('stop-first-boot-scan');
+    if (start) start.textContent = studioText('search');
+    if (stop) stop.textContent = studioText('stop');
+});

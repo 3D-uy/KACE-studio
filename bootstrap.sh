@@ -105,7 +105,7 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="a0cc0f542d6c61e38de5bb5a414e48dadba07df3"
+KACE_INSTALL_REF="47a00c15739ac9c4d477f78dd9d71446d1c8d932"
 KACE_INSTALL_SHA256="de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
@@ -2124,6 +2124,19 @@ else
 fi
 
 if [ "$INSTALL_OK" -ne 1 ]; then
+    # The installer also returns the wizard outcome. A durable, valid checkpoint
+    # distinguishes an installed agent awaiting recovery from installation loss.
+    if [ -x "$PRINTER_HOME/kace/venv/bin/python" ] && (
+        cd "$PRINTER_HOME/kace" && ./venv/bin/python -c '
+from core.firmware_workflow import load_checkpoint
+c = load_checkpoint("firmware-workflow.json", verify_artifact=True)
+raise SystemExit(0 if c and c["state"] != "COMPLETE" else 1)
+' >/dev/null 2>&1
+    ); then
+        log_warn "KACE is installed. Continue the pending installation by running kace."
+        emit_bootstrap_terminal "workflow_cancelled" "RECOVERY_AVAILABLE" "$INSTALL_EXIT"
+        exit "$INSTALL_EXIT"
+    fi
     case "$INSTALL_EXIT" in
         2)
             emit_bootstrap_terminal "workflow_cancelled" "CANCELLED" "$INSTALL_EXIT"

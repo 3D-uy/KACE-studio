@@ -494,7 +494,7 @@ class Api:
                 bytes_read += len(chunk)
                 if file_size > 0:
                     pct = int((bytes_read / file_size) * 100)
-                    self.set_device_state("FLASHING", pct, f"{action_message}: {pct}%")
+                    self.set_device_state("VERIFYING_IMAGE", pct, f"{action_message}: {pct}%")
         return sha256.hexdigest()
 
     @staticmethod
@@ -714,7 +714,7 @@ class Api:
     ):
         """Validate an immutable release/custom capability contract before disk writes."""
         self.set_device_state(
-            "FLASHING", 0, "Validating pre-baked image services and capabilities..."
+            "VERIFYING_IMAGE", 0, "Validating pre-baked image services and capabilities..."
         )
         if provisioning.image_type is ImageType.CUSTOM_PREBAKED:
             return load_custom_attestation(image_path)
@@ -749,7 +749,7 @@ class Api:
     def _resolve_manifest_image(self, image_type: str, os_arch: str, cache_dir: str) -> ResolvedImage:
         entry = ImageManifest.load_bundled().resolve(image_type, os_arch)
         self.set_device_state(
-            "FLASHING", 0, f"Resolving pinned {image_type} image {entry.version}..."
+            "VERIFYING_IMAGE", 0, f"Resolving pinned {image_type} image {entry.version}..."
         )
         cached_archive = os.path.join(cache_dir, entry.filename)
         cached_archive_sha = cached_archive + ".sha256"
@@ -1633,6 +1633,17 @@ class Api:
                 "power_context": context,
             }
         except (PowerControllerError, TypeError, ValueError) as exc:
+            cause = exc
+            missing_endpoint = "not configured in Moonraker" in str(exc)
+            while cause is not None:
+                missing_endpoint = missing_endpoint or getattr(cause, "code", None) == 404
+                cause = cause.__cause__
+            with self._power_lock:
+                pending = (self._remote_power_authority or {}).get("status") == "absent"
+            if action == "status" and pending and missing_endpoint:
+                return {"ok": False, "available": False, "device": device,
+                        "status": "pending", "detail": "Power control is available after bootstrap",
+                        "power_context": power_context}
             return {
                 "ok": False,
                 "available": False,
