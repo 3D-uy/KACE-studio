@@ -225,7 +225,7 @@ function browseLocalImage() {
             }
         });
     } else {
-        document.getElementById('custom-image-path').value = "C:\\Downloads\\mainsailos-lite-bookworm.img";
+        document.getElementById('custom-image-path').value = "mainsailos-lite-bookworm.img";
         clearInputError('custom-image-path');
     }
 }

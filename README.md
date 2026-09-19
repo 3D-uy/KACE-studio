@@ -222,6 +222,17 @@ The main implementation areas are:
 
 Open an issue before a broad workflow or writer change. Keep the unelevated/elevated boundary intact, add non-destructive regression coverage and document changes to bootstrap markers or packaged resources.
 
+### Protected main workflow
+
+Create a branch and open a pull request against `main`. All required CI checks
+must succeed on an up-to-date branch before merging. No manual review approval
+is required. The protection applies to administrators too: direct pushes,
+force pushes and deletion of `main` are prohibited.
+
+Keep examples relative or use runtime/environment-derived paths. Personal
+computer paths must not be committed; the portability gate scans all tracked
+files, including test fixtures. Path-detection tests use synthetic inputs.
+
 ## License
 
 KACE Studio is licensed under the [GNU General Public License v3.0](LICENSE).

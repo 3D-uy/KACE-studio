@@ -22,11 +22,15 @@ ALLOWED_TARGET_HOME_USERS = {
 LOCAL_PATH_PATTERNS = (
     (
         "Windows user profile",
-        re.compile(r"(?i)[a-z]:(?:\\+|/+)users(?:\\+|/+)[^\\/\s\"']+"),
+        re.compile(r"(?i)\b[a-z](?::[\\/.]+|\.)users[\\/.]+[^\\/\s\"']+"),
     ),
     (
         "macOS user profile",
         re.compile(r"/" r"Users/[^/\s\"']+"),
+    ),
+    (
+        "personal desktop/documents path",
+        re.compile(r"(?i)[/\\.](?:desktop|documents)[/\\.]"),
     ),
     (
         "Codex attachment path",
@@ -34,11 +38,10 @@ LOCAL_PATH_PATTERNS = (
     ),
     (
         "developer workspace path",
-        re.compile(r"(?i)(?:open\s+world|KACE[-_]ecosystem)"),
+        re.compile(r"(?i)(?:\bD:[\\/]+|KACE[-_]ecosystem)"),
     ),
 )
-LINUX_HOME_PATTERN = re.compile(r"/home/([A-Za-z0-9._-]+)(?:/|\b)")
-SKIPPED_PARTS = {".git", ".pytest_cache", ".venv", "__pycache__", "build", "dist", "node_modules"}
+LINUX_HOME_PATTERN = re.compile(r"(?i)[/\\]home[/\\]+([A-Za-z0-9._-]+)(?:[/\\]|\b)")
 
 
 def scan_text(text: str) -> list[tuple[str, str]]:
@@ -67,8 +70,6 @@ def find_violations(root: Path) -> list[str]:
     findings = []
     for path in _tracked_files(root):
         relative = path.relative_to(root)
-        if any(part in SKIPPED_PARTS for part in relative.parts):
-            continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
