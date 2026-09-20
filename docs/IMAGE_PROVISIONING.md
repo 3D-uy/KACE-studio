@@ -53,3 +53,14 @@ shared cache reuse, boot injection, frontend bridge arguments and shell
 provisioning with sandboxed downloads/services. They do not prove a physical
 SD write, Pi boot or printer readiness. Klipper requires the normal printer/MCU
 configuration workflow before it can be ready to print.
+
+Safe eject compares the same hardware identity fields in Python and PowerShell:
+disk number, model, serial, path, capacity, bus type, and system/boot flags.
+The content-derived UniqueId is excluded from eject comparisons because writing
+an image can change it. A confirmed native eject ends the operation immediately.
+
+## SSH recovery after installation
+
+An unexpected SSH transport loss starts at most three reconnect attempts, using the session credentials in backend memory and the normal host-key validation. Manual disconnect or a newer device selection cancels recovery. A normal shell exit does not reconnect. No credentials are persisted by this recovery flow.
+
+After reconnecting, Studio reads the validated KACE checkpoint and restores its progress panel. Only COMPLETE confirms that printer.cfg and required files were installed and verified. Pending or unavailable checkpoints explicitly ask the operator to continue KACE verification; reconnecting alone never completes or restarts the installation.

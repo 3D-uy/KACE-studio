@@ -63,9 +63,10 @@ $expected = '{expected_json}' | ConvertFrom-Json
 function Assert-SelectedDisk($disk) {{
     if (-not $disk -or $disk.IsSystem -or $disk.IsBoot) {{ throw 'Unsafe or absent disk' }}
     if ($expected) {{
+        # Match EJECT_IDENTITY_FIELDS: UniqueId can change with image contents.
         if ($disk.Number -ne $expected.number -or
+            ([string]$disk.FriendlyName).Trim() -ne $expected.friendly_name -or
             ([string]$disk.SerialNumber).Trim() -ne $expected.serial_number -or
-            ([string]$disk.UniqueId).Trim() -ne $expected.unique_id -or
             ([string]$disk.Path).Trim() -ne $expected.path -or
             [long]$disk.Size -ne [long]$expected.size_bytes -or
             [string]$disk.BusType -ne $expected.bus_type) {{ throw 'Disk identity changed during eject' }}

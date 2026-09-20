@@ -1224,6 +1224,25 @@ function handleLoginInput(data) {
     }
 }
 
+window.restoreSshAfterReconnect = function (result, selection, checkpoint) {
+    if (selection !== powerSelection || !result || result.status !== 'success') return;
+    updateConnectionStatus(true);
+    firmwareGeneration = result.generation;
+    applyRemotePowerConfig(result.power_config, selection);
+    loginState = 'DISCONNECTED';
+    term.write('\r\n\x1b[97mConexión con la Pi recuperada.\x1b[0m\r\n');
+    if (checkpoint && checkpoint.generation === firmwareGeneration && checkpoint.event) {
+        window.updateKaceWorkflowEvent(checkpoint.event, firmwareGeneration);
+        const complete = checkpoint.checkpoint.state === 'COMPLETE';
+        term.write(complete
+            ? '\r\n✅  printer.cfg y los archivos necesarios quedaron instalados y verificados en la Pi.\r\n'
+            : '\r\nLa instalación conserva su progreso, pero falta confirmar el cierre. Ejecutá kace y elegí continuar para completar la verificación.\r\n');
+    } else {
+        term.write('\r\nNo se pudo verificar el estado de la instalación. Ejecutá kace para revisar el progreso.\r\n');
+    }
+    startFirmwareCheckpointWatch();
+};
+
 function performSshLogin(username, password) {
     resetPowerTarget(currentDeviceIp);
     const selection = powerSelection;
