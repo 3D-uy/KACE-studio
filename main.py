@@ -1053,7 +1053,7 @@ class Api:
             self.set_device_state("DISCOVERED", 100, f"Discovered manual target at {ip}.")
         return res
 
-    def connect_ssh(self, ip: str, username: str, password: str, cols: int = 80, rows: int = 24, power_selection=None) -> dict:
+    def connect_ssh(self, ip: str, username: str, password: str, cols: int = 80, rows: int = 24, power_selection=None, _reconnect_attempt=None) -> dict:
         """
         Connects paramiko client and routes stream data to the terminal.
         cols/rows: actual frontend terminal dimensions for correct PTY sizing.
@@ -1068,6 +1068,9 @@ class Api:
 
         candidate = SSHSession()
         with self._ssh_lock:
+            if _reconnect_attempt is not None and _reconnect_attempt != self._ssh_attempt_gen:
+                candidate.close()
+                return {"status": "superseded"}
             with self._power_lock:
                 host = ip.strip().casefold()
                 if power_selection is not None and (
@@ -1272,6 +1275,12 @@ class Api:
                 else:
                     # Stale callbacks should not clear the status
                     self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
+                if not self._ssh_session_is_active(candidate):
+                    threading.Thread(
+                        target=self._recover_ssh,
+                        args=(ip, username, password, cols, rows, power_context["selection"], attempt_gen),
+                        daemon=True,
+                    ).start()
                 
             candidate.run_command_stream("bash", on_data, on_close, cols=cols, rows=rows)
             return {"status": "success", "power_config": remote_power, "generation": current_gen}
@@ -1453,6 +1462,35 @@ class Api:
             if session is not self._ssh or selected_generation != self._ssh_gen:
                 return False
         return session.download_file(remote_path, chosen_path)
+
+    def _recover_ssh(self, ip, username, password, cols, rows, selection, attempt):
+        """Bounded reconnect using session-only credentials and normal host-key checks."""
+        for delay in (2, 4, 8):
+            time.sleep(delay)
+            with self._ssh_lock:
+                if attempt != self._ssh_attempt_gen:
+                    return
+            self.set_device_state("CONNECTING", 0, "Reconectando con la Pi para consultar la instalación…")
+            result = self.connect_ssh(
+                ip, username, password, cols, rows, selection, _reconnect_attempt=attempt,
+            )
+            attempt += 1
+            with self._ssh_lock:
+                if attempt != self._ssh_attempt_gen:
+                    return
+            if result.get("status") == "success":
+                checkpoint = self.get_firmware_workflow_checkpoint()
+                with self._ssh_lock:
+                    if attempt != self._ssh_attempt_gen:
+                        return
+                if self._window is not None:
+                    self._window.evaluate_js(
+                        f"window.restoreSshAfterReconnect({json.dumps(result)}, {selection}, {json.dumps(checkpoint)});"
+                    )
+                return
+            if result.get("status") in {"host_key_mismatch", "superseded"}:
+                break
+        self.set_device_state("DISCOVERED", 0, "No se pudo reconectar automáticamente. Volvé a iniciar sesión para consultar el progreso guardado.")
 
     def get_firmware_deployment_manifest(self):
         """Return KACE's non-secret firmware manifest for reconnect recovery."""

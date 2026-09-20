@@ -195,7 +195,7 @@ function Get-Disk {{
  $script:reads++
  if ($script:reads -gt 2) {{ throw 'Post-eject identity {post_identity} must not be inspected' }}
  $d = '{identity}' | ConvertFrom-Json
- [pscustomobject]@{{Number=3;SerialNumber=$d.serial_number;UniqueId=$d.unique_id;Path=$d.path;Size=$d.size_bytes;BusType=$d.bus_type;IsSystem=$false;IsBoot=$false}}
+ [pscustomobject]@{{Number=3;FriendlyName=$d.friendly_name;SerialNumber=$d.serial_number;UniqueId='CHANGED-AFTER-IMAGE-WRITE';Path=$d.path;Size=$d.size_bytes;BusType=$d.bus_type;IsSystem=$false;IsBoot=$false}}
 }}
 function Get-CimInstance {{ [pscustomobject]@{{PNPDeviceID='TEST-ONLY'}} }}
 function Set-Disk {{ throw 'A confirmed eject must never fall back to another operation' }}
@@ -212,3 +212,30 @@ def test_different_disk_never_reaches_native_eject(monkeypatch, tmp_path):
     native = lambda *_: pytest.fail('wrong disk must never reach native eject')
     monkeypatch.setattr(ejector, '_perform_windows_eject', native)
     assert ejector.privileged_eject(4, str(tmp_path / 'status.json'), disk_identity()) is False
+
+
+@pytest.mark.parametrize('field,value', [
+    ('Number', '4'), ('FriendlyName', "'other reader'"),
+    ('SerialNumber', "'other serial'"), ('Path', "'other path'"),
+    ('Size', '1024'), ('BusType', "'SATA'"),
+    ('IsSystem', '$true'), ('IsBoot', '$true'),
+])
+def test_powershell_rejects_hardware_change_before_native_call(field, value):
+    shell = shutil.which('powershell')
+    if not shell:
+        pytest.skip('PowerShell runtime required')
+    identity = json.dumps(disk_identity()).replace("'", "''")
+    mocks = f'''
+function Get-Disk {{
+ $d = '{identity}' | ConvertFrom-Json
+ $disk = [pscustomobject]@{{Number=3;FriendlyName=$d.friendly_name;SerialNumber=$d.serial_number;Path=$d.path;Size=$d.size_bytes;BusType=$d.bus_type;IsSystem=$false;IsBoot=$false}}
+ $disk.{field} = {value}
+ return $disk
+}}
+function Add-Type {{ throw 'Native API must not be reached' }}
+'''
+    result = subprocess.run([shell, '-NoProfile', '-Command', mocks + ejector._powershell_eject_command(3, disk_identity())], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload['success'] is False
+    assert 'identity changed' in payload['error'] or 'system or boot' in payload['error']

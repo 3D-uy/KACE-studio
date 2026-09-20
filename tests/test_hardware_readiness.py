@@ -50,7 +50,7 @@ function Get-Disk {
     if ($script:diskReads -gt 2 -and $mode -eq 'removed') { return }
     $serial = $identity.serial_number
     if ($script:diskReads -gt 2 -and $mode -eq 'changed_identity') { $serial='OTHER' }
-    [pscustomobject]@{Number=3; IsSystem=$false; IsBoot=$false;
+        [pscustomobject]@{Number=3; FriendlyName=$identity.friendly_name; IsSystem=$false; IsBoot=$false;
         IsOffline=($mode -ne 'online'); SerialNumber=$serial;
         UniqueId=$identity.unique_id; Path=$identity.path;
         Size=$identity.size_bytes; BusType=$identity.bus_type}
