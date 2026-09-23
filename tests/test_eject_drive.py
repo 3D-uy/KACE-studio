@@ -144,6 +144,16 @@ def test_eject_identity_ignores_content_derived_unique_id(monkeypatch):
     assert ejector._validate_eject_identity(3, disk_identity()) == current
 
 
+def test_eject_identity_refreshes_post_flash_display_fields(monkeypatch):
+    current = disk_identity(
+        friendly_name="Raspberry Pi Mass Storage",
+        size_bytes=31 * 1024**3,
+        unique_id="POST-FLASH-UNIQUE-ID",
+    )
+    monkeypatch.setattr(ejector, "_query_disk_identity", lambda *_args: current)
+    assert ejector._validate_eject_identity(3, disk_identity()) == current
+
+
 def test_eject_identity_rejects_stable_hardware_change(monkeypatch):
     monkeypatch.setattr(
         ejector,
@@ -212,6 +222,61 @@ def test_different_disk_never_reaches_native_eject(monkeypatch, tmp_path):
     native = lambda *_: pytest.fail('wrong disk must never reach native eject')
     monkeypatch.setattr(ejector, '_perform_windows_eject', native)
     assert ejector.privileged_eject(4, str(tmp_path / 'status.json'), disk_identity()) is False
+
+
+@pytest.mark.parametrize('replacement,offline,mounted', [
+    (False, True, False),
+    (True, True, False),
+    (False, False, False),
+    (False, True, True),
+])
+def test_shell_eject_handles_empty_offline_reader_but_rejects_replacement(replacement, offline, mounted):
+    shell = shutil.which('powershell')
+    if not shell:
+        pytest.skip('PowerShell runtime required')
+    command = ejector._powershell_eject_command(3, disk_identity())
+    fake_native = '''Add-Type -TypeDefinition @'
+using System.Text;
+public static class KaceEject {
+ public static uint CM_Locate_DevNodeW(out uint node, string id, uint flags) {node=42;return 0;}
+ public static uint CM_Request_Device_EjectW(uint node, out uint veto, StringBuilder name, uint length, uint flags) {veto=1;return 23;}
+}
+'@'''
+    command = re.sub(r"Add-Type -TypeDefinition @'.*?'@", lambda _: fake_native, command, flags=re.S)
+    identity = json.dumps(disk_identity()).replace("'", "''")
+    serial = "'OTHER-SERIAL'" if replacement else '$d.serial_number'
+    offline_ps = '$true' if offline else '$false'
+    mounted_ps = '$true' if mounted else '$false'
+    mocks = f'''
+$script:ejected = $false
+function Get-Disk {{
+ $d = '{identity}' | ConvertFrom-Json
+ $size = if ($script:ejected) {{ 0 }} else {{ $d.size_bytes }}
+ $serial = if ($script:ejected) {{ {serial} }} else {{ $d.serial_number }}
+ [pscustomobject]@{{Number=3;FriendlyName=$d.friendly_name;SerialNumber=$serial;Path=$d.path;Size=$size;BusType=$d.bus_type;IsSystem=$false;IsBoot=$false;IsOffline=($script:ejected -and {offline_ps})}}
+}}
+function Get-CimInstance {{ [pscustomobject]@{{PNPDeviceID='TEST-ONLY'}} }}
+function Get-Partition {{ if (-not $script:ejected -or {mounted_ps}) {{ [pscustomobject]@{{DriveLetter=[char]'E'}} }} }}
+function Set-Disk {{ throw 'Must not operate on an already ejected reader' }}
+function Start-Sleep {{}}
+function New-Object {{
+ $verb = [pscustomobject]@{{Name='Eject'}}
+ $verb | Add-Member ScriptMethod DoIt {{ $script:ejected = $true }}
+ $item = [pscustomobject]@{{verb=$verb}}
+ $item | Add-Member ScriptMethod Verbs {{ $this.verb }}
+ $folder = [pscustomobject]@{{item=$item}}
+ $folder | Add-Member ScriptMethod ParseName {{ param($path) $this.item }}
+ $shell = [pscustomobject]@{{folder=$folder}}
+ $shell | Add-Member ScriptMethod Namespace {{ param($number) $this.folder }}
+ return $shell
+}}
+'''
+    result = subprocess.run([shell, '-NoProfile', '-Command', mocks + command], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload['success'] is (not replacement and offline and not mounted), payload
+    if replacement:
+        assert 'identity changed' in payload['error']
 
 
 @pytest.mark.parametrize('field,value', [

@@ -58,6 +58,7 @@
                         <div class="sftp-path-container">
                             <input type="text" id="sftp-current-path" value="/home/kace" readonly>
                             <button class="btn btn-secondary btn-sm" onclick="navigateSftpUp()" title="Go up a directory"><i class="fa-solid fa-arrow-up"></i></button>
+                            <button class="btn btn-secondary btn-sm" id="sftp-refresh-btn" onclick="loadSftpDirectory(sftpCurrentPath)" title="Refresh directory" aria-label="Refresh directory"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i></button>
                             <button class="btn btn-secondary btn-sm" id="sftp-download-btn" onclick="downloadSelectedSftpFile()" disabled title="Download selected file"><i class="fa-solid fa-download"></i></button>
                         </div>
                     </div>

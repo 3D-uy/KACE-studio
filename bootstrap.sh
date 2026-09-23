@@ -105,7 +105,7 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="dfeae2e1a703c1b7094ab960659d4aa7093c5bf9"
+KACE_INSTALL_REF="56eb565d96b943e2d5824df2c1e6fced33377401"
 KACE_INSTALL_SHA256="de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
@@ -1375,6 +1375,10 @@ fi
 # Truncate once, then keep every writer in append mode. Machine events can be
 # written directly to the log without racing tee's independent file offset.
 : > "$LOG_FILE"
+# Preserve terminal color capability before tee turns the CLI output into a pipe.
+if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
+    export KACE_COLOR=1
+fi
 exec > >(tee -a -i "$LOG_FILE") 2>&1
 
 echo -e "\n${C_CYAN}${C_BOLD}"
