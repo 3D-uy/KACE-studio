@@ -63,6 +63,11 @@ jobs:
         cache: 'pip'
         cache-dependency-path: requirements.lock
 
+    - name: Set up pinned Node for mandatory frontend coverage
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: "24.19.0"
+
     - name: Install System Dependencies (Linux)
       if: runner.os == 'Linux'
       run: |
@@ -78,22 +83,26 @@ jobs:
     - name: Reject developer-local paths
       run: python scripts/check_portability.py
 
-    - name: Fetch and verify pinned KACE bootstrap
-      run: python scripts/release.py fetch-bootstrap && python scripts/release.py verify-remote-installer
-
-    - name: Verify immutable release inputs
-      run: python scripts/release.py verify-inputs
+    # Source validation uses the committed bootstrap; release fetches stay in build jobs.
+    - name: Verify source bootstrap identity
+      id: source
+      run: python scripts/check_ci_source.py --evidence "${{ runner.temp }}/studio-ci/source-before.json"
 
     - name: Run Backend Tests
-      run: python -m pytest -v --junitxml=pytest-results.xml
+      id: tests
+      run: python -m pytest -v --junitxml="${{ runner.temp }}/studio-ci/pytest-results.xml"
 
-    - name: Upload logs on failure
-      if: failure()
+    - name: Require unchanged bootstrap and complete frontend coverage
+      if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.tests.outcome != 'skipped' }}
+      run: python scripts/check_ci_source.py --junit "${{ runner.temp }}/studio-ci/pytest-results.xml" --evidence "${{ runner.temp }}/studio-ci/source-after.json"
+
+    - name: Upload source test evidence
+      if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: pytest-logs-${{ matrix.os }}-py${{ matrix.python-version }}
-        path: pytest-results.xml
-        if-no-files-found: warn
+        path: ${{ runner.temp }}/studio-ci/
+        if-no-files-found: error
         retention-days: 7
 
   build-windows:
