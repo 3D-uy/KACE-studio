@@ -110,6 +110,16 @@ Perform physical tests only in a controlled manual qualification environment:
 - [ ] Run the complete bootstrap and confirm Studio does not report success when KACE is absent.
 - [ ] Launch KACE on the Pi and generate/deploy a representative printer configuration.
 
+Record native Windows eject confirmation separately from UI state; inspect
+automatic discovery, pending power before bootstrap, progress in the same SSH
+session and session-bound SFTP. An old EXE with the same version label is not the
+same candidate: record its exact manifest and checksum.
+
+Follow KACE's [hardware qualification guide](https://github.com/3D-uy/KACE/blob/main/docs/HARDWARE_TESTING.md)
+for loaded configuration, firmware identity, unchanged retries, safe interruption
+and physical commissioning. On the Pi, local Moonraker uses `127.0.0.1:7125`;
+a LAN address retains the remote-publication boundary.
+
 Automated CI must never be pointed at physical disks or printer controllers.
 
 ## 6. Remote CI and artifact evidence
