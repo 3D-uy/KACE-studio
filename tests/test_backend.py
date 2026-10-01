@@ -154,18 +154,15 @@ class TestKaceBackend(unittest.TestCase):
         self.assertEqual(components[2], f"rounds={SHA512_CRYPT_ROUNDS}")
         
     def test_subnet_ips_generation(self):
-        """
-        Tests that subnet scanning list produces valid /24 host IPs.
-        """
-        ips = get_local_subnet_ips()
-        self.assertTrue(len(ips) > 0, "Subnet IP list should not be empty")
-        
-        # Verify first IP formatting
-        first_ip = ips[0]
-        octets = first_ip.split(".")
-        self.assertEqual(len(octets), 4, f"Invalid IP format: {first_ip}")
-        self.assertEqual(octets[-1], "1", f"First host in subnet should end in .1. Got: {first_ip}")
-        
+        """Generate the complete /24 from a known interface, without host networking."""
+        with patch("backend.discovery.socket.socket") as socket_factory:
+            connection = socket_factory.return_value
+            connection.getsockname.return_value = ("192.0.2.42", 12345)
+            ips = get_local_subnet_ips()
+
+        self.assertEqual(ips, [f"192.0.2.{host}" for host in range(1, 255) if host != 42])
+        connection.close.assert_called_once()
+
     def test_port_probe_timeout(self):
         """
         Tests that port probing functions handle closed/dead IP sockets gracefully and return False.

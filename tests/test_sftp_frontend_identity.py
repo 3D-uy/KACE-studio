@@ -13,13 +13,15 @@ def test_out_of_order_directory_and_disconnect_responses_cannot_change_selection
     app = (Path(__file__).resolve().parents[1] / "web/app.js").read_text(encoding="utf-8")
     source = app[app.index('let sftpCurrentPath ='):app.index('function renderSftpList')]
     source += app[app.index('window.downloadSftpFile ='):app.index('window.navigateSftpInto =')]
+    source += app[app.index('const STUDIO_INSTALLATION_TEXT ='):app.index("document.addEventListener('DOMContentLoaded'", app.index('const STUDIO_INSTALLATION_TEXT ='))]
     harness = r'''
 const assert = require('node:assert/strict');
 const window = globalThis;
+const navigator = {language: "en"};
 let sshConnected = true, activeTab = 'terminal-tab';
 const nodes = new Map();
 const document = {querySelectorAll() {return [];}, getElementById(id) {
-  if (!nodes.has(id)) nodes.set(id, {style:{}, value:'', innerHTML:'', disabled:false});
+  if (!nodes.has(id)) nodes.set(id, {classList:{toggle() {}}, style:{}, value:'', innerHTML:'', disabled:false, setAttribute() {}});
   return nodes.get(id);
 }};
 const requests = [], rendered = [], downloads = [];

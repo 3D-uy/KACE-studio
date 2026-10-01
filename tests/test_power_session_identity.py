@@ -99,6 +99,28 @@ def test_reproduced_cross_host_authority_is_rejected_even_without_selection(rig)
     assert posts == []
 
 
+@pytest.mark.parametrize("phase, expected", [("FIRMWARE_RESTART", True), ("ARTIFACT_READY", False)])
+def test_ssh_close_reports_observed_phase_without_attributing_host_cause(rig, monkeypatch, phase, expected):
+    from unittest.mock import Mock
+
+    api, connect, posts, _ = rig
+    _, session = connect("pi.local")
+    api._last_kace_workflow_state = phase
+    suspend = Mock(return_value=True)
+    status = Mock()
+    monkeypatch.setattr(api, "_suspend_bootstrap_for_ssh_loss", suspend)
+    monkeypatch.setattr(api, "set_device_state", status)
+    # Test only the close diagnostic; reconnect scheduling has its own suite.
+    monkeypatch.setattr(api, "_ssh_session_is_active", lambda _session: True)
+    session.on_close()
+    message = suspend.call_args.args[0]
+    assert phase in message
+    assert "host status is unknown" in message
+    assert suspend.call_args.kwargs == {"expected": expected}
+    status.assert_called_once_with("BOOTSTRAP_RECOVERABLE", 0, message)
+    assert posts == []
+
+
 def test_selection_invalidates_authority_controller_and_pending_context(rig):
     api, connect, posts, _ = rig
     context_a, _ = connect("A.local", "relay-from-A")

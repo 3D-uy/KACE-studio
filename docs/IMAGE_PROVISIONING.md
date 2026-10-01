@@ -1,25 +1,18 @@
 # Verified image provisioning
 
-## Fluidd source decision (2026-09-19)
+[README](../README.md) · [Development](DEVELOPMENT.md) · [Release checklist](../RELEASE_CHECKLIST.md)
 
-[FluiddPI](https://github.com/fluidd-core/FluiddPI) is archived and explicitly
-deprecated. [Fluidd's installation guide](https://docs.fluidd.xyz/getting-started/#fluiddpi)
-recommends KIAUH instead. The official fluidd-core repository inventory has no
-maintained successor SD image. The maintained Fluidd container is a web server,
-not a Raspberry Pi boot image.
+## 🧭 Image and dashboard authority
 
-Studio therefore offers **Fluidd** using the existing official
-[MainsailOS 3.0.0 base](https://github.com/mainsail-crew/MainsailOS/releases/tag/3.0.0),
-then installs Fluidd during provisioning. This is a Studio provisioning choice,
-not an upstream Fluidd OS distribution or a claim that Fluidd is preinstalled.
+The [image manifest](../image-manifest.json) owns image URLs, archive/raw hashes,
+architecture and pre-baked attestations. [The bootstrap](../bootstrap.sh) and
+[release contract](../release-contract.json) bind provisioning inputs. Do not
+copy their version/hash values into a second operational authority.
 
-The release assets/API and published `.img.sha256` / `.img.xz.sha256` files were
-checked against the existing 32-bit and 64-bit manifest identities. No image
-versions or hashes were changed. The attestation remains family `mainsailos`,
-version `3.0.0`, source commit `77ff5c1eb2731f53440ff2f251b379e1916964ba`.
-The fixed [Fluidd v1.37.3 release](https://github.com/fluidd-core/fluidd/releases/tag/v1.37.3)
-asset digest matches the existing bootstrap pin:
-`48e712e5f2cc59f7cfebd458174ddedff60e532ebcba3f9b844167fa27a22571`.
+Studio offers Fluidd on the verified MainsailOS base and installs the pinned
+Fluidd dashboard during provisioning. It does not use the archived FluiddPI image
+or claim Fluidd is already installed in that base. Dashboard choice does not
+qualify the printer configuration or firmware.
 
 ## Existing contracts
 

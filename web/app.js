@@ -45,8 +45,7 @@ function applyTheme(theme) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Initialize custom dropdown selectors
-    initCustomDropdowns();
+    initAccessibility();
 
     // Initialize real-time validation clearing listeners
     initValidationListeners();
@@ -235,8 +234,13 @@ function showInputError(inputId, message) {
     if (!inputEl) return;
 
     inputEl.classList.add('input-error');
+    inputEl.setAttribute('aria-invalid', 'true');
+    const errorId = `${inputId}-error`;
+    const descriptions = new Set((inputEl.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean));
+    descriptions.add(errorId);
+    inputEl.setAttribute('aria-describedby', [...descriptions].join(' '));
 
-    const targetContainer = inputEl.closest('.password-wrapper') || inputEl;
+    const targetContainer = inputEl.closest('.password-wrapper') || document.getElementById(`${inputId}-trigger`) || inputEl;
     const parent = targetContainer.parentNode;
 
     // Create text label if not present, specific to this inputId
@@ -244,9 +248,10 @@ function showInputError(inputId, message) {
     if (!errorEl) {
         errorEl = document.createElement('span');
         errorEl.className = 'error-message-label';
+        errorEl.id = errorId;
         errorEl.setAttribute('data-for', inputId);
         errorEl.style.color = 'var(--danger-color)';
-        errorEl.style.fontSize = '11px';
+        errorEl.style.fontSize = '13px';
         errorEl.style.marginTop = '4px';
         errorEl.style.display = 'block';
         // Insert right after the container/input element to prevent layout shifting of relative items (like icons)
@@ -260,35 +265,308 @@ function clearInputError(inputId) {
     if (!inputEl) return;
 
     inputEl.classList.remove('input-error');
-    const targetContainer = inputEl.closest('.password-wrapper') || inputEl;
+    inputEl.removeAttribute('aria-invalid');
+    const descriptions = (inputEl.getAttribute('aria-describedby') || '').split(/\s+/).filter(id => id && id !== `${inputId}-error`);
+    if (descriptions.length) inputEl.setAttribute('aria-describedby', descriptions.join(' '));
+    else inputEl.removeAttribute('aria-describedby');
+    const targetContainer = inputEl.closest('.password-wrapper') || document.getElementById(`${inputId}-trigger`) || inputEl;
     const parent = targetContainer.parentNode;
     const errorEl = parent.querySelector(`.error-message-label[data-for="${inputId}"]`);
     if (errorEl) {
         errorEl.remove();
     }
+    updateInputErrorSummary();
 }
 
-window.togglePasswordVisibility = function (inputId, iconEl) {
-    const inputEl = document.getElementById(inputId);
-    if (!inputEl) return;
-
-    if (inputEl.type === 'password') {
-        inputEl.type = 'text';
-        iconEl.classList.remove('fa-eye');
-        iconEl.classList.add('fa-eye-slash');
-    } else {
-        inputEl.type = 'password';
-        iconEl.classList.remove('fa-eye-slash');
-        iconEl.classList.add('fa-eye');
-    }
+window.togglePasswordVisibility = function (inputId, button) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    input.type = input.type === 'password' ? 'text' : 'password';
+    updatePasswordButton(input, button);
 };
 
+function updatePasswordButton(input, button) {
+    const visible = input.type === 'text';
+    button.setAttribute('aria-pressed', String(visible));
+    const label = document.querySelector(`label[for="${input.id}"]`).textContent;
+    button.setAttribute('aria-label', `${studioText(visible ? 'hide' : 'show')} ${label}`);
+    button.title = button.getAttribute('aria-label');
+    button.querySelector('i').className = `fa-solid ${visible ? 'fa-eye-slash' : 'fa-eye'}`;
+}
+
 function clearInputErrors() {
-    document.querySelectorAll('.input-error').forEach(el => {
-        el.classList.remove('input-error');
+    document.querySelectorAll('.input-error').forEach(el => clearInputError(el.id));
+    updateInputErrorSummary();
+}
+
+function focusInputError(inputId) {
+    const input = document.getElementById(inputId);
+    const tab = input.closest('.tab-content');
+    if (tab) switchTab(tab.id);
+    const control = document.getElementById(`${inputId}-trigger`) || input;
+    control.focus();
+    control.scrollIntoView({block: 'center'});
+}
+
+function updateInputErrorSummary() {
+    const summary = document.getElementById('input-error-summary');
+    if (!summary) return;
+    summary.replaceChildren();
+    const errors = document.querySelectorAll('.input-error');
+    summary.hidden = errors.length === 0;
+    if (!errors.length) return;
+    const title = document.createElement('p');
+    title.textContent = studioText('correctErrors');
+    summary.appendChild(title);
+    errors.forEach(input => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'error-summary-link';
+        button.textContent = document.getElementById(`${input.id}-error`).textContent;
+        button.addEventListener('click', () => focusInputError(input.id));
+        summary.appendChild(button);
     });
-    document.querySelectorAll('.error-message-label').forEach(el => {
-        el.remove();
+}
+
+// Native dialogs isolate the background and contain keyboard focus.
+let modalReturnFocus = null;
+function showStudioModal(id, initialFocus) {
+    const dialog = document.getElementById(id);
+    if (dialog.open) return;
+    modalReturnFocus = document.activeElement;
+    dialog.showModal();
+    document.getElementById(initialFocus).focus();
+}
+function closeStudioModal(id) {
+    document.getElementById(id).close();
+}
+function updateSelectDescription(id) {
+    const select = document.getElementById(id);
+    const description = document.getElementById(`${id}-description`);
+    description.textContent = select.selectedOptions[0]?.title || '';
+    select.dispatchEvent(new Event('presentationchange'));
+}
+// Enhance the existing selects; their options and values remain the form source.
+function initIllustratedSelects() {
+    document.querySelectorAll('#imager-tab select').forEach(select => {
+        let wrapper = select.closest('.illustrated-select');
+        if (!wrapper) {
+            wrapper = document.createElement('div');
+            wrapper.className = 'illustrated-select';
+            select.replaceWith(wrapper);
+            wrapper.appendChild(select);
+        }
+        const labels = Array.from(select.labels || []);
+        let options = [], rows = [];
+        const trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.className = 'illustrated-select-trigger';
+        trigger.id = `${select.id}-trigger`;
+        trigger.setAttribute('role', 'combobox');
+        labels.forEach(label => label.htmlFor = trigger.id);
+        trigger.setAttribute('aria-haspopup', 'listbox');
+        trigger.setAttribute('aria-expanded', 'false');
+        const list = document.createElement('div');
+        list.id = `${select.id}-options`;
+        list.className = 'illustrated-options';
+        list.setAttribute('role', 'listbox');
+        list.hidden = true;
+        trigger.setAttribute('aria-controls', list.id);
+        let active = select.selectedIndex;
+        let search = '';
+        let lastTyped = 0;
+        function content(option, withDescription) {
+            const row = document.createDocumentFragment();
+            const logos = document.createElement('span');
+            logos.className = 'illustrated-option-logos';
+            logos.setAttribute('aria-hidden', 'true');
+            (option?.dataset.icons || '').split(' ').filter(Boolean).forEach(src => {
+                const img = document.createElement('img');
+                img.src = src;
+                img.alt = '';
+                logos.appendChild(img);
+            });
+            const text = document.createElement('span');
+            text.className = 'illustrated-option-text';
+            const title = document.createElement('span');
+            title.textContent = option?.textContent || '—';
+            text.appendChild(title);
+            if (withDescription && option?.title) {
+                const description = document.createElement('small');
+                description.textContent = option.title;
+                text.appendChild(description);
+            }
+            if (logos.children.length) row.appendChild(logos);
+            row.appendChild(text);
+            return row;
+        }
+        function rebuild() {
+            close();
+            options = Array.from(select.options);
+            list.replaceChildren();
+            rows = options.map((option, index) => {
+                const row = document.createElement('div');
+                row.id = `${list.id}-${index}`;
+                row.className = 'illustrated-option';
+                row.setAttribute('role', 'option');
+                row.setAttribute('aria-label', option.textContent);
+                row.setAttribute('aria-disabled', String(option.disabled));
+                row.appendChild(content(option, true));
+                row.addEventListener('mousedown', event => event.preventDefault());
+                row.addEventListener('click', () => {
+                    if (option.disabled) return;
+                    active = index;
+                    close(true);
+                    trigger.focus();
+                });
+                list.appendChild(row);
+                return row;
+            });
+            sync();
+        }
+        function highlight() {
+            if (!rows[active]) return;
+            rows.forEach((row, index) => row.classList.toggle('active', index === active));
+            trigger.setAttribute('aria-activedescendant', rows[active].id);
+            const row = rows[active];
+            if (row.offsetTop < list.scrollTop) list.scrollTop = row.offsetTop;
+            else if (row.offsetTop + row.offsetHeight > list.scrollTop + list.clientHeight) {
+                list.scrollTop = row.offsetTop + row.offsetHeight - list.clientHeight;
+            }
+        }
+        function sync() {
+            const name = select.getAttribute('aria-label') || labels.map(label => label.textContent.trim()).join(' ');
+            trigger.setAttribute('aria-label', name);
+            list.setAttribute('aria-label', name);
+            ['aria-describedby', 'aria-invalid'].forEach(attribute => {
+                const value = select.getAttribute(attribute);
+                if (value) trigger.setAttribute(attribute, value);
+                else trigger.removeAttribute(attribute);
+            });
+            trigger.disabled = select.disabled || !options.length;
+            trigger.replaceChildren(content(select.selectedOptions[0], false));
+            const arrow = document.createElement('i');
+            arrow.className = 'fa-solid fa-chevron-down';
+            arrow.setAttribute('aria-hidden', 'true');
+            trigger.appendChild(arrow);
+            rows.forEach((row, index) => row.setAttribute('aria-selected', String(index === select.selectedIndex)));
+        }
+        function close(commit = false) {
+            if (list.hidden) return;
+            list.hidden = true;
+            trigger.setAttribute('aria-expanded', 'false');
+            trigger.removeAttribute('aria-activedescendant');
+            search = '';
+            if (commit && options[active] && !options[active].disabled && select.selectedIndex !== active) {
+                select.selectedIndex = active;
+                select.dispatchEvent(new Event('change', {bubbles: true}));
+            }
+        }
+        function open() {
+            if (trigger.disabled) return;
+            document.dispatchEvent(new CustomEvent('illustrated-select-open', {detail: select.id}));
+            active = select.selectedIndex >= 0 ? select.selectedIndex : options.findIndex(option => !option.disabled);
+            search = '';
+            const rect = trigger.getBoundingClientRect();
+            const below = window.innerHeight - rect.bottom - 12;
+            const above = rect.top - 12;
+            const upwards = below < 250 && above > below;
+            list.style.width = `${Math.min(rect.width, window.innerWidth - 16)}px`;
+            list.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8))}px`;
+            list.style.top = upwards ? 'auto' : `${rect.bottom + 4}px`;
+            list.style.bottom = upwards ? `${window.innerHeight - rect.top + 4}px` : 'auto';
+            list.style.maxHeight = `${Math.max(0, Math.min(320, upwards ? above : below))}px`;
+            list.hidden = false;
+            trigger.setAttribute('aria-expanded', 'true');
+            highlight();
+        }
+        trigger.addEventListener('click', () => list.hidden ? open() : close());
+        trigger.addEventListener('keydown', event => {
+            const key = event.key;
+            if (key === 'Tab') { close(true); return; }
+            if (key === 'Escape') { event.preventDefault(); close(); return; }
+            if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' '].includes(key)) {
+                event.preventDefault();
+                if (key === 'Enter' || key === ' ') { list.hidden ? open() : close(true); return; }
+                if (list.hidden) open();
+                const enabled = options.map((option, index) => option.disabled ? -1 : index).filter(index => index >= 0);
+                if (key === 'Home') active = enabled[0];
+                else if (key === 'End') active = enabled.at(-1);
+                else {
+                    const position = enabled.indexOf(active) + (key === 'ArrowDown' ? 1 : -1);
+                    active = enabled[Math.max(0, Math.min(enabled.length - 1, position))];
+                }
+                highlight();
+            } else if (key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+                event.preventDefault();
+                if (list.hidden) open();
+                const now = Date.now();
+                search = now - lastTyped > 700 ? key.toLowerCase() : search + key.toLowerCase();
+                lastTyped = now;
+                const match = options.findIndex(option => !option.disabled && option.textContent.toLowerCase().startsWith(search));
+                if (match >= 0) { active = match; highlight(); }
+            }
+        });
+        trigger.addEventListener('blur', () => close());
+        document.addEventListener('pointerdown', event => { if (!wrapper.contains(event.target) && !list.contains(event.target)) close(); });
+        document.addEventListener('illustrated-select-open', event => { if (event.detail !== select.id) close(); });
+        window.addEventListener('resize', () => close());
+        window.addEventListener('scroll', event => { if (!list.contains(event.target)) close(); }, true);
+        select.addEventListener('presentationchange', sync);
+        select.addEventListener('change', sync);
+        new MutationObserver(records => {
+            if (records.some(record => record.type !== 'attributes' || record.target !== select)) rebuild();
+            else sync();
+        }).observe(select, {subtree: true, childList: true, characterData: true, attributes: true,
+            attributeFilter: ['disabled', 'selected', 'value', 'label', 'title', 'data-icons', 'aria-invalid', 'aria-describedby']});
+        wrapper.appendChild(trigger);
+        document.body.appendChild(list);
+        select.hidden = true;
+        wrapper.classList.add('enhanced');
+        rebuild();
+    });
+}
+function initAccessibility() {
+    ['pi-model-select', 'bootstrap-ui-select-imager'].forEach(id => {
+        document.getElementById(id).addEventListener('change', () => updateSelectDescription(id));
+        updateSelectDescription(id);
+    });
+    document.querySelectorAll('[data-ui-label]').forEach(el => {
+        const label = studioText(el.dataset.uiLabel);
+        el.setAttribute('aria-label', label);
+        el.title = label;
+    });
+    document.querySelectorAll('[data-ui-text]').forEach(el => {
+        el.textContent = studioText(el.dataset.uiText);
+    });
+    initIllustratedSelects();
+    document.querySelectorAll('[data-password-label]').forEach(el => {
+        el.textContent = studioText(el.dataset.passwordLabel);
+    });
+    document.querySelectorAll('.password-toggle-icon').forEach(button => {
+        updatePasswordButton(document.getElementById(button.getAttribute('aria-controls')), button);
+    });
+    document.querySelectorAll('dialog').forEach(dialog => {
+        dialog.addEventListener('keydown', event => {
+            if (event.key !== 'Tab') return;
+            const controls = [...dialog.querySelectorAll('button, input, select, [tabindex="0"]')]
+                .filter(el => !el.disabled && el.getClientRects().length);
+            const first = controls[0];
+            const last = controls[controls.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        });
+        dialog.addEventListener('close', () => {
+            if (modalReturnFocus && modalReturnFocus.isConnected && !modalReturnFocus.disabled) {
+                modalReturnFocus.focus();
+            }
+            modalReturnFocus = null;
+        });
     });
 }
 
@@ -371,7 +649,6 @@ function initValidationListeners() {
 function openFormatModal() {
     clearInputErrors();
     let hasErrors = false;
-    let errTab = null;
 
     const imageSource = document.getElementById('image-source-select').value;
     if (imageSource === 'custom') {
@@ -379,7 +656,6 @@ function openFormatModal() {
         if (!customPath) {
             showInputError('custom-image-path', "Please browse and select a custom local OS image.");
             hasErrors = true;
-            if (!errTab) errTab = 'imager-tab';
         }
     }
 
@@ -388,14 +664,12 @@ function openFormatModal() {
     if (!driveId) {
         showInputError('drive-select', "Please select a target storage drive.");
         hasErrors = true;
-        if (!errTab) errTab = 'imager-tab';
     }
 
     const hostname = document.getElementById('hostname-input').value.trim();
     if (!hostname) {
         showInputError('hostname-input', "Please specify a Hostname.");
         hasErrors = true;
-        if (!errTab) errTab = 'imager-tab';
     }
 
     // Step 7: User Credentials check
@@ -403,11 +677,9 @@ function openFormatModal() {
     if (!username) {
         showInputError('ssh-username', "An SSH username must be specified.");
         hasErrors = true;
-        if (!errTab) errTab = 'credentials-tab';
     } else if (!/^[a-z_][a-z0-9_-]*$/.test(username)) {
         showInputError('ssh-username', "Username must start with a lowercase letter or underscore, and only contain lowercase letters, numbers, hyphens, or underscores.");
         hasErrors = true;
-        if (!errTab) errTab = 'credentials-tab';
     }
 
     const password = document.getElementById('ssh-password').value;
@@ -415,12 +687,10 @@ function openFormatModal() {
     if (password.length < 8) {
         showInputError('ssh-password', `The account password for '${username || 'kace'}' must contain at least 8 characters.`);
         hasErrors = true;
-        if (!errTab) errTab = 'credentials-tab';
     }
     if (password !== passwordConfirm) {
         showInputError('ssh-password-confirm', "User credentials passwords do not match.");
         hasErrors = true;
-        if (!errTab) errTab = 'credentials-tab';
     }
 
     // Step 8: WiFi credentials check
@@ -433,12 +703,10 @@ function openFormatModal() {
         if (!wifiSsid) {
             showInputError('wifi-ssid', "SSID is required when Wi-Fi passwords are provided.");
             hasErrors = true;
-            if (!errTab) errTab = 'credentials-tab';
         }
         if (new TextEncoder().encode(wifiSsid).length > 32) {
             showInputError('wifi-ssid', "SSID must be at most 32 UTF-8 bytes.");
             hasErrors = true;
-            if (!errTab) errTab = 'credentials-tab';
         }
         const validWpaPassword = wifiSecurity === 'open' ||
             (wifiPassword.length >= 8 && wifiPassword.length <= 63) ||
@@ -446,19 +714,17 @@ function openFormatModal() {
         if (!validWpaPassword) {
             showInputError('wifi-password', "WPA passphrases must contain 8-63 characters or 64 hexadecimal digits.");
             hasErrors = true;
-            if (!errTab) errTab = 'credentials-tab';
         }
         if (wifiSecurity !== 'open' && wifiPassword !== wifiPasswordConfirm) {
             showInputError('wifi-password-confirm', "Wi-Fi passwords do not match.");
             hasErrors = true;
-            if (!errTab) errTab = 'credentials-tab';
         }
     }
 
     if (hasErrors) {
-        if (errTab) {
-            switchTab(errTab);
-        }
+        updateInputErrorSummary();
+        const firstError = document.querySelector('.input-error');
+        if (firstError) focusInputError(firstError.id);
         return;
     }
 
@@ -486,7 +752,6 @@ function openFormatModal() {
         highRiskInput.dataset.expectedPhrase = expectedPhrase;
         highRiskPhrase.textContent = expectedPhrase;
         agreeButton.disabled = true;
-        setTimeout(() => highRiskInput.focus(), 0);
     } else {
         highRiskPanel.style.display = 'none';
         highRiskInput.value = '';
@@ -495,11 +760,11 @@ function openFormatModal() {
     }
 
     // Show step 10 modal
-    document.getElementById('format-modal').style.display = 'flex';
+    showStudioModal('format-modal', 'format-cancel-btn');
 }
 
 function closeFormatModal() {
-    document.getElementById('format-modal').style.display = 'none';
+    closeStudioModal('format-modal');
 }
 
 function updateHighRiskConfirmation() {
@@ -510,7 +775,7 @@ function updateHighRiskConfirmation() {
 }
 
 function closeSuccessModal() {
-    document.getElementById('success-modal').style.display = 'none';
+    closeStudioModal('success-modal');
 }
 
 function ejectFlashedDrive() {
@@ -773,7 +1038,7 @@ window.updateDeviceState = function (state, progress, message) {
                 ejectBtn.className = "btn btn-secondary";
                 ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
             }
-            document.getElementById('success-modal').style.display = 'flex';
+            showStudioModal('success-modal', 'success-done-btn');
 
             // Hide cancel button
             const cancelBtnDone = document.getElementById('cancel-flash-btn');
@@ -1226,7 +1491,7 @@ function handleLoginInput(data) {
 
 window.restoreSshAfterReconnect = function (result, selection, checkpoint) {
     if (selection !== powerSelection || !result || result.status !== 'success') return;
-    updateConnectionStatus(true);
+    updateConnectionStatus(true, { newSession: true });
     firmwareGeneration = result.generation;
     applyRemotePowerConfig(result.power_config, selection);
     loginState = 'DISCONNECTED';
@@ -1266,7 +1531,7 @@ function performSshLogin(username, password) {
             if (isSuccess) {
                 connectedUsername = username;
                 term.write("\x1b[1;32m[KACE Workspace] SSH connection established successfully.\x1b[0m\r\n");
-                updateConnectionStatus(true);
+                updateConnectionStatus(true, { newSession: true });
                 firmwareGeneration = Number.isInteger(res.generation) ? res.generation : null;
                 applyRemotePowerConfig(res && res.power_config ? res.power_config : {
                     status: 'error',
@@ -1324,7 +1589,7 @@ function performSshLogin(username, password) {
                 connectedUsername = username;
                 term.write("\x1b[1;32m[KACE Workspace] (DEBUG MOCK) SSH connection established.\x1b[0m\r\n");
                 term.write(`${username}@${currentDeviceName || 'kace'}:~ $ `);
-                updateConnectionStatus(true);
+                updateConnectionStatus(true, { newSession: true });
                 loginState = 'DISCONNECTED';
                 window.updateDeviceState("SSH_READY", 100, "Connected to mock node.");
             } else {
@@ -1823,11 +2088,6 @@ function completeBootstrapSuccess(message, context) {
     if (connSubtitle) {
         connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap and KACE wizard completed successfully.</span>';
     }
-    const finishBtn = document.getElementById('finish-btn');
-    if (finishBtn) {
-        finishBtn.disabled = false;
-        finishBtn.classList.add('active');
-    }
     window.updateDeviceState('BOOTSTRAPPED', 100, message || 'Bootstrap completed successfully.');
     if (window.pywebview && window.pywebview.api) {
         refreshRemotePowerConfig(context);
@@ -1853,11 +2113,6 @@ function completeBootstrapTerminal(state, message) {
         connSubtitle.style.color = isCancelled
             ? 'var(--warning-color)'
             : 'var(--danger-color)';
-    }
-    const finishBtn = document.getElementById('finish-btn');
-    if (finishBtn) {
-        finishBtn.disabled = true;
-        finishBtn.classList.remove('active');
     }
     const bootstrapBtn = document.getElementById('bootstrap-btn');
     if (bootstrapBtn) bootstrapBtn.disabled = !sshConnected || state === 'BOOTSTRAP_INTERRUPTED';
@@ -1926,8 +2181,8 @@ window.updateBootstrapDisconnected = function (workflowId, reason, expected) {
     bootstrapActive = false;
     bootstrapFailureHandled = false;
     const message = reason || (expected
-        ? 'SSH disconnected during an expected restart. Reconnect to continue verification.'
-        : 'SSH was lost unexpectedly. Reconnect to resume the saved checkpoint.');
+        ? 'SSH disconnected while restart verification was pending. Host status is unknown; reconnect to continue.'
+        : 'SSH was lost unexpectedly. Host status is unknown; reconnect to resume the saved checkpoint.');
     const label = document.getElementById('bootstrap-stage-label');
     if (label) label.textContent = `⚠ ${message}`;
     const connSubtitle = document.getElementById('connection-subtitle');
@@ -1935,8 +2190,6 @@ window.updateBootstrapDisconnected = function (workflowId, reason, expected) {
         connSubtitle.textContent = message;
         connSubtitle.style.color = 'var(--warning-color)';
     }
-    const finishBtn = document.getElementById('finish-btn');
-    if (finishBtn) finishBtn.disabled = true;
     window.updateDeviceState('BOOTSTRAP_RECOVERABLE', 0, message);
     return true;
 };
@@ -1979,12 +2232,17 @@ window.writeTerminalData = function (data, context) {
     parseBootstrapProgress(data, context);
 };
 
-function updateConnectionStatus(connected) {
-    firmwareGeneration = null;
-    kaceWorkflowViews.clear();
-    sftpRequestSequence++;
-    sftpGeneration = null;
-    clearSftpSelection();
+function updateConnectionStatus(connected, { newSession = false } = {}) {
+    // Status notifications (SSH_READY / BOOTSTRAPPING) describe the current
+    // session. Only a connection boundary invalidates its events and files.
+    const sessionChanged = !connected || !sshConnected || newSession;
+    if (sessionChanged) {
+        firmwareGeneration = null;
+        kaceWorkflowViews.clear();
+        sftpRequestSequence++;
+        sftpGeneration = null;
+        clearSftpSelection();
+    }
     sshConnected = connected;
     const bootstrapBtn = document.getElementById('bootstrap-btn');
     const disconnectBtn = document.getElementById('disconnect-btn');
@@ -2012,8 +2270,7 @@ function updateConnectionStatus(connected) {
         }
     }
 
-    // Refresh SFTP Panel status
-    refreshSftpBrowser();
+    if (sessionChanged) refreshSftpBrowser(true);
 }
 
 function renderPrinterPower(result) {
@@ -2321,124 +2578,6 @@ function startBootstrap() {
     }
 }
 
-// Synchronizes the visual state of a custom dropdown based on its hidden input's value
-function syncCustomDropdown(container) {
-    const hiddenInput = container.querySelector('input[type="hidden"]');
-    if (!hiddenInput) return;
-    const val = hiddenInput.value;
-    const options = container.querySelectorAll('.custom-option');
-    const trigger = container.querySelector('.custom-select-trigger');
-    if (!trigger) return;
-
-    let selectedOption = null;
-    options.forEach(option => {
-        if (option.getAttribute('data-value') === val) {
-            selectedOption = option;
-            option.classList.add('selected');
-        } else {
-            option.classList.remove('selected');
-        }
-    });
-
-    if (selectedOption) {
-        const optImg = selectedOption.querySelector('img');
-        const optGroup = selectedOption.querySelector('.logo-group');
-        const optTitle = selectedOption.querySelector('.option-title').textContent;
-        const optDesc = selectedOption.querySelector('.option-desc').textContent;
-
-        const triggerImg = trigger.querySelector('.trigger-icon');
-        const triggerGroup = trigger.querySelector('.logo-group');
-        const triggerTitle = trigger.querySelector('.trigger-title');
-        const triggerDesc = trigger.querySelector('.trigger-desc');
-
-        if (triggerTitle) triggerTitle.textContent = optTitle;
-        if (triggerDesc) triggerDesc.textContent = optDesc;
-
-        if (triggerImg && optImg) {
-            triggerImg.src = optImg.getAttribute('src');
-            triggerImg.style.display = 'block';
-        } else if (triggerGroup) {
-            if (optGroup) {
-                triggerGroup.innerHTML = optGroup.innerHTML;
-            } else if (optImg) {
-                triggerGroup.innerHTML = `<img src="${optImg.getAttribute('src')}">`;
-            }
-            triggerGroup.style.display = 'flex';
-        }
-    }
-}
-
-// Custom Dropdowns Initialization & Event Handling
-function initCustomDropdowns() {
-    const dropdowns = document.querySelectorAll('.custom-select-container');
-
-    dropdowns.forEach(container => {
-        const trigger = container.querySelector('.custom-select-trigger');
-        const optionsList = container.querySelector('.custom-options-list');
-        const options = container.querySelectorAll('.custom-option');
-        const hiddenInput = container.querySelector('input[type="hidden"]');
-
-        // Toggle dropdown open state
-        trigger.addEventListener('click', (e) => {
-            e.stopPropagation();
-            dropdowns.forEach(other => {
-                if (other !== container) {
-                    other.classList.remove('open');
-                }
-            });
-            container.classList.toggle('open');
-        });
-
-        // Handle selection
-        options.forEach(option => {
-            option.addEventListener('click', (e) => {
-                e.stopPropagation();
-
-                const val = option.getAttribute('data-value');
-                options.forEach(opt => opt.classList.remove('selected'));
-                option.classList.add('selected');
-
-                hiddenInput.value = val;
-
-                // Update trigger visual values
-                const optImg = option.querySelector('img');
-                const optGroup = option.querySelector('.logo-group');
-                const optTitle = option.querySelector('.option-title').textContent;
-                const optDesc = option.querySelector('.option-desc').textContent;
-
-                const triggerImg = trigger.querySelector('.trigger-icon');
-                const triggerGroup = trigger.querySelector('.logo-group');
-                const triggerTitle = trigger.querySelector('.trigger-title');
-                const triggerDesc = trigger.querySelector('.trigger-desc');
-
-                triggerTitle.textContent = optTitle;
-                triggerDesc.textContent = optDesc;
-
-                if (triggerImg && optImg) {
-                    triggerImg.src = optImg.getAttribute('src');
-                    triggerImg.style.display = 'block';
-                } else if (triggerGroup) {
-                    if (optGroup) {
-                        triggerGroup.innerHTML = optGroup.innerHTML;
-                    } else if (optImg) {
-                        triggerGroup.innerHTML = `<img src="${optImg.getAttribute('src')}">`;
-                    }
-                    triggerGroup.style.display = 'flex';
-                }
-
-                container.classList.remove('open');
-            });
-        });
-    });
-
-    // Close dropdowns if clicking outside container
-    document.addEventListener('click', () => {
-        dropdowns.forEach(container => {
-            container.classList.remove('open');
-        });
-    });
-}
-
 // Light / Dark Theme Toggler
 function toggleTheme() {
     const isCurrentlyLight = document.body.classList.contains('light-mode');
@@ -2463,8 +2602,8 @@ const PERSISTED_FIELDS = [
     { id: 'os-arch-select', type: 'value' },
     { id: 'image-source-select', type: 'value' },
     { id: 'custom-image-type', type: 'value' },
-    { id: 'pi-model-select', type: 'hidden' },
-    { id: 'bootstrap-ui-select-imager', type: 'hidden' },
+    { id: 'pi-model-select', type: 'value' },
+    { id: 'bootstrap-ui-select-imager', type: 'value' },
     { id: 'crowsnest-enable', type: 'checked' },
     { id: 'ssh-username', type: 'value' },
     { id: 'wifi-security-select', type: 'value' },
@@ -2511,7 +2650,13 @@ function restoreFormState() {
                 if (field.type === 'checked') {
                     el.checked = state[field.id];
                 } else {
-                    el.value = state[field.id];
+                    const value = state[field.id];
+                    if (el.tagName === 'SELECT' && !Array.from(el.options).some(option => option.value === value)) {
+                        if (field.id !== 'timezone-select' || typeof value !== 'string' || !value) return;
+                        el.add(new Option(value, value));
+                    }
+                    el.value = value;
+                    if (el.tagName === 'SELECT') el.dispatchEvent(new Event('presentationchange'));
                 }
             }
         });
@@ -2521,11 +2666,7 @@ function restoreFormState() {
         if (imageSource) toggleImageSource(imageSource.value);
         toggleWifiSecurity();
         togglePowerRelaySettings();
-
-        // Sync custom dropdowns visual states
-        document.querySelectorAll('.custom-select-container').forEach(container => {
-            syncCustomDropdown(container);
-        });
+        ['pi-model-select', 'bootstrap-ui-select-imager'].forEach(updateSelectDescription);
 
     } catch (e) {
         console.warn('Failed to restore form state:', e);
@@ -2543,22 +2684,7 @@ function initFormPersistence() {
         }
     });
 
-    // Also save when custom dropdown hidden inputs change (via MutationObserver)
-    ['pi-model-select', 'bootstrap-ui-select-imager'].forEach(hiddenId => {
-        const hiddenEl = document.getElementById(hiddenId);
-        if (hiddenEl) {
-            const observer = new MutationObserver(saveFormState);
-            observer.observe(hiddenEl, { attributes: true, attributeFilter: ['value'] });
-            // Custom dropdowns set .value via JS, so also listen via a polling fallback
-            let lastVal = hiddenEl.value;
-            setInterval(() => {
-                if (hiddenEl.value !== lastVal) {
-                    lastVal = hiddenEl.value;
-                    saveFormState();
-                }
-            }, 500);
-        }
-    });
+
 }
 
 // ── Timezone Auto-Detection ──────────────────────────────────────────────
@@ -2569,7 +2695,7 @@ function autoDetectTimezone() {
         const raw = localStorage.getItem(FORM_PERSIST_KEY);
         if (raw) {
             const state = JSON.parse(raw);
-            if (state['timezone-select']) return; // User has a saved preference
+            if (state['timezone-select'] && document.getElementById('timezone-select').value) return; // Restored above.
         }
     } catch (e) { }
 
@@ -2589,6 +2715,7 @@ function autoDetectTimezone() {
                 } else {
                     tzSelect.value = detected;
                 }
+                tzSelect.dispatchEvent(new Event('presentationchange'));
             }
         }
     } catch (e) {
@@ -2682,16 +2809,19 @@ function clearSftpSelection() {
     }
     document.querySelectorAll('.sftp-item.file').forEach(el => {
         el.classList.remove('selected');
+        el.setAttribute('aria-pressed', 'false');
     });
 }
 
-window.refreshSftpBrowser = function () {
+window.refreshSftpBrowser = function (force = false) {
     const panel = document.getElementById('sftp-browser-panel');
     if (!panel) return;
 
-    if (sshConnected && activeTab === 'terminal-tab') {
+    panel.classList.toggle('is-visible', sshConnected);
+    if (sshConnected) {
+        const wasVisible = panel.style.display === 'flex';
         panel.style.display = 'flex';
-        loadSftpDirectory(sftpCurrentPath);
+        if (force || !wasVisible) loadSftpDirectory(sftpCurrentPath);
     } else {
         sftpRequestSequence++;
         sftpGeneration = null;
@@ -2700,16 +2830,19 @@ window.refreshSftpBrowser = function () {
         sftpCurrentPath = "/home/kace";
         const listContainer = document.getElementById('sftp-file-list');
         if (listContainer) listContainer.innerHTML = '';
+        setSftpStatus('', false);
     }
 };
 
 window.loadSftpDirectory = function (path) {
+    const returnListFocus = Boolean(document.activeElement?.closest('.sftp-file-list'));
     const request = ++sftpRequestSequence;
     sftpGeneration = null;
     clearSftpSelection();
     const pendingList = document.getElementById('sftp-file-list');
     if (pendingList) pendingList.innerHTML = '';
     sftpCurrentPath = path;
+    setSftpStatus(`${studioText('loadingDirectory')}: ${path}`, true);
     const pathInput = document.getElementById('sftp-current-path');
     if (pathInput) pathInput.value = sftpCurrentPath;
 
@@ -2729,18 +2862,15 @@ window.loadSftpDirectory = function (path) {
             sftpGeneration = data.generation;
             if (pathInput) pathInput.value = data.path;
             renderSftpList(data.items);
+            if (returnListFocus && (document.activeElement === document.body || document.activeElement?.closest('.sftp-file-list'))) {
+                (document.querySelector('.sftp-item') || document.getElementById('sftp-refresh-btn')).focus();
+            }
+            setSftpStatus(`${data.path}: ${data.items.length} ${studioText('items')}`, false);
         })
         .catch(err => {
             if (request !== sftpRequestSequence || !sshConnected) return;
             console.error("Failed to load SFTP directory:", err);
-            const listContainer = document.getElementById('sftp-file-list');
-            if (listContainer) {
-                listContainer.innerHTML = `
-                    <div class="list-empty">
-                        <i class="fa-solid fa-triangle-exclamation"></i> Error loading directory.
-                    </div>
-                `;
-            }
+            setSftpStatus(`${studioText('directoryError')}: ${path}. ${studioText('retryDirectory')}`, false);
         });
 };
 
@@ -2766,7 +2896,10 @@ function renderSftpList(items) {
     });
 
     items.forEach(item => {
-        const itemEl = document.createElement('div');
+        const itemEl = document.createElement('button');
+        itemEl.type = 'button';
+        itemEl.title = item.name;
+        if (!item.is_dir) itemEl.setAttribute('aria-pressed', String(sftpSelectedFile === item.name));
         itemEl.className = `sftp-item ${item.is_dir ? 'folder' : 'file'}`;
 
         if (!item.is_dir && sftpSelectedFile === item.name) {
@@ -2785,6 +2918,7 @@ function renderSftpList(items) {
         leftDiv.className = 'sftp-item-left';
         const icon = document.createElement('i');
         icon.className = iconClass;
+        icon.setAttribute('aria-hidden', 'true');
         const nameSpan = document.createElement('span');
         nameSpan.className = 'sftp-item-name';
         nameSpan.textContent = item.name; // safe — textContent never executes markup
@@ -2803,8 +2937,10 @@ function renderSftpList(items) {
                 } else {
                     document.querySelectorAll('.sftp-item.file').forEach(el => {
                         el.classList.remove('selected');
+                        el.setAttribute('aria-pressed', 'false');
                     });
                     itemEl.classList.add('selected');
+                    itemEl.setAttribute('aria-pressed', 'true');
                     sftpSelectedFile = item.name;
                     const dlBtn = document.getElementById('sftp-download-btn');
                     if (dlBtn) dlBtn.disabled = false;
@@ -2824,37 +2960,37 @@ window.downloadSelectedSftpFile = function () {
 
 window.downloadSftpFile = function (fileName) {
     if (sftpGeneration === null || !sshConnected) return;
+    const generation = sftpGeneration;
+    const request = sftpRequestSequence;
     const fullPath = sftpCurrentPath === "/" ? "/" + fileName : sftpCurrentPath + "/" + fileName;
-    console.log(`SFTP Native Download requested for file: ${fullPath}`);
-
+    const current = () => sshConnected && request === sftpRequestSequence && generation === sftpGeneration;
     const dlBtn = document.getElementById('sftp-download-btn');
     if (dlBtn) dlBtn.disabled = true;
-
+    setSftpStatus(`${studioText('downloadingFile')}: ${fileName}`, false);
     if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.download_file(fullPath, sftpGeneration)
+        window.pywebview.api.download_file(fullPath, generation)
             .then(success => {
-                if (success) {
-                    console.log(`Successfully downloaded ${fileName} natively.`);
-                } else {
-                    console.log(`SFTP download cancelled or failed for ${fileName}.`);
-                }
+                if (!current()) return;
+                setSftpStatus(`${studioText(success ? 'fileDownloaded' : 'downloadCancelled')}: ${fileName}`, false);
             })
-            .catch(err => {
-                console.error("Native SFTP Download error:", err);
-                alert(`Error downloading file: ${err.message || err}`);
+            .catch(() => {
+                if (current()) setSftpStatus(`${studioText('downloadError')}: ${fileName}`, false);
             })
             .finally(() => {
-                if (dlBtn && sftpSelectedFile) {
-                    dlBtn.disabled = false;
-                }
+                if (current() && dlBtn && sftpSelectedFile) dlBtn.disabled = false;
             });
     } else {
-        console.warn("Pywebview API not available for native download.");
-        if (dlBtn && sftpSelectedFile) {
-            dlBtn.disabled = false;
-        }
+        setSftpStatus(studioText('downloadUnavailable'), false);
+        if (dlBtn && sftpSelectedFile) dlBtn.disabled = false;
     }
 };
+
+function setSftpStatus(message, busy) {
+    const status = document.getElementById('sftp-status');
+    if (status) status.textContent = message;
+    const list = document.getElementById('sftp-file-list');
+    if (list) list.setAttribute('aria-busy', String(busy));
+}
 
 window.navigateSftpInto = function (folderName) {
     clearSftpSelection();
@@ -2916,10 +3052,6 @@ function handleTerminalPaste(text) {
     } else if (!sshConnected) {
         term.write(text);
     }
-}
-
-function finishSetup() {
-    window.location.reload();
 }
 
 
@@ -3022,9 +3154,9 @@ function startFirstBootDiscovery() {
 
 
 const STUDIO_INSTALLATION_TEXT = {
-    English: {powerPending: 'Pending setup', verifying: 'Verifying image...', writing: 'Writing...', search: 'First-boot search', searchDone: 'First-boot search finished. Manual scan remains available.', stop: 'Stop search', download: 'Download firmware'},
-    'Español': {powerPending: 'Pendiente de configuración', verifying: 'Verificando imagen...', writing: 'Grabando...', search: 'Buscar durante el primer arranque', searchDone: 'Terminó la búsqueda automática. Podés seguir buscando manualmente.', stop: 'Detener búsqueda', download: 'Descargar firmware'},
-    'Português': {powerPending: 'Configuração pendente', verifying: 'Verificando imagem...', writing: 'Gravando...', search: 'Buscar durante a primeira inicialização', searchDone: 'A busca automática terminou. A busca manual continua disponível.', stop: 'Parar busca', download: 'Baixar firmware'},
+    English: {"show": "Show", "hide": "Hide", "architecture": "Architecture", "refreshDrives": "Refresh drives", "theme": "Toggle Light/Dark Mode", "directory": "Remote directory", "up": "Go up a directory", "refreshDirectory": "Refresh directory", "downloadFile": "Download selected file", "correctErrors": "Correct these fields before continuing:", "loadingDirectory": "Loading directory", "items": "items", "directoryError": "Could not load directory", "retryDirectory": "Use Refresh directory to retry", "downloadingFile": "Downloading", "fileDownloaded": "Downloaded", "downloadCancelled": "Download cancelled or failed", "downloadError": "Download failed", "downloadUnavailable": "Download requires the desktop connection", "ssh-password": "Password", "ssh-password-confirm": "Confirm password", "wifi-password": "Wi-Fi password", "wifi-password-confirm": "Confirm Wi-Fi password", powerPending: 'Pending setup', verifying: 'Verifying image...', writing: 'Writing...', search: 'First-boot search', searchDone: 'First-boot search finished. Manual scan remains available.', stop: 'Stop search', download: 'Download firmware'},
+    'Español': {"show": "Mostrar", "hide": "Ocultar", "architecture": "Arquitectura", "refreshDrives": "Actualizar unidades", "theme": "Cambiar tema claro/oscuro", "directory": "Directorio remoto", "up": "Subir un directorio", "refreshDirectory": "Actualizar directorio", "downloadFile": "Descargar archivo seleccionado", "correctErrors": "Corregí estos campos antes de continuar:", "loadingDirectory": "Cargando directorio", "items": "elementos", "directoryError": "No se pudo cargar el directorio", "retryDirectory": "Usá Actualizar directorio para reintentar", "downloadingFile": "Descargando", "fileDownloaded": "Descargado", "downloadCancelled": "Descarga cancelada o fallida", "downloadError": "Falló la descarga", "downloadUnavailable": "La descarga requiere la conexión de escritorio", "ssh-password": "Contraseña", "ssh-password-confirm": "Confirmar contraseña", "wifi-password": "Contraseña Wi-Fi", "wifi-password-confirm": "Confirmar contraseña Wi-Fi", powerPending: 'Pendiente de configuración', verifying: 'Verificando imagen...', writing: 'Grabando...', search: 'Buscar durante el primer arranque', searchDone: 'Terminó la búsqueda automática. Podés seguir buscando manualmente.', stop: 'Detener búsqueda', download: 'Descargar firmware'},
+    'Português': {"show": "Mostrar", "hide": "Ocultar", "architecture": "Arquitetura", "refreshDrives": "Atualizar unidades", "theme": "Alternar tema claro/escuro", "directory": "Diretório remoto", "up": "Subir um diretório", "refreshDirectory": "Atualizar diretório", "downloadFile": "Baixar arquivo selecionado", "correctErrors": "Corrija estes campos antes de continuar:", "loadingDirectory": "Carregando diretório", "items": "itens", "directoryError": "Não foi possível carregar o diretório", "retryDirectory": "Use Atualizar diretório para tentar novamente", "downloadingFile": "Baixando", "fileDownloaded": "Baixado", "downloadCancelled": "Download cancelado ou falhou", "downloadError": "Falha no download", "downloadUnavailable": "O download requer a conexão do aplicativo", "ssh-password": "Senha", "ssh-password-confirm": "Confirmar senha", "wifi-password": "Senha Wi-Fi", "wifi-password-confirm": "Confirmar senha Wi-Fi", powerPending: 'Configuração pendente', verifying: 'Verificando imagem...', writing: 'Gravando...', search: 'Buscar durante a primeira inicialização', searchDone: 'A busca automática terminou. A busca manual continua disponível.', stop: 'Parar busca', download: 'Baixar firmware'},
 };
 function studioLanguage() {
     const locale = typeof navigator === 'undefined' ? 'en' : navigator.language;

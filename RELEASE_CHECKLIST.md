@@ -1,8 +1,42 @@
 # KACE Studio release checklist
 
-KACE Studio is currently pre-1.0. This checklist distinguishes the `0.5.0-rc.1`
-controlled test candidate from a signed, independently reproduced release.
-Following it does not itself publish, tag, sign, or release anything.
+KACE Studio is currently pre-1.0. The current product decision (2026-10-01)
+permits distribution of the `0.5.0-rc.1` candidate **without an Authenticode
+signature**, with independently reproduced build evidence. Signing is deferred
+for this unsigned distribution, not reported as passed.
+Following this checklist does not itself publish, tag, sign, or release anything.
+
+## Current unsigned distribution policy
+
+The unsigned distribution must pass source tests, immutable input verification,
+package/resource and PE metadata checks, packaged WebView2 smoke, same-builder
+reproduction and byte-identical reproduction on an independent Windows runner.
+Use the artifact from the successful CI run on the exact published `main` commit.
+
+Retain and distribute together:
+
+- `KACE-studio.exe`, explicitly identified as **unsigned / no Authenticode**.
+- Its SHA-256, verified against the downloaded executable.
+- `KACE-studio.release.json`, including the exact source commit, pinned KACE
+  identities, toolchain and unsigned signature status.
+- `KACE-studio.independent-build.json`, bound to that same source commit and
+  executable SHA-256; its hash must match the release manifest.
+- CI run/job references and the separately published checksum.
+
+Keep `artifact.authenticode.status` as `NotSigned` and `verified` as false.
+Do not relabel an unsigned artifact or its manifest as signed. An EXE from a PR
+merge-test commit or an older build cannot replace the exact-main artifact.
+
+The `Signed Release Gates` job, `release_candidate=true` dispatch mode,
+certificate/timestamp checks and `verify-release-gates` command remain unchanged
+and mandatory for a future **signed** release. They must still fail closed when
+signing inputs are missing or invalid. Their lack of signing evidence does not
+block the currently approved **unsigned** distribution. Do not use the signed
+verifier as an unsigned approval or bypass it by modifying its checks.
+
+Hardware qualification, version/tag selection and publication remain separate
+decisions. The unsigned policy does not claim physical qualification or authorize
+a tag or release on its own.
 
 ## Controlled test candidate
 
@@ -110,6 +144,16 @@ Perform physical tests only in a controlled manual qualification environment:
 - [ ] Run the complete bootstrap and confirm Studio does not report success when KACE is absent.
 - [ ] Launch KACE on the Pi and generate/deploy a representative printer configuration.
 
+Record native Windows eject confirmation separately from UI state; inspect
+automatic discovery, pending power before bootstrap, progress in the same SSH
+session and session-bound SFTP. An old EXE with the same version label is not the
+same candidate: record its exact manifest and checksum.
+
+Follow KACE's [hardware qualification guide](https://github.com/3D-uy/KACE/blob/main/docs/HARDWARE_TESTING.md)
+for loaded configuration, firmware identity, unchanged retries, safe interruption
+and physical commissioning. On the Pi, local Moonraker uses `127.0.0.1:7125`;
+a LAN address retains the remote-publication boundary.
+
 Automated CI must never be pointed at physical disks or printer controllers.
 
 ## 6. Remote CI and artifact evidence
@@ -123,14 +167,15 @@ Automated CI must never be pointed at physical disks or printer controllers.
 - [ ] The CI logs show the expected immutable bootstrap ref and checksum.
 - [ ] The downloaded CI artifact has its external `KACE-studio.release.json` manifest and matching SHA-256.
 - [ ] Packaged-bootstrap verification matches the CI-fetched input exactly.
-- [ ] A manually dispatched `release_candidate` run fails closed without all signing secrets, verifies the expected signer certificate SHA-256, requires a trusted timestamp, and passes `verify-release-gates` before exposing signed evidence.
+- [ ] For a signed release only, a manually dispatched `release_candidate` run fails closed without all signing secrets, verifies the expected signer certificate SHA-256, requires a trusted timestamp, and passes `verify-release-gates` before exposing signed evidence.
 
 ## 7. Publication
 
 - [ ] Publish KACE first and KACE Studio second.
 - [ ] Use immutable tags and record their resolved commits.
 - [ ] Publish checksums through a channel separate from the artifact download.
-- [ ] Publish only the signed manifest and artifact produced by the release-candidate gate; never promote the ordinary unsigned CI artifact.
+- [ ] For the currently approved unsigned distribution, publish only the exact-main independently reproduced unsigned artifact and its matching manifest, independent attestation and SHA-256. Clearly state that it has no Authenticode signature.
+- [ ] For a future signed release, publish only the signed manifest and artifact produced by the release-candidate gate. An ordinary unsigned CI artifact never satisfies the signed-release requirements.
 - [ ] Document supported environments, hardware qualification, known limitations, and rollback.
 - [ ] Confirm the same-environment double build matches, and do not call the artifact independently reproducible until a second controlled builder also matches; the manifest records these as different claims.
 

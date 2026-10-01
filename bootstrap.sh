@@ -105,7 +105,7 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="dfeae2e1a703c1b7094ab960659d4aa7093c5bf9"
+KACE_INSTALL_REF="b7988b57b5fc80fbc55c3d1326768289dbccb179"
 KACE_INSTALL_SHA256="de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
@@ -844,11 +844,36 @@ wait_for_moonraker_api() {
     local base_url="$1"
     local timeout_seconds="$2"
     local deadline=$((SECONDS + timeout_seconds))
+    local response=""
+    MOONRAKER_SERVER_INFO=""
 
     while (( SECONDS <= deadline )); do
-        if curl --fail --silent --max-time 5 "$base_url/server/info" > /dev/null; then
-            log_ok "Moonraker API is ready."
-            return 0
+        if response=$(curl --fail --silent --max-time 5 "$base_url/server/info"); then
+            if MOONRAKER_INFO_RESPONSE="$response" python3 - <<'PY'
+import json
+import os
+
+try:
+    result = json.loads(os.environ["MOONRAKER_INFO_RESPONSE"])["result"]
+    components = result["components"]
+    failed = result["failed_components"]
+    valid = (
+        isinstance(result["moonraker_version"], str)
+        and bool(result["moonraker_version"].strip())
+        and isinstance(components, list)
+        and all(isinstance(name, str) and name for name in components)
+        and isinstance(failed, list)
+        and not failed
+    )
+except (KeyError, TypeError, ValueError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PY
+            then
+                MOONRAKER_SERVER_INFO="$response"
+                log_ok "Moonraker API is ready."
+                return 0
+            fi
         fi
         sleep 1
     done
@@ -899,7 +924,23 @@ verify_power_api_configuration() {
     local base_url="$1"
     local state_path="${POWER_CONFIG_PATH:-${PRINTER_HOME:+$PRINTER_HOME/.config/kace/power.json}}"
     local response=""
-    if ! response=$(curl --fail --silent --max-time 5 \
+    local api_timeout
+    api_timeout=$(_positive_timeout_or_default "${KACE_POWER_API_TIMEOUT:-}" 90)
+    # Service activity alone is not HTTP readiness. This check also runs when
+    # no relay was selected, and after removing the final managed power device.
+    wait_for_moonraker_api "$base_url" "$api_timeout" || return 1
+    if [ "$POWER_RELAY" != "true" ] && MOONRAKER_INFO_RESPONSE="$MOONRAKER_SERVER_INFO" python3 - <<'PY'
+import json
+import os
+
+components = json.loads(os.environ["MOONRAKER_INFO_RESPONSE"])["result"]["components"]
+raise SystemExit(0 if "power" not in components else 1)
+PY
+    then
+        # An absent, non-failed optional component has no active devices. Do
+        # not treat a failed HTTP request (including 404) as that evidence.
+        response='{"result":{"devices":[]}}'
+    elif ! response=$(curl --fail --silent --max-time 5 \
         "$base_url/machine/device_power/devices"); then
         log_err "Moonraker Power API could not be queried after reconciliation."
         return 1
@@ -927,6 +968,11 @@ result = payload.get("result", payload)
 devices = result.get("devices") if isinstance(result, dict) else None
 if not isinstance(devices, list):
     raise RuntimeError("Moonraker returned an invalid power device list")
+if any(not isinstance(item, dict)
+       or not isinstance(item.get("device"), str) or not item["device"]
+       or not isinstance(item.get("type"), str) or not item["type"]
+       for item in devices):
+    raise RuntimeError("Moonraker returned an invalid power device entry")
 if enabled:
     matches = [item for item in devices if isinstance(item, dict) and item.get("device") == desired_device]
     if len(matches) != 1 or str(matches[0].get("type", "")).casefold() != "gpio":
@@ -1375,6 +1421,10 @@ fi
 # Truncate once, then keep every writer in append mode. Machine events can be
 # written directly to the log without racing tee's independent file offset.
 : > "$LOG_FILE"
+# Preserve terminal color capability before tee turns the CLI output into a pipe.
+if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
+    export KACE_COLOR=1
+fi
 exec > >(tee -a -i "$LOG_FILE") 2>&1
 
 echo -e "\n${C_CYAN}${C_BOLD}"
@@ -2055,6 +2105,12 @@ if [ "$PREBAKED" = "false" ] || [ "$DASHBOARD" != "mainsail" ]; then
 fi
 log_ok "Services restarted."
 
+if ! verify_power_api_configuration "http://127.0.0.1:7125"; then
+    echo "=== KACE_BOOTSTRAP_ERROR: GPIO_RELAY_API_VERIFY ==="
+    log_err "Power reconciliation was not persisted because Moonraker verification failed."
+    exit 1
+fi
+
 if [ "$POWER_RELAY" = "true" ]; then
     if ! prepare_power_relay_for_kace; then
         echo "=== KACE_BOOTSTRAP_ERROR: POWER_ON ==="
@@ -2063,11 +2119,6 @@ if [ "$POWER_RELAY" = "true" ]; then
     fi
 fi
 
-if ! verify_power_api_configuration "http://127.0.0.1:7125"; then
-    echo "=== KACE_BOOTSTRAP_ERROR: GPIO_RELAY_API_VERIFY ==="
-    log_err "Power reconciliation was not persisted because Moonraker verification failed."
-    exit 1
-fi
 persist_power_controller_config
 commit_power_reconciliation
 

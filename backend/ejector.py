@@ -12,14 +12,15 @@ from backend.kace_writer import _query_disk_identity
 
 EJECT_IDENTITY_FIELDS = (
     "number",
-    "friendly_name",
-    "size_bytes",
     "bus_type",
     "is_system",
     "is_boot",
     "serial_number",
     "path",
 )
+# Windows can revise the display name and reported usable size while it mounts
+# the newly written image. They are re-read immediately before ejecting but do
+# not identify the physical device across a flash. The serial and PnP path do.
 
 
 def _status_directory() -> str:
@@ -60,16 +61,26 @@ def _powershell_eject_command(disk_number: int, expected_identity: dict | None =
 $ErrorActionPreference = 'Stop'
 $diskNumber = {int(disk_number)}
 $expected = '{expected_json}' | ConvertFrom-Json
-function Assert-SelectedDisk($disk) {{
+function Assert-SelectedDisk($disk, [switch]$AfterRemoval) {{
     if (-not $disk -or $disk.IsSystem -or $disk.IsBoot) {{ throw 'Unsafe or absent disk' }}
     if ($expected) {{
-        # Match EJECT_IDENTITY_FIELDS: UniqueId can change with image contents.
-        if ($disk.Number -ne $expected.number -or
-            ([string]$disk.FriendlyName).Trim() -ne $expected.friendly_name -or
-            ([string]$disk.SerialNumber).Trim() -ne $expected.serial_number -or
-            ([string]$disk.Path).Trim() -ne $expected.path -or
-            [long]$disk.Size -ne [long]$expected.size_bytes -or
-            [string]$disk.BusType -ne $expected.bus_type) {{ throw 'Disk identity changed during eject' }}
+        # An ejected card may leave its reader enumerated, offline and empty.
+        # Only that post-removal state may differ in size; hardware must match.
+        $checks = [ordered]@{{
+            number = $disk.Number
+            friendly_name = ([string]$disk.FriendlyName).Trim()
+            serial_number = ([string]$disk.SerialNumber).Trim()
+            path = ([string]$disk.Path).Trim()
+            size_bytes = [long]$disk.Size
+            bus_type = [string]$disk.BusType
+        }}
+        foreach ($field in $checks.Keys) {{
+            if ($field -eq 'size_bytes' -and $AfterRemoval -and
+                $disk.IsOffline -and [long]$disk.Size -eq 0) {{ continue }}
+            if ($checks[$field] -ne $expected.$field) {{
+                throw "Disk identity changed during eject: $field (expected '$($expected.$field)', observed '$($checks[$field])', after removal: $AfterRemoval)"
+            }}
+        }}
     }}
 }}
 $result = [ordered]@{{
@@ -153,7 +164,7 @@ public static class KaceEject {{
                 $result.message = 'The device was ejected and is safe to remove.'
                 break
             }}
-            Assert-SelectedDisk $current
+            Assert-SelectedDisk $current -AfterRemoval
             if ($current.IsOffline -and @(Get-MountedLetters $diskNumber).Count -eq 0) {{
                 $result.success = $true
                 $result.method = 'unmounted'
@@ -174,7 +185,7 @@ public static class KaceEject {{
             $disk | Set-Disk -IsOffline $true -ErrorAction Stop
             Start-Sleep -Milliseconds 500
             $current = Get-Disk -ErrorAction Stop | Where-Object {{ $_.Number -eq $diskNumber }}
-            if ($current) {{ Assert-SelectedDisk $current }}
+            if ($current) {{ Assert-SelectedDisk $current -AfterRemoval }}
             if ($current -and -not $current.IsOffline) {{
                 throw 'Windows did not leave the disk offline.'
             }}

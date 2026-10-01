@@ -158,7 +158,11 @@ def test_windows_ci_fails_closed_on_native_command_errors():
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert workflow.count("$PSNativeCommandUseErrorActionPreference = $true") >= 5
     assert "cat pytest_run.log" not in workflow
-    assert "python -m pytest -v --junitxml=pytest-results.xml" in workflow
+    assert 'python -m pytest -v --junitxml="${{ runner.temp }}/studio-ci/pytest-results.xml"' in workflow
+    source = workflow.split("  test:", 1)[1].split("  build-windows:", 1)[0]
+    assert "continue-on-error:" not in source
+    assert 'path: ${{ runner.temp }}/studio-ci/' in source
+    assert "if-no-files-found: error" in source
 
 
 def test_reproducible_build_excludes_host_windows_runtime_and_normalizes_text():

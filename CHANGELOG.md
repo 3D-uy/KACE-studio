@@ -1,4 +1,10 @@
-# Changelog
+# Current candidate notes
+
+Only notes for the declared candidate remain here for release preparation. Older release notes and audit narratives are archived locally;
+Git history retains previously committed releases. These notes do not attest
+uncommitted changes or current CI, packaging or physical qualification.
+
+[README](README.md) covers current usage; [ROADMAP](ROADMAP.md) covers pending work.
 
 ## [0.5.0-rc.1] — 2026-09-17
 
@@ -23,16 +29,3 @@ Physical qualification and signed stable distribution remain separate gates.
 - Retry transient release-contract download failures at most three times, always
   checking fresh bytes; checksum/size mismatches and permanent HTTP errors remain
   terminal. Make simulated Windows tests portable to standalone Linux checkouts.
-
-### Documentation
-- Add platform/firmware badges, a current capability table, immutable release
-  instructions and the controlled hardware qualification path.
-- Reorganize the README around the guided desktop journey, supported Pi/image
-  matrices, concise safety guidance and direct KACE ecosystem navigation.
-- Separate unsigned local test-candidate evidence from signed, independently
-  reproduced release evidence. Each executable carries its own external manifest.
-
-## Earlier development
-
-Earlier 0.5.0-dev work is recorded in Git history. Existing binaries and manifests
-identify their original commits and do not attest this release candidate.

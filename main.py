@@ -1254,23 +1254,19 @@ class Api:
                     "VERIFYING_CONFIG",
                 }
                 expected = self._last_kace_workflow_state in expected_disconnect_states
+                disconnect_message = (
+                    f"SSH disconnected during KACE phase {self._last_kace_workflow_state or 'unknown'}; "
+                    "host status is unknown. Reconnect to resume verification."
+                )
                 suspended = self._suspend_bootstrap_for_ssh_loss(
-                    (
-                        "SSH disconnected during an expected restart; reconnect to continue verification."
-                        if expected else
-                        "SSH connection was lost unexpectedly; the remote checkpoint can be resumed after reconnecting."
-                    ),
+                    disconnect_message,
                     expected=expected,
                 )
                 if suspended:
                     self.set_device_state(
                         "BOOTSTRAP_RECOVERABLE",
                         0,
-                        (
-                            "Expected restart disconnected SSH; reconnect to continue verification."
-                            if expected else
-                            "Unexpected SSH loss; reconnect to resume the saved workflow."
-                        ),
+                        disconnect_message,
                     )
                 else:
                     # Stale callbacks should not clear the status
