@@ -15,7 +15,7 @@ Existen imagen guiada, provisión del primer arranque, Discovery, SSH/SFTP, prog
 | 1 · Validación de interfaz | Verificar selectores/iconos de Imager, teclado y foco, credenciales, SFTP persistente y recuperación tanto desde código como en WebView2 nativo. | [Desarrollo (EN)](../../docs/DEVELOPMENT.md) |
 | 2 · Evidencia de código y paquete | Conciliar la matriz soportada de SO/Python; validar después bootstrap de código/empaquetado, assets web exactos y smoke del renderer empaquetado. | [Checklist (EN)](../../RELEASE_CHECKLIST.md) |
 | 3 · Calificación controlada | Probar identidad real del destino, elevación, lectura de verificación, expulsión, primer arranque, SSH/SFTP y finalización KACE bajo control del operador. | [Provisión (EN)](../../docs/IMAGE_PROVISIONING.md) |
-| 4 · Distribución y mantenimiento | Resolver bloqueos de identidad de release; obtener artefactos firmados y reproducidos independientemente antes de afirmar esas propiedades. Mantener paridad de idiomas y evidencia de regresión. | [Checklist (EN)](../../RELEASE_CHECKLIST.md) |
+| 4 · Distribución y mantenimiento | Distribuir el candidato actual sin Authenticode, conservando SHA-256, manifiesto de release, atestación del rebuild independiente y commit exacto de origen. Diferir la firma a una release firmada futura, preservando su gate. Mantener paridad de idiomas y evidencia de regresión. | [Checklist (EN)](../../RELEASE_CHECKLIST.md) |
 
 ## Límites de alcance
 

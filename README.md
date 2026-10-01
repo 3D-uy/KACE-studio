@@ -8,6 +8,8 @@ KACE Studio is the Windows desktop workspace for preparing a Klipper Raspberry P
 
 **Controlled test candidate.** [release-contract.json](release-contract.json) owns version and build inputs; [CHANGELOG](CHANGELOG.md) records current candidate notes. Source changes, packaged validation, physical qualification and signed publication are separate states. An old EXE does not contain current source changes.
 
+**Unsigned distribution.** The current product decision is to distribute KACE Studio without an Authenticode signature. Every distributed EXE must retain its SHA-256, release manifest, independent rebuild attestation and exact source commit. Signing remains available as a separate future gate; its absence does not block this unsigned distribution. See the [release checklist](RELEASE_CHECKLIST.md).
+
 ## Quick start
 
 Use Windows 10/11 with Microsoft Edge WebView2 Runtime. Source development targets Python 3.11/3.12; packaged builds require the exact toolchain in the release contract. The writer requests elevation for the chosen disk operation.

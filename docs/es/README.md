@@ -8,6 +8,8 @@ KACE Studio es el escritorio Windows para preparar una Raspberry Pi con Klipper:
 
 **Candidato de prueba controlada.** [release-contract.json](../../release-contract.json) define versión e insumos de compilación; [CHANGELOG](../../CHANGELOG.md) describe el candidato actual. Cambios de código, validación del paquete, calificación física y publicación firmada son estados separados. Un EXE anterior no incluye los cambios actuales del código.
 
+**Distribución sin firma.** Por decisión de producto, KACE Studio se distribuirá por ahora sin firma Authenticode. Cada EXE distribuido debe conservar su SHA-256, manifiesto de release, atestación del rebuild independiente y commit exacto de origen. La firma permanece como gate separado para uso futuro; su ausencia no bloquea esta distribución sin firma. Consulta el [checklist de release (EN)](../../RELEASE_CHECKLIST.md).
+
 ## Inicio rápido
 
 Usa Windows 10/11 con Microsoft Edge WebView2 Runtime. El desarrollo desde código contempla Python 3.11/3.12; los paquetes requieren el toolchain exacto del contrato de release. El writer solicita elevación para la operación de disco seleccionada.

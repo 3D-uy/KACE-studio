@@ -15,7 +15,7 @@ Guided imaging, first-boot provisioning, discovery, SSH/SFTP, bootstrap progress
 | 1 · Interface validation | Verify Imager selectors/icons, keyboard and focus, credentials, persistent SFTP and recovery states in source and native WebView2. | [Development](docs/DEVELOPMENT.md) |
 | 2 · Source and package evidence | Reconcile the supported OS/Python test matrix; later validate source/bundled bootstrap, exact web assets and packaged renderer smoke. | [Release checklist](RELEASE_CHECKLIST.md) |
 | 3 · Controlled qualification | Exercise real target identity, elevation, readback, eject, first boot, SSH/SFTP and KACE completion under operator control. | [Provisioning](docs/IMAGE_PROVISIONING.md) |
-| 4 · Distribution and maintenance | Resolve release identity blockers; obtain signed and independently reproduced artifacts before claiming those properties. Maintain language parity and regression evidence. | [Release checklist](RELEASE_CHECKLIST.md) |
+| 4 · Distribution and maintenance | Distribute the current candidate without Authenticode, retaining its SHA-256, release manifest, independent rebuild attestation and exact source commit. Defer signing to a future signed release while preserving its gate. Maintain language parity and regression evidence. | [Release checklist](RELEASE_CHECKLIST.md) |
 
 ## Scope boundaries
 
