@@ -262,7 +262,77 @@ def test_frontend_rejects_bootstrap_error_marker():
     app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
     assert "KACE_BOOTSTRAP_ERROR" in app_js
     assert "!bootstrapFailureHandled" in app_js
-    assert "finishBtn.disabled = true" in app_js
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required to execute the frontend regression")
+    # Execute the actual parser and UI handlers with only browser IO simulated.
+    script = r"""
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const nodes = new Map();
+function element() {
+    const classes = new Set();
+    return {style: {}, disabled: false, textContent: '', innerHTML: '',
+        classList: {add: name => classes.add(name), remove: name => classes.delete(name),
+            contains: name => classes.has(name)},
+        querySelector: element};
+}
+const context = {console, assert, setTimeout() {},
+    document: {addEventListener() {}, querySelectorAll: () => [],
+        getElementById(id) {
+            assert.notEqual(id, 'finish-btn', 'The removed Finish control must not be required');
+            if (!nodes.has(id)) nodes.set(id, element());
+            return nodes.get(id);
+        }},
+    addEventListener() {}};
+context.window = context;
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
+function scenario() {
+    const success = 'Bootstrap complete! KACE wizard finished successfully.';
+    const transitions = [];
+    const update = window.updateDeviceState;
+    window.updateDeviceState = (...args) => { transitions.push(args[0]); update(...args); };
+    for (const connected of [false, true]) {
+        sshConnected = connected;
+        bootstrapBuffer = '';
+        bootstrapAuthoritativeSeen = false;
+        bootstrapFailureHandled = false;
+        bootstrapActive = true;
+        transitions.length = 0;
+        // A fragmented SSH marker must be recognized only when complete.
+        window.writeTerminalData('=== KACE_BOOTSTRAP_ERR');
+        assert.equal(transitions.length, 0);
+        window.writeTerminalData('OR: KACE_INSTALL ===\n');
+        assert.equal(currentDeviceState, 'BOOTSTRAP_FAILED');
+        assert.equal(bootstrapActive, false);
+        assert.equal(bootstrapFailureHandled, true);
+        assert.match(document.getElementById('bootstrap-stage-label').textContent, /could not be installed/);
+        assert.equal(document.getElementById('connection-subtitle').style.color, 'var(--danger-color)');
+        assert.equal(document.getElementById('bootstrap-btn').disabled, !connected);
+        // Repeated errors and a later legacy success banner cannot overwrite failure.
+        window.writeTerminalData('=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ===\n' + success);
+        assert.equal(currentDeviceState, 'BOOTSTRAP_FAILED');
+        assert.deepEqual(transitions, ['BOOTSTRAP_FAILED']);
+    }
+    // Positive control: an independent success is still handled.
+    bootstrapBuffer = '';
+    bootstrapFailureHandled = false;
+    bootstrapActive = true;
+    window.writeTerminalData(success);
+    assert.equal(currentDeviceState, 'BOOTSTRAPPED');
+    assert.equal(bootstrapActive, false);
+}
+vm.runInContext('(' + scenario.toString() + ')()', context);
+console.log('completed');
+"""
+    result = subprocess.run(
+        [node, "-e", script, str(ROOT / "web" / "app.js")],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip().endswith("completed")
 
 
 def test_frontend_uses_versioned_terminal_event_and_keeps_legacy_fallback():
