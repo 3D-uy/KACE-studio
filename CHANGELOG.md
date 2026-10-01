@@ -6,6 +6,17 @@ uncommitted changes or current CI, packaging or physical qualification.
 
 [README](README.md) covers current usage; [ROADMAP](ROADMAP.md) covers pending work.
 
+## [0.5.0-rc.2] - 2026-10-01
+
+### Distribution and documentation
+- Make the Windows x64 ZIP the primary installation path, with executable,
+  checksums, exact-source manifest and independent Windows rebuild evidence.
+- Refresh English, Spanish and Portuguese project pages with verified badges,
+  native application screenshots and a user-oriented setup flow.
+- Continue the documented unsigned prerelease policy; physical qualification
+  and signed stable distribution remain pending.
+- Preserve the existing KACE runtime, installer, bootstrap and image pins.
+
 ## [0.5.0-rc.1] — 2026-09-17
 
 Candidate for controlled hardware qualification with KACE 0.9.4-rc.2.

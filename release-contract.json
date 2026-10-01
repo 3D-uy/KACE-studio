@@ -1,7 +1,7 @@
 {
   "schema": "kace-studio-release-contract/v1",
   "product": "KACE Studio",
-  "version": "0.5.0-rc.1",
+  "version": "0.5.0-rc.2",
   "artifact": "KACE-studio.exe",
   "entrypoint": "main.py",
   "spec": "main.spec",
@@ -16,15 +16,15 @@
       0,
       5,
       0,
-      1
+      2
     ],
     "CompanyName": "3D-uy",
     "FileDescription": "KACE Studio",
-    "FileVersion": "0.5.0-rc.1",
+    "FileVersion": "0.5.0-rc.2",
     "InternalName": "KACE-studio",
     "OriginalFilename": "KACE-studio.exe",
     "ProductName": "KACE Studio",
-    "ProductVersion": "0.5.0-rc.1"
+    "ProductVersion": "0.5.0-rc.2"
   },
   "signing": {
     "required_for_release": true,
