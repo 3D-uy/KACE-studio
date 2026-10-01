@@ -6,16 +6,7 @@
 
 **Prepara tu Raspberry Pi para Klipper desde una aplicación de Windows.**
 
-[![KACE Studio 0.5.0-rc.2](https://img.shields.io/badge/Studio-0.5.0--rc.2-e88c30?style=flat-square)](../../release-contract.json)
-[![Status: pre-release](https://img.shields.io/badge/status-pre--release-d29b32?style=flat-square)](#project-status)
-[![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D4?style=flat-square)](#platform-and-requirements)
-[![Python 3.11 / 3.12](https://img.shields.io/badge/Python-3.11%20%2F%203.12-3776AB?style=flat-square&logo=python&logoColor=white)](../DEVELOPMENT.md)
-[![CI / tests](https://img.shields.io/github/actions/workflow/status/3D-uy/KACE-studio/ci.yml?branch=main&style=flat-square&label=CI%20%2F%20tests&logo=githubactions&logoColor=white)](https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml)<br>
-[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-2d718f?style=flat-square)](../../LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/3D-uy/KACE-studio?style=flat-square&logo=github&label=stars&color=e3b341)](https://github.com/3D-uy/KACE-studio)
-[![WebView2 Runtime](https://img.shields.io/badge/renderer-WebView2-0078D4?style=flat-square)](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)
-[![KACE integration](https://img.shields.io/badge/integration-KACE-e88c30?style=flat-square)](#kace-integration)
-[![PyWebView](https://img.shields.io/badge/desktop-PyWebView-454545?style=flat-square)](../../requirements.txt)
+[![KACE Studio 0.5.0-rc.2](https://img.shields.io/badge/Studio-0.5.0--rc.2-e88c30?style=flat-square)](../../release-contract.json) [![Status: pre-release](https://img.shields.io/badge/status-pre--release-d29b32?style=flat-square)](#project-status) [![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D4?style=flat-square)](#platform-and-requirements) [![Python 3.11 / 3.12](https://img.shields.io/badge/Python-3.11%20%2F%203.12-3776AB?style=flat-square&logo=python&logoColor=white)](../DEVELOPMENT.md) [![CI / tests](https://img.shields.io/github/actions/workflow/status/3D-uy/KACE-studio/ci.yml?branch=main&style=flat-square&label=CI%20%2F%20tests&logo=githubactions&logoColor=white)](https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml) [![License: GPLv3](https://img.shields.io/badge/license-GPLv3-2d718f?style=flat-square)](../../LICENSE) [![GitHub stars](https://img.shields.io/github/stars/3D-uy/KACE-studio?style=flat-square&logo=github&label=stars&color=e3b341)](https://github.com/3D-uy/KACE-studio) [![WebView2 Runtime](https://img.shields.io/badge/renderer-WebView2-0078D4?style=flat-square)](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) [![KACE integration](https://img.shields.io/badge/integration-KACE-e88c30?style=flat-square)](#kace-integration) [![PyWebView](https://img.shields.io/badge/desktop-PyWebView-454545?style=flat-square)](../../requirements.txt)
 
 🌐 [English](../../README.md) · [Español](README.md) · [Português](../pt/README.md)
 
