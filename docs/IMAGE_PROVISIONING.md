@@ -57,3 +57,18 @@ an image can change it. A confirmed native eject ends the operation immediately.
 An unexpected SSH transport loss starts at most three reconnect attempts, using the session credentials in backend memory and the normal host-key validation. Manual disconnect or a newer device selection cancels recovery. A normal shell exit does not reconnect. No credentials are persisted by this recovery flow.
 
 After reconnecting, Studio reads the validated KACE checkpoint and restores its progress panel. Only COMPLETE confirms that printer.cfg and required files were installed and verified. Pending or unavailable checkpoints explicitly ask the operator to continue KACE verification; reconnecting alone never completes or restarts the installation.
+
+## Supported host choices
+
+Pi 5/500/500+/CM5 require 64-bit. Pi 4/400/CM4/CM4S, 3/CM3 and
+Zero 2 W/CM2W offer the supported 32/64-bit paths; Zero W uses 32-bit.
+The Python backend validates the selected model/architecture combination.
+
+Official downloads are Raspberry Pi OS Lite and the verified MainsailOS base,
+with exact identities and checksums in [image-manifest.json](../image-manifest.json).
+Fluidd on the pre-baked path uses that MainsailOS base plus bootstrap provisioning;
+it does not use an archived FluiddPI image.
+
+Custom images must be uncompressed `.img` files with a matching `.sha256`.
+Custom pre-baked images additionally require `.kace-attestation.json`.
+Checksum, target-disk identity and capability checks remain mandatory.
