@@ -1,20 +1,121 @@
-# KACE Studio
-
-🌐 [English](../../README.md) · [Español](../../docs/es/README.md) · [Português](../../docs/pt/README.md)
-
 ![KACE Studio](../../web/KACE-studio-banner.png)
 
-KACE Studio es el escritorio Windows para preparar una Raspberry Pi con Klipper: imagen, primer arranque, descubrimiento, SSH y SFTP. Python controla validaciones y operaciones; JavaScript muestra sus estados. [KACE](https://github.com/3D-uy/KACE/blob/main/docs/es/README.md) en la Pi controla la configuración de la impresora y la instalación verificada.
+# KACE Studio
 
-**Candidato de prueba controlada.** [release-contract.json](../../release-contract.json) define versión e insumos de compilación; [CHANGELOG](../../CHANGELOG.md) describe el candidato actual. Cambios de código, validación del paquete, calificación física y publicación firmada son estados separados. Un EXE anterior no incluye los cambios actuales del código.
+### Preparación de Raspberry Pi para el ecosistema KACE
 
-**Distribución sin firma.** Por decisión de producto, KACE Studio se distribuirá por ahora sin firma Authenticode. Cada EXE distribuido debe conservar su SHA-256, manifiesto de release, atestación del rebuild independiente y commit exacto de origen. La firma permanece como gate separado para uso futuro; su ausencia no bloquea esta distribución sin firma. Consulta el [checklist de release (EN)](../../RELEASE_CHECKLIST.md).
+**Prepara tu Raspberry Pi para Klipper desde una aplicación de Windows.**
 
-## Inicio rápido
+[![KACE Studio 0.5.0-rc.2](https://img.shields.io/badge/Studio-0.5.0--rc.2-e88c30?style=flat-square)](../../release-contract.json)
+[![Status: pre-release](https://img.shields.io/badge/status-pre--release-d29b32?style=flat-square)](#project-status)
+[![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D4?style=flat-square)](#platform-and-requirements)
+[![Python 3.11 / 3.12](https://img.shields.io/badge/Python-3.11%20%2F%203.12-3776AB?style=flat-square&logo=python&logoColor=white)](../DEVELOPMENT.md)
+[![CI / tests](https://img.shields.io/github/actions/workflow/status/3D-uy/KACE-studio/ci.yml?branch=main&style=flat-square&label=CI%20%2F%20tests&logo=githubactions&logoColor=white)](https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml)<br>
+[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-2d718f?style=flat-square)](../../LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/3D-uy/KACE-studio?style=flat-square&logo=github&label=stars&color=e3b341)](https://github.com/3D-uy/KACE-studio)
+[![WebView2 Runtime](https://img.shields.io/badge/renderer-WebView2-0078D4?style=flat-square)](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)
+[![KACE integration](https://img.shields.io/badge/integration-KACE-e88c30?style=flat-square)](#kace-integration)
+[![PyWebView](https://img.shields.io/badge/desktop-PyWebView-454545?style=flat-square)](../../requirements.txt)
 
-Usa Windows 10/11 con Microsoft Edge WebView2 Runtime. El desarrollo desde código contempla Python 3.11/3.12; los paquetes requieren el toolchain exacto del contrato de release. El writer solicita elevación para la operación de disco seleccionada.
+🌐 [English](../../README.md) · [Español](README.md) · [Português](../pt/README.md)
 
-Ejecuta desde código en Windows:
+KACE Studio te guía para elegir una imagen de Raspberry Pi, configurar el primer arranque y escribir una tarjeta SD o unidad USB. Una vez iniciada la Pi, utiliza descubrimiento, SSH y SFTP para continuar la instalación con KACE.
+
+**KACE Studio prepara el host; KACE configura la impresora.**
+
+**[⬇ Descargar para Windows x64 (ZIP)](https://github.com/3D-uy/KACE-studio/releases/download/v0.5.0-rc.2/KACE-Studio-0.5.0-rc.2-Windows-x64.zip)** · [Releases](https://github.com/3D-uy/KACE-studio/releases) · [KACE](https://github.com/3D-uy/KACE)
+
+## ✨ Qué hace Studio
+
+| Tarea | En Studio |
+| --- | --- |
+| 💾 **Preparar la Pi** | Elige modelo de Pi, imagen, arquitectura y dashboard Mainsail/Fluidd. |
+| 🔧 **Configurar el primer arranque** | Define hostname, cuenta, red y SSH antes de arrancar. |
+| ✅ **Escribir y verificar** | Revisa la SD/USB seleccionada, escribe la imagen, verifica y expulsa de forma segura. |
+| 🔗 **Conectar y continuar** | Encuentra la Pi, usa SSH/SFTP y sigue el progreso del bootstrap y de la instalación de KACE. |
+
+## 🧭 De la imagen a la configuración de la impresora
+
+> **Elegir hardware → Elegir imagen → Configurar primer arranque → Escribir y verificar<br>→ Arrancar la Pi → Conectar por SSH → Continuar con KACE**
+
+<a id="quick-start"></a>
+<a id="download-and-install"></a>
+
+## 🚀 Descarga e instalación
+
+Requiere **Windows 10/11 x64** y [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/). Si Studio no abre porque falta WebView2, instala el **Evergreen Standalone Installer (x64)** de Microsoft e inténtalo de nuevo.
+
+1. Abre [Releases](https://github.com/3D-uy/KACE-studio/releases) y selecciona **v0.5.0-rc.2** (pre-release).
+2. En **Assets**, descarga **`KACE-Studio-0.5.0-rc.2-Windows-x64.zip`**. Los archivos automáticos “Source code” son para desarrollo.
+3. Haz clic derecho sobre el ZIP, elige **Extraer todo** y abre la carpeta extraída.
+4. Ejecuta **`KACE-studio.exe`** con doble clic. No necesitas instalar Python ni Git.
+5. Si Windows muestra **«Windows protegió su PC»**, esta prerelease **no tiene firma digital**. Primero comprueba que el ZIP provenga de este repositorio y que su SHA-256 coincida con el publicado. Si coincide y decides continuar, selecciona **Más información → Ejecutar de todas formas**. Si no aparece esa opción en un equipo administrado, contacta a su administrador.
+6. Comienza en **Smart Imager**. Conecta la SD/USB que quieres usar y revisa su identidad antes de escribir: **se borrará la unidad seleccionada**. La operación de disco solicitará autorización de administrador.
+
+<details>
+<summary>🔐 Verificar la descarga</summary>
+
+Compara el resultado con el SHA-256 publicado en las notas de la release y en `SHA256SUMS.txt`:
+
+```powershell
+Get-FileHash .\KACE-Studio-0.5.0-rc.2-Windows-x64.zip -Algorithm SHA256
+```
+
+</details>
+
+## 🖼️ Studio por dentro
+
+![Smart Imager: selección de hardware, imagen y unidad de destino.](../assets/studio-imager.png)
+
+*Smart Imager: selección de hardware, imagen y unidad de destino.*
+
+![Credentials: preparación de la cuenta y la red para el primer arranque de la Pi.](../assets/studio-credentials.png)
+
+*Credentials: preparación de la cuenta y la red para el primer arranque de la Pi.*
+
+Capturas reales de la aplicación Windows. Muestran la preparación, no una escritura de disco completada ni una impresora conectada.
+
+<a id="kace-integration"></a>
+
+## 🔗 Integración con KACE
+
+Studio se ocupa de la imagen, el primer arranque y el acceso remoto. [KACE](https://github.com/3D-uy/KACE/blob/main/docs/es/README.md) se ocupa de la configuración de impresora, los flujos de firmware MCU admitidos, la aplicación y la verificación de la instalación.
+
+Inicia el bootstrap desde el espacio de trabajo SSH y continúa con el asistente de KACE en la Pi. Algunos pasos de firmware requieren intervención manual; completa la verificación de KACE antes de poner en marcha la impresora.
+
+<a id="platform-and-requirements"></a>
+
+## 🖥️ Hardware y requisitos
+
+| Área | Qué necesitas |
+| --- | --- |
+| Equipo | Windows 10/11 x64 y WebView2; internet para las descargas. |
+| Host de impresora | Una Raspberry Pi admitida, una SD/USB y acceso a la red local. |
+| Imágenes | Raspberry Pi OS Lite o la base MainsailOS verificada; Mainsail, Fluidd o ambos como dashboards. |
+| Imágenes propias | Una `.img` sin comprimir con `.sha256`; las imágenes preconfiguradas propias también necesitan `.kace-attestation.json`. |
+
+La [guía de imágenes (EN)](../IMAGE_PROVISIONING.md) detalla las combinaciones de Pi/arquitectura y los requisitos de imágenes propias. Las pruebas de CI en Linux no implican soporte de escritorio Linux.
+
+<a id="project-status"></a>
+
+## 🧪 Estado del proyecto
+
+**0.5.0-rc.2 es una prerelease sin firma digital.** Las pruebas automáticas y del paquete no acreditan validación física del hardware. La escritura real, el primer arranque y la puesta en marcha de la impresora todavía requieren validación en tu equipo.
+
+Las distribuciones incluyen commit de origen, checksums y evidencia de reconstrucción independiente en Windows. Consulta la política de firma, los contratos de build, los límites de recuperación y la validación en el [checklist de release (EN)](../../RELEASE_CHECKLIST.md) y el [roadmap](ROADMAP.md).
+
+## 📚 Documentación
+
+| Para | Consulta |
+| --- | --- |
+| Imágenes, provisión y recuperación | [Guía de imágenes (EN)](../IMAGE_PROVISIONING.md) |
+| Arquitectura, ejecución desde código y pruebas | [Desarrollo (EN)](../DEVELOPMENT.md) |
+| Evidencia de build, firma y validación | [Checklist de release (EN)](../../RELEASE_CHECKLIST.md) |
+| Cambios y trabajo previsto | [Changelog (EN)](../../CHANGELOG.md) · [Roadmap](ROADMAP.md) |
+
+## 🛠️ Desarrollo y contribuciones
+
+Para ejecutar desde código, instala Git y Python **3.12** (también se admite 3.11) y utiliza PowerShell:
 
 ```powershell
 git clone https://github.com/3D-uy/KACE-studio.git
@@ -24,38 +125,16 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe main.py
 ```
 
-## 🧭 Uso
+Ejecuta `python -m pytest -q` y `python scripts/check_portability.py` en el entorno virtual. Las pruebas de frontend requieren Node. Consulta el flujo completo en [Desarrollo (EN)](../DEVELOPMENT.md) y los reportes de vulnerabilidades en [Seguridad (EN)](../../SECURITY.md).
 
-1. **Smart Imager:** elige modelo Pi, arquitectura, dashboard, fuente de imagen y SD/USB exacta.
-2. **Credentials:** configura hostname, usuario, contraseña, red y SSH. Revisa el resumen antes de confirmar la escritura destructiva.
-3. Espera escritura, lectura de verificación/provisión y expulsión segura; después arranca la Pi.
-4. **Discovery → SSH Workspace:** selecciona la Pi, verifica su clave de host y conecta. Usa el navegador SFTP para listar/descargar archivos remotos; pertenece a la sesión SSH actual.
-5. Inicia bootstrap y continúa KACE en la Pi. Sigue los pasos manuales de firmware y espera la verificación de KACE; realiza aparte la puesta en marcha física.
+## ❤️ Comunidad y agradecimientos
 
-## ⚠️ Alcance y límites
+**Un agradecimiento especial a Klipper y a su comunidad** por el firmware, la documentación y el conocimiento compartido que hacen posible este ecosistema.
 
-- Las imágenes oficiales y sus identidades proceden del [manifiesto de imágenes](../../image-manifest.json). Fluidd usa la base MainsailOS verificada más bootstrap; no una imagen archivada de FluiddPI.
-- Pi 5/500/500+/CM5 requieren 64-bit; Pi 4/400/CM4/CM4S, Pi 3/CM3 y Zero 2 W/CM2W ofrecen las rutas 32/64-bit admitidas; Zero W usa 32-bit. Python valida la combinación seleccionada.
-- Las imágenes personalizadas requieren `.img` sin comprimir y `.sha256`; las pre-baked personalizadas también `.kace-attestation.json`. No omitas controles de checksum, identidad de disco ni capacidades.
-- Los listados y descargas SFTP quedan ligados a la conexión que los originó. Reconectar no demuestra éxito de instalación; los checkpoints pendientes requieren verificación de KACE.
-- La autorización de cliente Moonraker guarda explícitamente permiso para la IP de este equipo tras confirmar. Úsala solo cuando necesites acceso; una dirección obsoleta requiere eliminación manual.
-- Ni las pruebas automáticas ni el preview del navegador prueban medios reales, USB/MCU, elevación Windows o WebView2 empaquetado.
+Studio se apoya en [KACE](https://github.com/3D-uy/KACE), [Moonraker](https://moonraker.readthedocs.io/en/latest/), [Mainsail / MainsailOS](https://docs.mainsail.xyz/), [Fluidd](https://docs.fluidd.xyz/), [Raspberry Pi](https://www.raspberrypi.com/software/) y [Crowsnest](https://docs.mainsail.xyz/crowsnest/) opcional. Su ventana de escritorio utiliza [PyWebView](https://github.com/r0x0r/pywebview) y [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 
-## 🛠️ Desarrollo
+KACE Studio es un proyecto independiente y no está oficialmente afiliado ni respaldado por Klipper ni por los demás proyectos de terceros mencionados aquí.
 
-Consulta [Desarrollo (EN)](../../docs/DEVELOPMENT.md) para arquitectura, pruebas, frontend y límites entre código y paquete. Ejecuta `python -m pytest -q` en el entorno configurado; los harnesses frontend requieren Node. La validación de release y compilación siguen el checklist, no el preview del navegador.
+## 📜 Licencia
 
-## 📚 Documentación
-
-| Necesidad | Guía |
-| --- | --- |
-| Desarrollo y pruebas (EN) | [DEVELOPMENT.md](../../docs/DEVELOPMENT.md) |
-| Provisión y recuperación (EN) | [IMAGE_PROVISIONING.md](../../docs/IMAGE_PROVISIONING.md) |
-| Release y calificación de hardware (EN) | [RELEASE_CHECKLIST.md](../../RELEASE_CHECKLIST.md) |
-| Roadmap | [ROADMAP.md](ROADMAP.md) |
-| Notas del candidato actual | [CHANGELOG.md](../../CHANGELOG.md) |
-| Seguridad (EN) | [SECURITY.md](../../SECURITY.md) |
-
-## Licencia
-
-[GPL-3.0](../../LICENSE).
+KACE Studio es software open source bajo la [GNU GPL v3](../../LICENSE).

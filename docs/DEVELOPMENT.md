@@ -97,3 +97,15 @@ Root README/ROADMAP are English; `docs/es/` and `docs/pt/` are equivalent locali
 entry points. Update all three when user steps, limits or priorities change.
 Detailed engineering procedures have one canonical English source linked from
 each language, avoiding three drifting copies of release/security contracts.
+
+## Remote-session and integration boundaries
+
+SFTP listings and downloads belong to the originating SSH connection.
+An SSH reconnection does not confirm KACE installation success: pending
+checkpoints still require KACE verification. Moonraker client authorization,
+when needed, stores permission for this computer's IP only after confirmation;
+removing an obsolete authorized address is currently a manual operation.
+
+The source-mode bootstrap preference and packaged bootstrap identity remain
+as documented above. GUI screenshots illustrate the interface; they do not
+establish successful storage writing, Pi first boot or printer qualification.
