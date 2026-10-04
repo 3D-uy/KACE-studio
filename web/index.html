@@ -127,7 +127,7 @@
                 </div>
                 
                 <div class="card">
-                    <div class="form-section">
+                    <div class="form-section imager-grid">
                         <h3>Configuration Options</h3>
                         
                         <!-- Step 1: Select Raspberry Pi -->
@@ -148,9 +148,9 @@
 
                         <!-- Step 2: Select OS / Dashboard -->
                         <div class="form-group">
-                            <label><span class="brand-orange">STEP 2:</span> OS DASHBOARD & ARCHITECTURE</label>
-                            <div class="form-row" style="display: flex; gap: 16px; align-items: flex-start;">
-                                <div style="flex: 1.2;">
+                            <label><span class="brand-orange">STEP 2:</span> OS DASHBOARD</label>
+                            <div class="imager-dashboard-row">
+                                <div class="imager-dashboard">
                                     <div class="illustrated-select">
                                     <span class="select-logos" aria-hidden="true"><img class="mainsail-select-logo" src="mainsail_logo.png" alt=""><img class="fluidd-select-logo" src="fluidd_logo.png" alt=""></span>
                                     <select id="bootstrap-ui-select-imager" aria-describedby="bootstrap-ui-select-imager-description" aria-label="OS dashboard">
@@ -161,11 +161,11 @@
                                 </div>
                                 <p id="bootstrap-ui-select-imager-description" class="select-description">Mainsail web dashboard control panel</p>
                                 </div>
-                                <div style="flex: 1;">
+                                <div class="imager-architecture">
                                     <label for="os-arch-select" data-ui-text="architecture">Architecture</label>
                                     <select id="os-arch-select">
-                                        <option value="64bit" selected>64-bit (Recommended)</option>
-                                        <option value="32bit">32-bit (Legacy / 3D Pi OS)</option>
+                                        <option value="64bit" title="Recommended" selected>64-bit</option>
+                                        <option value="32bit" title="Legacy / 3D Pi OS">32-bit</option>
                                     </select>
                                 </div>
                             </div>
@@ -210,7 +210,7 @@
                         </div>
 
                         <!-- Steps 5 & 6: Hostname & Time Zone side-by-side -->
-                        <div class="form-row" style="display: flex; gap: 16px; width: 100%;">
+                        <div class="imager-identity-row">
                             <!-- Step 5: Hostname -->
                             <div class="form-group" style="flex: 1; margin-bottom: 0;">
                                 <label for="hostname-input"><span class="brand-orange">STEP 5:</span> HOSTNAME</label>
@@ -244,7 +244,7 @@
                                 </select>
                             </div>
                         </div>
-                        <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+                        <div class="imager-actions">
                             <button type="button" class="btn btn-primary" onclick="switchTab('credentials-tab')" style="padding: 8px 24px;">
                                 Next <i class="fa-solid fa-arrow-right" style="margin-left: 6px;"></i>
                             </button>
@@ -435,20 +435,23 @@
             <!-- Stage B: Integrated SSH Workspace & Discovery -->
             <section id="discovery-tab" class="tab-content">
                 <div class="header">
-                    <h2>Device Discovery</h2>
-                    <p>Search the local network for the booted KACE node and establish a connection.</p>
+                    <h2 data-ui-text="discoveryTitle">Device Discovery</h2>
+                    <p data-ui-text="discoveryIntro">Search the local network for the booted KACE node and establish a connection.</p>
                 </div>
 
                 <div class="card">
-                    <div class="discovery-header" style="display: flex; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
-                        <div style="display: flex; align-items: center; gap: 16px;">
-                            <button class="btn btn-primary" onclick="triggerScan()" style="padding: 8px 20px;">
-                                <i class="fa-solid fa-magnifying-glass"></i> Scan Subnet Now
+                    <div class="discovery-header">
+                        <div class="discovery-actions">
+                            <button id="scan-now-btn" class="btn btn-primary" onclick="triggerScan()">
+                                <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> <span data-ui-text="scanNow">Scan now</span>
                             </button>
-                            <button id="start-first-boot-scan" class="btn" onclick="startFirstBootDiscovery()">First-boot search</button>
-                            <button class="btn" id="stop-first-boot-scan" onclick="stopFirstBootDiscovery()" hidden>Stop search</button>
+                            <button id="start-first-boot-scan" class="btn btn-secondary" onclick="startFirstBootDiscovery()">First-boot search</button>
+                            <button class="btn btn-secondary" id="stop-first-boot-scan" onclick="stopFirstBootDiscovery()" hidden>Stop search</button>
+                            <button class="btn btn-primary" id="continue-discovery-btn" onclick="continueDiscovery()" hidden data-ui-text="continueSearch">Keep searching</button>
+                        </div>
+                        <div class="discovery-status" role="status" aria-live="polite">
+                            <span id="scan-status-text"></span>
                             <span id="first-boot-scan-progress"></span>
-                            <span id="scan-status-text" style="font-size: 13px; color: var(--text-secondary); font-weight: 500;"></span>
                         </div>
                     </div>
 
@@ -460,26 +463,26 @@
                                 <i class="fa-solid fa-satellite-dish"></i>
                             </div>
                             <div class="discovery-waiting-copy">
-                                <p class="discovery-eyebrow">DEVICE DISCOVERY</p>
-                                <h4>Looking for your KACE device</h4>
-                                <p>Your first boot can take a few minutes before the device is ready to answer on the network.</p>
+                                <p class="discovery-eyebrow"><span data-ui-text="discoveryTitle">DEVICE DISCOVERY</span></p>
+                                <h4><span data-ui-text="lookingTitle">Looking for your KACE device</span></h4>
+                                <p><span data-ui-text="waitBoot">Your first boot can take a few minutes before the device is ready to answer on the network.</span></p>
                             </div>
                             <div class="discovery-tips" aria-label="Connection tips">
-                                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> Wait a few minutes during the first boot.</p>
-                                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> Verify the device is connected to the same network.</p>
-                                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> You can also connect using the IP address manually.</p>
-                                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> If you know the hostname, try <strong>kace.local</strong>.</p>
+                                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> <span data-ui-text="waitBoot">Wait a few minutes during the first boot.</span></p>
+                                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> <span data-ui-text="sameNetwork">Verify the device is connected to the same network.</span></p>
+                                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> <span data-ui-text="useManual">You can also connect using the IP address manually.</span></p>
+                                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> <span data-ui-text="useHostname">If you know the hostname, try <strong>kace.local</strong>.</span></p>
                             </div>
                         </div>
                     </div>
                     
                     <div class="manual-connection-area" style="margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border-color);">
-                        <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">Manual Connection</h4>
+                        <h4 data-ui-text="manualConnection">Manual Connection</h4>
                         <div class="form-group" style="margin-bottom: 0;">
-                            <label for="manual-ip" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px;">Device IP / Hostname</label>
+                            <label for="manual-ip" data-ui-text="deviceAddress" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px;">Device IP / Hostname</label>
                             <div class="input-row" style="display: flex; gap: 12px;">
                                 <input type="text" id="manual-ip" placeholder="e.g. 192.168.1.50 or kace.local" style="flex-grow: 1;">
-                                <button class="btn btn-secondary" id="manual-connect-btn" onclick="connectManually()" style="white-space: nowrap; padding: 0 24px;">
+                                <button class="btn btn-secondary" id="manual-connect-btn" data-ui-text="connectTarget" onclick="connectManually()" style="white-space: nowrap; padding: 0 24px;">
                                     Connect to Target
                                 </button>
                             </div>

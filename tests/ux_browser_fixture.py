@@ -1,6 +1,6 @@
 """Loopback F1 fixture: synthetic IO only; never imports the product backend.
 Run python tests/ux_browser_fixture.py and open http://127.0.0.1:8766/.
-Query flags: preview (clean interactive demo), invalid, risk, sftp, nodrives; lang=en/es/pt. Stop with Ctrl+C.
+Query flags: preview (clean interactive demo), invalid, risk, sftp, nodrives, discovery; lang=en/es/pt. Stop with Ctrl+C.
 """
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,12 +20,14 @@ window.addEventListener('load', () => {
  const output=document.createElement('output');output.id='fixture-result';output.dataset.errors=JSON.stringify(previewErrors);
  output.style.cssText='position:fixed;bottom:0;right:0;z-index:9999;background:#222;color:white;font-size:11px';
  output.textContent=preview?'Vista previa · datos simulados':'SIMULATED IO — flash calls: 0';document.body.appendChild(output);
- let calls=0, lists=[], downloads=[];
+ let calls=0, lists=[], downloads=[], scanCalls=0;
  window.pywebview={token:'fixture-only',api:{
   start_flash:(...args)=>{output.dataset.arguments=JSON.stringify(args);output.textContent=`SIMULATED IO — flash calls: ${++calls}`;return Promise.resolve(true);},
   get_drives:()=>Promise.resolve(params.has('nodrives')?[]:[{id:99,name:'SIMULATED SD',size:'32 GB',high_risk:false}]),
   browse_image:()=>Promise.resolve('C:/preview/raspios.img'),
-  set_preferences:()=>Promise.resolve(true),resize_ssh_pty:()=>{},scan_network:()=>Promise.resolve([]),
+  set_preferences:()=>Promise.resolve(true),resize_ssh_pty:()=>{},scan_network:()=>Promise.resolve(params.has('discovery') ? (++scanCalls < 3
+    ? [{ip:'192.0.2.10',hostname:'test-device.local',ssh:true}]
+    : [{ip:'192.0.2.10',hostname:'test-device.local',ssh:true},{ip:'192.0.2.20',hostname:'kace-preview.local',ssh:true,moonraker:true}]) : []),
   download_file:(...args)=>{if(preview)return Promise.resolve(true);output.dataset.download=JSON.stringify(args);return new Promise(resolve=>downloads.push(resolve));}
  }};
  window.fetch=url=>preview?Promise.resolve({ok:true,json:async()=>({path:new URL(url,location.origin).searchParams.get('path'),generation:7,items:[{name:'configs',is_dir:true},{name:'logs',is_dir:true},{name:'printer.cfg',is_dir:false},{name:'macros.cfg',is_dir:false},{name:'moonraker.conf',is_dir:false}]})}):new Promise((resolve,reject)=>lists.push({url,resolve,reject}));

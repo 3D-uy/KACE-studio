@@ -51,6 +51,32 @@ Safe eject compares the same hardware identity fields in Python and PowerShell:
 disk number, model, serial, path, capacity, bus type, and system/boot flags.
 The content-derived UniqueId is excluded from eject comparisons because writing
 an image can change it. A confirmed native eject ends the operation immediately.
+Fallback verification queries CIM partitions: no rows is a valid result for an
+offline disk or empty reader; a query failure remains an eject failure. Safe
+removal still requires confirmed native removal or the existing identity,
+offline and unmounted checks. PowerShell results use UTF-8 for localized errors.
+
+## First-boot readiness and retry
+
+Moonraker API, relay readiness/ON and MCU discovery deadlines use Python's
+monotonic clock. NTP corrections to the image's initial wall clock do not shorten
+or extend these waits. The configured timeout values and verification gates are
+unchanged. Service-stage API/configuration failures emit `GPIO_RELAY_API_VERIFY`;
+relay/MCU preparation failures emit `POWER_ON`, with one terminal failure event.
+
+After a failed attempt, inspect the preserved `moonraker.conf`, its
+`.kace-power-backup.*` file and `~/.config/kace/power.json` before retrying.
+If the live managed relay section matches the boot settings and the intended
+Moonraker device, keep it and rerun the corrected bootstrap from the same SSH
+user: `bash /boot/firmware/bootstrap.sh` (or `/boot/bootstrap.sh` on older layouts).
+The retry rereads `kace-bootstrap.txt`, restarts services and verifies API, power
+and MCU before persisting state. Keep backups from the failed attempt; do not
+restore the old configuration over a working relay or fabricate `power.json`.
+The normal KACE wizard still handles the initial printer/MCU configuration.
+
+A locally edited bootstrap does not change an already distributed EXE. Its
+release commit/hash and bundled resource must be updated together through the
+release workflow before packaging; source tests cannot qualify that EXE.
 
 ## SSH recovery after installation
 

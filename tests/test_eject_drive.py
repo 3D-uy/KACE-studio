@@ -207,7 +207,7 @@ function Get-Disk {{
  $d = '{identity}' | ConvertFrom-Json
  [pscustomobject]@{{Number=3;FriendlyName=$d.friendly_name;SerialNumber=$d.serial_number;UniqueId='CHANGED-AFTER-IMAGE-WRITE';Path=$d.path;Size=$d.size_bytes;BusType=$d.bus_type;IsSystem=$false;IsBoot=$false}}
 }}
-function Get-CimInstance {{ [pscustomobject]@{{PNPDeviceID='TEST-ONLY'}} }}
+function Get-CimInstance {{ param($ClassName) if ($ClassName -eq 'MSFT_Partition') {{ throw 'No partition enumeration after confirmed eject' }}; [pscustomobject]@{{PNPDeviceID='TEST-ONLY'}} }}
 function Set-Disk {{ throw 'A confirmed eject must never fall back to another operation' }}
 function Get-Partition {{ throw 'No partition enumeration after confirmed eject' }}
 '''
@@ -255,8 +255,13 @@ function Get-Disk {{
  $serial = if ($script:ejected) {{ {serial} }} else {{ $d.serial_number }}
  [pscustomobject]@{{Number=3;FriendlyName=$d.friendly_name;SerialNumber=$serial;Path=$d.path;Size=$size;BusType=$d.bus_type;IsSystem=$false;IsBoot=$false;IsOffline=($script:ejected -and {offline_ps})}}
 }}
-function Get-CimInstance {{ [pscustomobject]@{{PNPDeviceID='TEST-ONLY'}} }}
-function Get-Partition {{ if (-not $script:ejected -or {mounted_ps}) {{ [pscustomobject]@{{DriveLetter=[char]'E'}} }} }}
+function Get-CimInstance {{
+ param($ClassName)
+ if ($ClassName -eq 'MSFT_Partition') {{
+  if (-not $script:ejected -or {mounted_ps}) {{ [pscustomobject]@{{DriveLetter=[char]'E'}} }}
+ }} else {{ [pscustomobject]@{{PNPDeviceID='TEST-ONLY'}} }}
+}}
+function Get-Partition {{ throw 'Use the simulated CIM partition provider' }}
 function Set-Disk {{ throw 'Must not operate on an already ejected reader' }}
 function Start-Sleep {{}}
 function New-Object {{
@@ -304,3 +309,84 @@ function Add-Type {{ throw 'Native API must not be reached' }}
     payload = json.loads(result.stdout)
     assert payload['success'] is False
     assert 'identity changed' in payload['error'] or 'system or boot' in payload['error']
+
+
+@pytest.mark.parametrize('empty_before,query_error,remains_mounted,stays_online,expected_error', [
+    (True, '', False, False, ''),
+    (False, '', False, False, ''),
+    (False, 'before', False, False, 'Partition provider unavailable'),
+    (False, 'after', False, False, 'Partition provider unavailable'),
+    (False, 'partial', False, False, 'Partition provider unavailable'),
+    (False, '', True, False, 'One or more volumes remain mounted'),
+    (False, '', False, True, 'Windows did not leave the disk offline'),
+])
+def test_offline_eject_distinguishes_empty_partitions_from_query_failure(
+    monkeypatch, empty_before, query_error, remains_mounted, stays_online, expected_error,
+):
+    shell = shutil.which('powershell')
+    if not shell:
+        pytest.skip('PowerShell runtime required')
+    command = ejector._powershell_eject_command(3, disk_identity())
+    fake_native = """Add-Type -TypeDefinition @'
+using System.Text;
+public static class KaceEject {
+ public static uint CM_Locate_DevNodeW(out uint node, string id, uint flags) {node=42;return 0;}
+ public static uint CM_Request_Device_EjectW(uint node, out uint veto, StringBuilder name, uint length, uint flags) {veto=1;return 23;}
+}
+""" + "'@"
+    command, count = re.subn(r"Add-Type -TypeDefinition @'.*?'@", lambda _: fake_native, command, flags=re.S)
+    assert count == 1
+    identity = json.dumps(disk_identity()).replace("'", "''")
+    empty_ps = '$true' if empty_before else '$false'
+    mounted_ps = '$true' if remains_mounted else '$false'
+    online_ps = '$true' if stays_online else '$false'
+    mocks = f"""
+$script:offline = $false
+$script:offlined = $false
+function Get-Disk {{
+ $d = '{identity}' | ConvertFrom-Json
+ [pscustomobject]@{{Number=3;FriendlyName=$d.friendly_name;SerialNumber=$d.serial_number;Path=$d.path;Size=$d.size_bytes;BusType=$d.bus_type;IsSystem=$false;IsBoot=$false;IsOffline=$script:offline}}
+}}
+function Get-CimInstance {{
+ [CmdletBinding()] param($ClassName, $Namespace, $Filter)
+ if ($ClassName -eq 'Win32_DiskDrive') {{ return [pscustomobject]@{{PNPDeviceID='TEST-ONLY'}} }}
+ if ($ClassName -ne 'MSFT_Partition' -or $Namespace -ne 'root/Microsoft/Windows/Storage' -or $Filter -ne 'DiskNumber = 3') {{ throw 'Unexpected storage query' }}
+ if ('{query_error}' -eq 'before' -or ('{query_error}' -eq 'after' -and $script:offlined)) {{ Write-Error 'Partition provider unavailable'; return }}
+ if (($script:offlined -and {mounted_ps}) -or (-not $script:offlined -and -not {empty_ps})) {{ [pscustomobject]@{{DriveLetter=[char]'E'}} }}
+ if ('{query_error}' -eq 'partial') {{ Write-Error 'Partition provider unavailable' }}
+}}
+function Get-Partition {{ throw 'No MSFT_Partition objects found with DiskNumber equal to 3' }}
+function New-Object {{ throw 'Shell eject unavailable in this fixture' }}
+function Start-Sleep {{}}
+function Set-Disk {{
+ if ($script:offlined) {{ throw 'Must not offline the disk twice' }}
+ $script:offlined = $true
+ $script:offline = -not {online_ps}
+}}
+"""
+    # Execute the real control flow with fake providers/native calls only.
+    run = subprocess.run
+    def run_mocked_eject(args, **kwargs):
+        return run([shell, '-NoProfile', '-Command', mocks + command], timeout=20, **kwargs)
+    monkeypatch.setattr(ejector.subprocess, 'run', run_mocked_eject)
+    result = ejector._perform_windows_eject(3, disk_identity())
+    assert result['success'] is (not expected_error), result
+    if expected_error:
+        assert expected_error in result['error']
+    else:
+        assert result['method'] == 'offline'
+
+
+def test_eject_preserves_localized_windows_error_text(monkeypatch):
+    shell = shutil.which('powershell')
+    if not shell:
+        pytest.skip('PowerShell runtime required')
+    message = 'Acceso denegado: int\u00e9ntelo de nuevo.'
+    mocks = "function Get-Disk { throw '" + message + "' }; "
+    command = ejector._powershell_eject_command(3, disk_identity())
+    run = subprocess.run
+    def run_mocked_eject(args, **kwargs):
+        return run([shell, '-NoProfile', '-Command', mocks + command], timeout=20, **kwargs)
+    monkeypatch.setattr(ejector.subprocess, 'run', run_mocked_eject)
+    result = ejector._perform_windows_eject(3, disk_identity())
+    assert result == {'success': False, 'error': message}

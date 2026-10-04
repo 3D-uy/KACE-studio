@@ -72,6 +72,15 @@ credentials and disks are synthetic. Test both success and rejected/pending stat
 - Run `python main.py --smoke-test` on Windows for the native source renderer.
   Browser screenshots cannot replace this or the packaged renderer smoke gate.
 
+Discovery regression coverage lives in `tests/test_discovery_controls.py`: it
+executes production JavaScript with deferred scan replies, a controlled clock and
+EN/ES/PT catalogs. It covers pause on new addresses, continuation past reviewed
+addresses, the ten-minute bound, discarded replies after Stop and relay expansion.
+The browser fixture accepts `?preview&discovery&lang=es` for synthetic candidates.
+Stopping prevents subsequent scans and ignores a pending scan's result; the
+backend probe can still finish before another scan starts. Reconnecting remains
+subject to the existing SSH identity and authentication checks.
+
 ## Bootstrap, source and packaged behavior
 
 Source mode prefers the sibling `KACE/scripts/bootstrap.sh`; packaged mode uses
