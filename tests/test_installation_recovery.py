@@ -84,6 +84,7 @@ def test_first_boot_discovery_is_bounded_stoppable_and_serial():
 let now=100000, scans=0, discoveryScanInFlight=false;
 Date.now=()=>now;
 function triggerScan(){scans++;discoveryScanInFlight=true;}
+function stopDiscoveryScanTimer(){}
 ''' + discovery + r'''
 startFirstBootDiscovery();
 assert.equal(scans,1);

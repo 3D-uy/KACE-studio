@@ -1,7 +1,7 @@
 # KACE Studio release checklist
 
 KACE Studio is currently pre-1.0. The current product decision (2026-10-01)
-permits distribution of the `0.5.0-rc.2` candidate **without an Authenticode
+permits distribution of the `0.5.0-rc.3` candidate **without an Authenticode
 signature**, with independently reproduced build evidence. Signing is deferred
 for this unsigned distribution, not reported as passed.
 Following this checklist does not itself publish, tag, sign, or release anything.

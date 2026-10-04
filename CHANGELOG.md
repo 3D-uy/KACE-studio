@@ -6,6 +6,22 @@ uncommitted changes or current CI, packaging or physical qualification.
 
 [README](README.md) covers current usage; [ROADMAP](ROADMAP.md) covers pending work.
 
+## [0.5.0-rc.3] - 2026-10-03
+
+- Align Imager fields and spacing in paired columns, adapting to narrow windows;
+  expand GPIO relay configuration immediately when enabled.
+- Pause first-boot discovery when new devices respond. Offer explicit Connect,
+  Keep searching and Stop actions; continuing past reviewed addresses does not
+  pause again for the same device. Discard cancelled scan replies and retain
+  serialization and the ten-minute search bound.
+- Localize discovery actions, candidate and pending states in EN/ES/PT.
+- Distinguish an empty/offline disk's partition list from provider errors during
+  Windows eject verification and preserve localized error text.
+- Pin KACE 0.9.4-rc.3 runtime, installer and bootstrap bytes, including reviewed
+  TMC socket mapping and monotonic first-boot readiness checks.
+- Continue unsigned candidate distribution with independent Windows rebuild
+  evidence. Physical qualification and signed stable distribution remain pending.
+
 ## [0.5.0-rc.2] - 2026-10-01
 
 ### Distribution and documentation
