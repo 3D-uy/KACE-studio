@@ -96,7 +96,7 @@ const cases = {
         startFirstBootDiscovery(); clock=600000; scanTick();
         assert.equal(document.getElementById('stop-first-boot-scan').hidden,true);
         assert.equal(firstBootDiscovery,null);
-        assert.equal(scans,0); // The timeout does not initiate a late scan.
+        assert.equal(scans,2); // Each start scans immediately; the timeout initiates no late scan.
     `,
     sftp_delayed_download_feedback: `
         await login(7);

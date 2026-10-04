@@ -42,7 +42,12 @@ def test_real_eject_script_never_converts_storage_errors_to_safe_removal(mode, s
     mocks = r'''
 $script:diskReads=0
 $script:partReads=0
-function Get-CimInstance { [pscustomobject]@{PNPDeviceID=$null} }
+function Get-CimInstance {
+    param($ClassName)
+    if ($ClassName -eq 'MSFT_Partition') { return Get-FakePartition }
+    if ($ClassName -eq 'Win32_DiskDrive') { return [pscustomobject]@{PNPDeviceID=$null} }
+    throw 'Unexpected CIM query'
+}
 function Get-Disk {
     param($Number)
     $script:diskReads++
@@ -55,7 +60,7 @@ function Get-Disk {
         UniqueId=$identity.unique_id; Path=$identity.path;
         Size=$identity.size_bytes; BusType=$identity.bus_type}
 }
-function Get-Partition {
+function Get-FakePartition {
     param($DiskNumber)
     $script:partReads++
     if ($script:partReads -gt 1 -and $mode -eq 'partition_error') { throw 'partition query failed' }
