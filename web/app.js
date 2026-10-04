@@ -839,9 +839,7 @@ function togglePowerRelaySettings() {
     const relaySettings = document.getElementById('power-relay-settings');
     if (relayEnabled && relaySettings) {
         relaySettings.hidden = !relayEnabled.checked;
-        if (!relayEnabled.checked) {
-            relaySettings.open = false;
-        }
+        relaySettings.open = relayEnabled.checked;
     }
 }
 
@@ -1200,7 +1198,6 @@ function startDiscoveryScanTimer() {
 }
 
 function stopDiscoveryScanTimer() {
-    discoveryScanInFlight = false;
     if (discoveryScanTimer) window.clearInterval(discoveryScanTimer);
     discoveryScanTimer = null;
     discoveryScanStartedAt = null;
@@ -1209,13 +1206,16 @@ function stopDiscoveryScanTimer() {
 let discoveryScanInFlight = false;
 function triggerScan() {
     if (discoveryScanInFlight) return;
+    if (firstBootDiscovery && firstBootDiscovery.paused) return;
     discoveryScanInFlight = true;
+    const scanEpoch = discoveryScanEpoch;
+    updateDiscoveryControls();
     const visual = document.getElementById('scanner-visual');
     const text = document.getElementById('scan-status-text');
     const list = document.getElementById('discovered-device-list');
 
     if (visual) visual.classList.add('scanning');
-    text.textContent = "Probing local network subnet...";
+    text.textContent = studioText('scanning');
     list.innerHTML = `
         <div class="discovery-waiting is-scanning" id="scanner-visual">
             <div class="discovery-radar" aria-hidden="true">
@@ -1224,20 +1224,20 @@ function triggerScan() {
                 <i class="fa-solid fa-satellite-dish"></i>
             </div>
             <div class="discovery-waiting-copy">
-                <p class="discovery-eyebrow">LOCAL NETWORK SCAN</p>
-                <h4>Scanning local network...</h4>
-                <p>KACE Studio is checking for devices as they become available.</p>
+                <p class="discovery-eyebrow">${studioText('localScan')}</p>
+                <h4>${studioText('scanningTitle')}</h4>
+                <p>${studioText('scanningDetail')}</p>
             </div>
             <div class="discovery-scan-time" aria-label="Scan elapsed time">
                 <i class="fa-regular fa-clock" aria-hidden="true"></i>
-                <span>Elapsed time</span>
+                <span>${studioText('elapsed')}</span>
                 <strong id="discovery-scan-elapsed">0s</strong>
             </div>
             <div class="discovery-tips" aria-label="Connection tips">
-                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> Wait a few minutes during the first boot.</p>
-                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> Verify the device is connected to the same network.</p>
-                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> You can also connect using the IP address manually.</p>
-                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> If you know the hostname, try <strong>kace.local</strong>.</p>
+                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> ${studioText('waitBoot')}</p>
+                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> ${studioText('sameNetwork')}</p>
+                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> ${studioText('useManual')}</p>
+                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> ${studioText('useHostname')}</p>
             </div>
         </div>
     `;
@@ -1245,31 +1245,41 @@ function triggerScan() {
 
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.scan_network().then(devices => {
+            discoveryScanInFlight = false;
             stopDiscoveryScanTimer();
+            updateDiscoveryControls();
+            if (scanEpoch !== discoveryScanEpoch) return;
             if (visual) visual.classList.remove('scanning');
             // Handle rate-limit signal returned by the backend
             if (devices && !Array.isArray(devices) && devices.status === 'rate_limited') {
                 const wait = Math.ceil(devices.wait_seconds || 10);
-                text.textContent = `Scan rate-limited. Please wait ${wait}s before scanning again.`;
+                text.textContent = studioText('scanWait').replace('{seconds}', wait);
+                list.innerHTML = '';
                 return;
             }
-            text.textContent = "Scan completed.";
+            text.textContent = studioText(firstBootDiscovery ? 'searchWaiting' : 'scanDone');
             populateDevices(devices);
         }).catch(err => {
+            discoveryScanInFlight = false;
             stopDiscoveryScanTimer();
+            updateDiscoveryControls();
+            if (scanEpoch !== discoveryScanEpoch) return;
             console.error(err);
             if (visual) visual.classList.remove('scanning');
-            text.textContent = "Scan failed.";
+            text.textContent = studioText('scanFailed');
             list.innerHTML = '';
             const emptyDiv = document.createElement('div');
             emptyDiv.className = 'list-empty';
-            emptyDiv.textContent = "Scan failed: " + err;
+            emptyDiv.textContent = studioText('scanFailed');
             list.appendChild(emptyDiv);
         });
     } else {
         // Mock nodes found
         setTimeout(() => {
+            discoveryScanInFlight = false;
             stopDiscoveryScanTimer();
+            updateDiscoveryControls();
+            if (scanEpoch !== discoveryScanEpoch) return;
             if (visual) visual.classList.remove('scanning');
             text.textContent = "Scan complete (Debug Mock Mode).";
             populateDevices([
@@ -1284,8 +1294,18 @@ function populateDevices(devices) {
     devices = Array.isArray(devices) ? [...new Map(devices.map(device => [device.ip, device])).values()] : [];
     if (firstBootDiscovery) {
         devices.forEach(device => firstBootDiscovery.devices.set(device.ip, device));
+        const foundNew = devices.some(device => !firstBootDiscovery.acknowledged.has(device.ip));
         devices = [...firstBootDiscovery.devices.values()];
+        if (foundNew) {
+            firstBootDiscovery.paused = true;
+            document.getElementById('scan-status-text').textContent = studioText('searchPaused');
+            document.getElementById('first-boot-scan-progress').textContent = '';
+        }
+    } else if (devices.length) {
+        document.getElementById('scan-status-text').textContent = studioText('devicesFound');
     }
+    lastDiscoveryDevices = devices;
+    updateDiscoveryControls(devices.length > 0);
     const list = document.getElementById('discovered-device-list');
     list.innerHTML = '';
 
@@ -1299,15 +1319,15 @@ function populateDevices(devices) {
                 <i class="fa-solid fa-magnifying-glass"></i>
             </div>
             <div class="discovery-waiting-copy">
-                <p class="discovery-eyebrow">NO DEVICE RESPONSE YET</p>
-                <h4>Your KACE device may still be starting</h4>
-                <p>Wait a few minutes, verify the network connection, then scan again or use a manual address below.</p>
+                <p class="discovery-eyebrow">${studioText('noResponse')}</p>
+                <h4>${studioText('bootingTitle')}</h4>
+                <p>${studioText('bootingDetail')}</p>
             </div>
             <div class="discovery-tips" aria-label="Connection tips">
-                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> Wait a few minutes during the first boot.</p>
-                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> Verify the device is connected to the same network.</p>
-                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> You can also connect using the IP address manually.</p>
-                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> If you know the hostname, try <strong>kace.local</strong>.</p>
+                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> ${studioText('waitBoot')}</p>
+                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> ${studioText('sameNetwork')}</p>
+                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> ${studioText('useManual')}</p>
+                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> ${studioText('useHostname')}</p>
             </div>
         `;
         list.appendChild(emptyDiv);
@@ -1323,7 +1343,7 @@ function populateDevices(devices) {
 
         const deviceName = document.createElement('span');
         deviceName.className = 'device-name';
-        deviceName.textContent = dev.hostname || 'Unknown';
+        deviceName.textContent = dev.hostname && dev.hostname !== dev.ip ? dev.hostname : studioText('networkDevice');
 
         const deviceIp = document.createElement('span');
         deviceIp.className = 'device-ip';
@@ -1335,7 +1355,7 @@ function populateDevices(devices) {
         if (dev.ssh) {
             const tagSsh = document.createElement('span');
             tagSsh.className = 'tag tag-ssh';
-            tagSsh.textContent = 'SSH Enabled';
+            tagSsh.textContent = studioText('sshAvailable');
             deviceTags.appendChild(tagSsh);
         }
         if (dev.moonraker) {
@@ -1363,18 +1383,25 @@ function populateDevices(devices) {
 
         const connectBtn = document.createElement('button');
         connectBtn.className = 'btn btn-primary btn-sm';
-        connectBtn.textContent = 'Connect';
+        connectBtn.textContent = studioText('connect');
+        connectBtn.disabled = !dev.ssh;
+        if (!dev.ssh) connectBtn.title = studioText('sshUnavailable');
         connectBtn.addEventListener('click', () => {
+            stopFirstBootDiscovery();
             connectToDevice(dev.ip, dev.hostname);
         });
 
+        const actions = document.createElement('div');
+        actions.className = 'device-actions';
+        actions.appendChild(connectBtn);
         item.appendChild(deviceMeta);
-        item.appendChild(connectBtn);
+        item.appendChild(actions);
         list.appendChild(item);
     });
 }
 
 function connectManually() {
+    stopFirstBootDiscovery();
     const ip = document.getElementById('manual-ip').value.trim();
     if (!ip) {
         alert("Please enter a valid IP address or hostname.");
@@ -1412,7 +1439,7 @@ function connectManually() {
 
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.probe_device_ip(ip).then(device => {
-            if (btn) { btn.disabled = false; btn.innerHTML = 'Connect to Target'; }
+            if (btn) { btn.disabled = false; btn.textContent = studioText('connectTarget'); }
             if (device) {
                 populateDevices([device]);
             } else {
@@ -1424,7 +1451,7 @@ function connectManually() {
                 alert("IP Probe failed. Target device is not listening on SSH (22) or Moonraker (7125) ports.");
             }
         }).catch(err => {
-            if (btn) { btn.disabled = false; btn.innerHTML = 'Connect to Target'; }
+            if (btn) { btn.disabled = false; btn.textContent = studioText('connectTarget'); }
             list.innerHTML = '';
             const emptyDiv = document.createElement('div');
             emptyDiv.className = 'list-empty';
@@ -1433,7 +1460,7 @@ function connectManually() {
         });
     } else {
         setTimeout(() => {
-            if (btn) { btn.disabled = false; btn.innerHTML = 'Connect to Target'; }
+            if (btn) { btn.disabled = false; btn.textContent = studioText('connectTarget'); }
             populateDevices([{ ip: ip, hostname: "manual-node.local", ssh: true, moonraker: false, klipper: false, crowsnest: false }]);
         }, 1000);
     }
@@ -3120,21 +3147,62 @@ function workflowStep(label, view) {
 
 
 let firstBootDiscovery = null;
+let lastDiscoveryDevices = [];
+let discoveryScanEpoch = 0;
+function updateDiscoveryControls(hasDevices = false) {
+    const scan = document.getElementById('scan-now-btn');
+    const start = document.getElementById('start-first-boot-scan');
+    const stop = document.getElementById('stop-first-boot-scan');
+    const resume = document.getElementById('continue-discovery-btn');
+    for (const button of [scan, start]) {
+        if (button) {
+            button.hidden = !!firstBootDiscovery;
+            button.disabled = discoveryScanInFlight;
+        }
+    }
+    if (stop) stop.hidden = !firstBootDiscovery && !discoveryScanInFlight;
+    if (resume) {
+        resume.hidden = !(firstBootDiscovery ? firstBootDiscovery.paused : hasDevices);
+        resume.disabled = discoveryScanInFlight;
+    }
+}
 function stopFirstBootDiscovery() {
     if (firstBootDiscovery) window.clearInterval(firstBootDiscovery.timer);
     firstBootDiscovery = null;
+    // An outstanding backend scan can finish, but must not overwrite a stopped view.
+    discoveryScanEpoch++;
+    stopDiscoveryScanTimer();
+    if (discoveryScanInFlight) {
+        document.getElementById('discovered-device-list').innerHTML = '';
+    }
+    const progress = document.getElementById('first-boot-scan-progress');
+    if (progress) progress.textContent = '';
+    const status = document.getElementById('scan-status-text');
+    if (status) status.textContent = studioText('searchStopped');
+    updateDiscoveryControls();
     const button = document.getElementById('stop-first-boot-scan');
     if (button) button.hidden = true;
 }
-function startFirstBootDiscovery() {
+function continueDiscovery() {
+    if (discoveryScanInFlight) return;
+    if (!firstBootDiscovery) {
+        startFirstBootDiscovery(lastDiscoveryDevices);
+        return;
+    }
+    firstBootDiscovery.devices.forEach((device, ip) => firstBootDiscovery.acknowledged.add(ip));
+    firstBootDiscovery.paused = false;
+    firstBootDiscovery.started = Date.now();
+    firstBootDiscovery.lastScan = -Infinity;
+    updateDiscoveryControls();
+    firstBootDiscovery.tick();
+}
+function startFirstBootDiscovery(previousDevices = []) {
+    if (discoveryScanInFlight) return;
     stopFirstBootDiscovery();
-    const started = Date.now();
-    firstBootDiscovery = { started, devices: new Map(), lastScan: 0, timer: null };
-    const button = document.getElementById('stop-first-boot-scan');
-    if (button) button.hidden = false;
+    firstBootDiscovery = { started: Date.now(), devices: new Map(previousDevices.map(device => [device.ip, device])), acknowledged: new Set(previousDevices.map(device => device.ip)), paused: false, lastScan: -Infinity, timer: null };
     function tick() {
-        if (!firstBootDiscovery) return;
-        const elapsed = Date.now() - started;
+        if (!firstBootDiscovery || firstBootDiscovery.paused) return;
+        const elapsed = Date.now() - firstBootDiscovery.started;
         if (elapsed >= 10 * 60 * 1000) {
             stopFirstBootDiscovery();
             const status = document.getElementById('scan-status-text');
@@ -3146,17 +3214,19 @@ function startFirstBootDiscovery() {
             triggerScan();
         }
         const progress = document.getElementById('first-boot-scan-progress');
-        if (progress) progress.textContent = `${studioText('search')}: ${Math.floor(elapsed / 1000)}s / 600s`;
+        if (progress) progress.textContent = `${Math.floor(elapsed / 1000)}s / 600s`;
     }
+    firstBootDiscovery.tick = tick;
     firstBootDiscovery.timer = window.setInterval(tick, 1000);
+    updateDiscoveryControls();
     tick();
 }
 
 
 const STUDIO_INSTALLATION_TEXT = {
-    English: {"show": "Show", "hide": "Hide", "architecture": "Architecture", "refreshDrives": "Refresh drives", "theme": "Toggle Light/Dark Mode", "directory": "Remote directory", "up": "Go up a directory", "refreshDirectory": "Refresh directory", "downloadFile": "Download selected file", "correctErrors": "Correct these fields before continuing:", "loadingDirectory": "Loading directory", "items": "items", "directoryError": "Could not load directory", "retryDirectory": "Use Refresh directory to retry", "downloadingFile": "Downloading", "fileDownloaded": "Downloaded", "downloadCancelled": "Download cancelled or failed", "downloadError": "Download failed", "downloadUnavailable": "Download requires the desktop connection", "ssh-password": "Password", "ssh-password-confirm": "Confirm password", "wifi-password": "Wi-Fi password", "wifi-password-confirm": "Confirm Wi-Fi password", powerPending: 'Pending setup', verifying: 'Verifying image...', writing: 'Writing...', search: 'First-boot search', searchDone: 'First-boot search finished. Manual scan remains available.', stop: 'Stop search', download: 'Download firmware'},
-    'Español': {"show": "Mostrar", "hide": "Ocultar", "architecture": "Arquitectura", "refreshDrives": "Actualizar unidades", "theme": "Cambiar tema claro/oscuro", "directory": "Directorio remoto", "up": "Subir un directorio", "refreshDirectory": "Actualizar directorio", "downloadFile": "Descargar archivo seleccionado", "correctErrors": "Corregí estos campos antes de continuar:", "loadingDirectory": "Cargando directorio", "items": "elementos", "directoryError": "No se pudo cargar el directorio", "retryDirectory": "Usá Actualizar directorio para reintentar", "downloadingFile": "Descargando", "fileDownloaded": "Descargado", "downloadCancelled": "Descarga cancelada o fallida", "downloadError": "Falló la descarga", "downloadUnavailable": "La descarga requiere la conexión de escritorio", "ssh-password": "Contraseña", "ssh-password-confirm": "Confirmar contraseña", "wifi-password": "Contraseña Wi-Fi", "wifi-password-confirm": "Confirmar contraseña Wi-Fi", powerPending: 'Pendiente de configuración', verifying: 'Verificando imagen...', writing: 'Grabando...', search: 'Buscar durante el primer arranque', searchDone: 'Terminó la búsqueda automática. Podés seguir buscando manualmente.', stop: 'Detener búsqueda', download: 'Descargar firmware'},
-    'Português': {"show": "Mostrar", "hide": "Ocultar", "architecture": "Arquitetura", "refreshDrives": "Atualizar unidades", "theme": "Alternar tema claro/escuro", "directory": "Diretório remoto", "up": "Subir um diretório", "refreshDirectory": "Atualizar diretório", "downloadFile": "Baixar arquivo selecionado", "correctErrors": "Corrija estes campos antes de continuar:", "loadingDirectory": "Carregando diretório", "items": "itens", "directoryError": "Não foi possível carregar o diretório", "retryDirectory": "Use Atualizar diretório para tentar novamente", "downloadingFile": "Baixando", "fileDownloaded": "Baixado", "downloadCancelled": "Download cancelado ou falhou", "downloadError": "Falha no download", "downloadUnavailable": "O download requer a conexão do aplicativo", "ssh-password": "Senha", "ssh-password-confirm": "Confirmar senha", "wifi-password": "Senha Wi-Fi", "wifi-password-confirm": "Confirmar senha Wi-Fi", powerPending: 'Configuração pendente', verifying: 'Verificando imagem...', writing: 'Gravando...', search: 'Buscar durante a primeira inicialização', searchDone: 'A busca automática terminou. A busca manual continua disponível.', stop: 'Parar busca', download: 'Baixar firmware'},
+    English: {searchWaiting: "Search active. Waiting for other devices…", "localScan": "LOCAL NETWORK", "scanningTitle": "Searching for devices", "scanningDetail": "Checking for devices as they become available.", "elapsed": "Elapsed time", "waitBoot": "The first boot can take a few minutes.", "sameNetwork": "Check that both devices are on the same network.", "useManual": "You can also enter an IP address below.", "useHostname": "If you know the hostname, enter it below (e.g. kace.local).", "noResponse": "NO RESPONSE YET", "bootingTitle": "Your device may still be starting", "bootingDetail": "Wait a moment, check the connection, then search again or enter an address below.", "lookingTitle": "Find your KACE device", "scanNow": "Scan now", "continueSearch": "Keep searching", "searchPaused": "Search paused. Is one of these your device? Connect or keep searching.", "devicesFound": "Devices found. Connect or keep searching.", "searchStopped": "Search stopped.", "scanning": "Searching the local network…", "scanDone": "Scan completed.", "scanFailed": "Could not search the network. Try again.", "scanWait": "Wait {seconds}s before searching again.", "networkDevice": "Network device", "connect": "Connect", "sshAvailable": "SSH available", "sshUnavailable": "SSH is not available yet. Keep searching.", "discoveryTitle": "Device Discovery", "discoveryIntro": "Find your KACE device on the local network, then choose which device to connect to.", "manualConnection": "Manual connection", "deviceAddress": "Device IP / hostname", "connectTarget": "Connect to target", "show": "Show", "hide": "Hide", "architecture": "Architecture", "refreshDrives": "Refresh drives", "theme": "Toggle Light/Dark Mode", "directory": "Remote directory", "up": "Go up a directory", "refreshDirectory": "Refresh directory", "downloadFile": "Download selected file", "correctErrors": "Correct these fields before continuing:", "loadingDirectory": "Loading directory", "items": "items", "directoryError": "Could not load directory", "retryDirectory": "Use Refresh directory to retry", "downloadingFile": "Downloading", "fileDownloaded": "Downloaded", "downloadCancelled": "Download cancelled or failed", "downloadError": "Download failed", "downloadUnavailable": "Download requires the desktop connection", "ssh-password": "Password", "ssh-password-confirm": "Confirm password", "wifi-password": "Wi-Fi password", "wifi-password-confirm": "Confirm Wi-Fi password", powerPending: 'Pending setup', verifying: 'Verifying image...', writing: 'Writing...', search: 'First-boot search', searchDone: 'First-boot search finished. Manual scan remains available.', stop: 'Stop search', download: 'Download firmware'},
+    'Español': {searchWaiting: "Búsqueda activa. Esperando otros equipos…", "localScan": "RED LOCAL", "scanningTitle": "Buscando equipos", "scanningDetail": "Buscando equipos a medida que estén disponibles.", "elapsed": "Tiempo transcurrido", "waitBoot": "El primer arranque puede tardar unos minutos.", "sameNetwork": "Verificá que ambos equipos estén en la misma red.", "useManual": "También podés ingresar una dirección IP abajo.", "useHostname": "Si conocés el nombre del equipo, ingresalo abajo (ej. kace.local).", "noResponse": "SIN RESPUESTA TODAVÍA", "bootingTitle": "Tu equipo puede estar arrancando", "bootingDetail": "Esperá un momento, revisá la conexión y volvé a buscar o ingresá una dirección abajo.", "lookingTitle": "Encontrá tu equipo KACE", "scanNow": "Buscar ahora", "continueSearch": "Seguir buscando", "searchPaused": "Búsqueda en pausa. ¿Alguno es tu equipo? Conectate o seguí buscando.", "devicesFound": "Equipos encontrados. Conectate o seguí buscando.", "searchStopped": "Búsqueda detenida.", "scanning": "Buscando en la red local…", "scanDone": "Búsqueda completada.", "scanFailed": "No se pudo buscar en la red. Volvé a intentarlo.", "scanWait": "Esperá {seconds}s antes de volver a buscar.", "networkDevice": "Equipo de red", "connect": "Conectar", "sshAvailable": "SSH disponible", "sshUnavailable": "SSH todavía no está disponible. Seguí buscando.", "discoveryTitle": "Buscar equipos", "discoveryIntro": "Encontrá tu equipo KACE en la red local y elegí a cuál conectarte.", "manualConnection": "Conexión manual", "deviceAddress": "IP / nombre del equipo", "connectTarget": "Conectar al equipo", "show": "Mostrar", "hide": "Ocultar", "architecture": "Arquitectura", "refreshDrives": "Actualizar unidades", "theme": "Cambiar tema claro/oscuro", "directory": "Directorio remoto", "up": "Subir un directorio", "refreshDirectory": "Actualizar directorio", "downloadFile": "Descargar archivo seleccionado", "correctErrors": "Corregí estos campos antes de continuar:", "loadingDirectory": "Cargando directorio", "items": "elementos", "directoryError": "No se pudo cargar el directorio", "retryDirectory": "Usá Actualizar directorio para reintentar", "downloadingFile": "Descargando", "fileDownloaded": "Descargado", "downloadCancelled": "Descarga cancelada o fallida", "downloadError": "Falló la descarga", "downloadUnavailable": "La descarga requiere la conexión de escritorio", "ssh-password": "Contraseña", "ssh-password-confirm": "Confirmar contraseña", "wifi-password": "Contraseña Wi-Fi", "wifi-password-confirm": "Confirmar contraseña Wi-Fi", powerPending: 'Pendiente de configuración', verifying: 'Verificando imagen...', writing: 'Grabando...', search: 'Buscar primer arranque', searchDone: 'Terminó la búsqueda automática. Podés seguir buscando manualmente.', stop: 'Detener búsqueda', download: 'Descargar firmware'},
+    'Português': {searchWaiting: "Busca ativa. Aguardando outros dispositivos…", "localScan": "REDE LOCAL", "scanningTitle": "Buscando dispositivos", "scanningDetail": "Buscando dispositivos conforme ficam disponíveis.", "elapsed": "Tempo decorrido", "waitBoot": "A primeira inicialização pode levar alguns minutos.", "sameNetwork": "Verifique se ambos os dispositivos estão na mesma rede.", "useManual": "Você também pode informar um endereço IP abaixo.", "useHostname": "Se souber o nome do dispositivo, informe abaixo (ex. kace.local).", "noResponse": "AINDA SEM RESPOSTA", "bootingTitle": "Seu dispositivo pode estar iniciando", "bootingDetail": "Aguarde, verifique a conexão e busque novamente ou informe um endereço abaixo.", "lookingTitle": "Encontre seu dispositivo KACE", "scanNow": "Buscar agora", "continueSearch": "Continuar buscando", "searchPaused": "Busca pausada. Algum destes é seu dispositivo? Conecte ou continue buscando.", "devicesFound": "Dispositivos encontrados. Conecte ou continue buscando.", "searchStopped": "Busca interrompida.", "scanning": "Buscando na rede local…", "scanDone": "Busca concluída.", "scanFailed": "Não foi possível buscar na rede. Tente novamente.", "scanWait": "Aguarde {seconds}s antes de buscar novamente.", "networkDevice": "Dispositivo de rede", "connect": "Conectar", "sshAvailable": "SSH disponível", "sshUnavailable": "SSH ainda não está disponível. Continue buscando.", "discoveryTitle": "Buscar dispositivos", "discoveryIntro": "Encontre seu dispositivo KACE na rede local e escolha a qual se conectar.", "manualConnection": "Conexão manual", "deviceAddress": "IP / nome do dispositivo", "connectTarget": "Conectar ao dispositivo", "show": "Mostrar", "hide": "Ocultar", "architecture": "Arquitetura", "refreshDrives": "Atualizar unidades", "theme": "Alternar tema claro/escuro", "directory": "Diretório remoto", "up": "Subir um diretório", "refreshDirectory": "Atualizar diretório", "downloadFile": "Baixar arquivo selecionado", "correctErrors": "Corrija estes campos antes de continuar:", "loadingDirectory": "Carregando diretório", "items": "itens", "directoryError": "Não foi possível carregar o diretório", "retryDirectory": "Use Atualizar diretório para tentar novamente", "downloadingFile": "Baixando", "fileDownloaded": "Baixado", "downloadCancelled": "Download cancelado ou falhou", "downloadError": "Falha no download", "downloadUnavailable": "O download requer a conexão do aplicativo", "ssh-password": "Senha", "ssh-password-confirm": "Confirmar senha", "wifi-password": "Senha Wi-Fi", "wifi-password-confirm": "Confirmar senha Wi-Fi", powerPending: 'Configuração pendente', verifying: 'Verificando imagem...', writing: 'Gravando...', search: 'Buscar primeira inicialização', searchDone: 'A busca automática terminou. A busca manual continua disponível.', stop: 'Parar busca', download: 'Baixar firmware'},
 };
 function studioLanguage() {
     const locale = typeof navigator === 'undefined' ? 'en' : navigator.language;

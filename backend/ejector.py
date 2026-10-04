@@ -58,6 +58,7 @@ def _write_status(status_file: str, result: dict) -> None:
 def _powershell_eject_command(disk_number: int, expected_identity: dict | None = None) -> str:
     expected_json = json.dumps(expected_identity).replace("'", "''")
     return f"""
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $ErrorActionPreference = 'Stop'
 $diskNumber = {int(disk_number)}
 $expected = '{expected_json}' | ConvertFrom-Json
@@ -91,7 +92,10 @@ $result = [ordered]@{{
 }}
 
 function Get-MountedLetters([int]$number) {{
-    return @(Get-Partition -DiskNumber $number -ErrorAction Stop |
+    # An offline disk/empty reader can expose no partitions. CIM returns an
+    # empty result for that state while provider/permission errors still fail.
+    return @(Get-CimInstance -Namespace root/Microsoft/Windows/Storage `
+        -ClassName MSFT_Partition -Filter "DiskNumber = $number" -ErrorAction Stop |
         Where-Object {{ $_.DriveLetter -and $_.DriveLetter -ne [char]0 }} |
         ForEach-Object {{ [string]$_.DriveLetter }})
 }}

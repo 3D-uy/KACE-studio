@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_MODULES = {
-    "test_bootstrap_frontend_session", "test_imager_persistence",
+    "test_bootstrap_frontend_session", "test_imager_persistence", "test_discovery_controls",
     "test_installation_recovery", "test_moonraker_authorization_frontend",
     "test_power_frontend_identity", "test_sftp_frontend_identity", "test_ssh_recovery",
 }

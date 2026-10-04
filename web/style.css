@@ -2302,3 +2302,39 @@ dialog.modal-overlay::backdrop { background: rgba(0, 0, 0, .65); }
 
 .illustrated-option[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
 .illustrated-select-trigger[aria-invalid="true"] { border-color: var(--danger-color); }
+
+/* Imager: paired settings keep the same column width and vertical rhythm. */
+.imager-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.imager-grid > h3, .imager-identity-row, .imager-actions { grid-column: 1 / -1; }
+.imager-grid > h3, .imager-grid .form-group { margin-bottom: 0; }
+.imager-grid > .form-group { min-width: 0; }
+.imager-dashboard-row { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 12px; }
+.imager-architecture { position: relative; min-width: 0; }
+.imager-architecture > label { position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; }
+.imager-identity-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.imager-actions { display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--border-color); }
+.discovery-header { display: grid; gap: 16px; margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--border-color); }
+.discovery-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.discovery-actions .btn { min-height: 44px; padding: 10px 20px; }
+.discovery-status { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px 24px; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+.discovery-status:not(:has(> :not(:empty))) { display: none; }
+.discovery-status #scan-status-text { margin: 0; text-align: left; }
+.discovery-status > :empty { display: none; }
+#discovered-device-list:not(:has(.discovery-waiting)) { min-height: 0; max-height: none; display: grid; gap: 12px; padding: 0; border: none; background: transparent; }
+#discovered-device-list .device-item { padding: 20px; border: 1px solid var(--border-color); border-radius: 12px; }
+.device-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.device-name, .device-ip { overflow-wrap: anywhere; }
+.device-tags { flex-wrap: wrap; }
+.manual-connection-area h4 { margin-bottom: 12px; }
+@media (max-width: 1100px) {
+    .imager-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+    .imager-identity-row, .imager-dashboard-row { grid-template-columns: 1fr; }
+    .imager-architecture > label { position: static; }
+    .discovery-actions .btn { flex: 1 1 180px; }
+    #discovered-device-list .device-item { flex-direction: column; align-items: stretch; }
+    .device-actions .btn { flex: 1; }
+    .manual-connection-area .input-row { flex-wrap: wrap; }
+    .manual-connection-area .input-row .btn { min-height: 44px; }
+}

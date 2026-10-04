@@ -105,7 +105,7 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="b7988b57b5fc80fbc55c3d1326768289dbccb179"
+KACE_INSTALL_REF="561f9b9463b0d443e386f8b1ef468980538093eb"
 KACE_INSTALL_SHA256="de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
@@ -840,14 +840,24 @@ _positive_timeout_or_default() {
     fi
 }
 
+# NTP may correct the image's wall clock during first boot. Elapsed waits
+# must use a monotonic clock, rather than Bash SECONDS or date.
+_monotonic_seconds() {
+    python3 -c 'import time; print(time.monotonic_ns() // 1000000000)'
+}
+
 wait_for_moonraker_api() {
     local base_url="$1"
     local timeout_seconds="$2"
-    local deadline=$((SECONDS + timeout_seconds))
+    local now deadline
+    now=$(_monotonic_seconds) || return 1
+    deadline=$((now + timeout_seconds))
     local response=""
     MOONRAKER_SERVER_INFO=""
 
-    while (( SECONDS <= deadline )); do
+    while true; do
+        now=$(_monotonic_seconds) || return 1
+        (( now <= deadline )) || break
         if response=$(curl --fail --silent --max-time 5 "$base_url/server/info"); then
             if MOONRAKER_INFO_RESPONSE="$response" python3 - <<'PY'
 import json
@@ -998,11 +1008,15 @@ wait_for_power_device_ready() {
     local base_url="$1"
     local device_name="$2"
     local timeout_seconds="$3"
-    local deadline=$((SECONDS + timeout_seconds))
+    local now deadline
+    now=$(_monotonic_seconds) || return 1
+    deadline=$((now + timeout_seconds))
     local state=""
     local status=0
 
-    while (( SECONDS <= deadline )); do
+    while true; do
+        now=$(_monotonic_seconds) || return 1
+        (( now <= deadline )) || break
         if state=$(read_power_device_state "$base_url" "$device_name"); then
             case "$state" in
                 on|off)
@@ -1066,11 +1080,15 @@ wait_for_power_device_on() {
     local base_url="$1"
     local device_name="$2"
     local timeout_seconds="$3"
-    local deadline=$((SECONDS + timeout_seconds))
+    local now deadline
+    now=$(_monotonic_seconds) || return 1
+    deadline=$((now + timeout_seconds))
     local state=""
     local status=0
 
-    while (( SECONDS <= deadline )); do
+    while true; do
+        now=$(_monotonic_seconds) || return 1
+        (( now <= deadline )) || break
         if state=$(read_power_device_state "$base_url" "$device_name"); then
             case "$state" in
                 on)
@@ -1128,10 +1146,14 @@ find_connected_mcu_path() {
 
 wait_for_powered_mcu() {
     local timeout_seconds="$1"
-    local deadline=$((SECONDS + timeout_seconds))
+    local now deadline
+    now=$(_monotonic_seconds) || return 1
+    deadline=$((now + timeout_seconds))
     local mcu_path=""
 
-    while (( SECONDS <= deadline )); do
+    while true; do
+        now=$(_monotonic_seconds) || return 1
+        (( now <= deadline )) || break
         if mcu_path=$(find_connected_mcu_path); then
             log_ok "MCU detected after printer power-on: $mcu_path"
             return 0
@@ -2108,6 +2130,7 @@ log_ok "Services restarted."
 if ! verify_power_api_configuration "http://127.0.0.1:7125"; then
     echo "=== KACE_BOOTSTRAP_ERROR: GPIO_RELAY_API_VERIFY ==="
     log_err "Power reconciliation was not persisted because Moonraker verification failed."
+    emit_bootstrap_terminal "workflow_failed" "GPIO_RELAY_API_VERIFY" 1
     exit 1
 fi
 
@@ -2115,6 +2138,7 @@ if [ "$POWER_RELAY" = "true" ]; then
     if ! prepare_power_relay_for_kace; then
         echo "=== KACE_BOOTSTRAP_ERROR: POWER_ON ==="
         log_err "Printer power-on verification failed; KACE will not start until the relay and MCU are ready."
+        emit_bootstrap_terminal "workflow_failed" "POWER_ON" 1
         exit 1
     fi
 fi

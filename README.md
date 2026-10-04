@@ -6,7 +6,7 @@
 
 **Prepare your Raspberry Pi for Klipper — from a Windows desktop.**
 
-[![KACE Studio 0.5.0-rc.2](https://img.shields.io/badge/Studio-0.5.0--rc.2-e88c30?style=flat-square)](release-contract.json) [![Status: pre-release](https://img.shields.io/badge/status-pre--release-d29b32?style=flat-square)](#project-status) [![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D4?style=flat-square)](#platform-and-requirements) [![Python 3.11 / 3.12](https://img.shields.io/badge/Python-3.11%20%2F%203.12-3776AB?style=flat-square&logo=python&logoColor=white)](docs/DEVELOPMENT.md) [![CI / tests](https://img.shields.io/github/actions/workflow/status/3D-uy/KACE-studio/ci.yml?branch=main&style=flat-square&label=CI%20%2F%20tests&logo=githubactions&logoColor=white)](https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml) [![License: GPLv3](https://img.shields.io/badge/license-GPLv3-2d718f?style=flat-square)](LICENSE) [![GitHub stars](https://img.shields.io/github/stars/3D-uy/KACE-studio?style=flat-square&logo=github&label=stars&color=e3b341)](https://github.com/3D-uy/KACE-studio) [![WebView2 Runtime](https://img.shields.io/badge/renderer-WebView2-0078D4?style=flat-square)](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) [![KACE integration](https://img.shields.io/badge/integration-KACE-e88c30?style=flat-square)](#kace-integration) [![PyWebView](https://img.shields.io/badge/desktop-PyWebView-454545?style=flat-square)](requirements.txt)
+[![KACE Studio 0.5.0-rc.3](https://img.shields.io/badge/Studio-0.5.0--rc.3-e88c30?style=flat-square)](release-contract.json) [![Status: pre-release](https://img.shields.io/badge/status-pre--release-d29b32?style=flat-square)](#project-status) [![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%2F%2011%20x64-0078D4?style=flat-square)](#platform-and-requirements) [![Python 3.11 / 3.12](https://img.shields.io/badge/Python-3.11%20%2F%203.12-3776AB?style=flat-square&logo=python&logoColor=white)](docs/DEVELOPMENT.md) [![CI / tests](https://img.shields.io/github/actions/workflow/status/3D-uy/KACE-studio/ci.yml?branch=main&style=flat-square&label=CI%20%2F%20tests&logo=githubactions&logoColor=white)](https://github.com/3D-uy/KACE-studio/actions/workflows/ci.yml) [![License: GPLv3](https://img.shields.io/badge/license-GPLv3-2d718f?style=flat-square)](LICENSE) [![GitHub stars](https://img.shields.io/github/stars/3D-uy/KACE-studio?style=flat-square&logo=github&label=stars&color=e3b341)](https://github.com/3D-uy/KACE-studio) [![WebView2 Runtime](https://img.shields.io/badge/renderer-WebView2-0078D4?style=flat-square)](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) [![KACE integration](https://img.shields.io/badge/integration-KACE-e88c30?style=flat-square)](#kace-integration) [![PyWebView](https://img.shields.io/badge/desktop-PyWebView-454545?style=flat-square)](requirements.txt)
 
 🌐 [English](README.md) · [Español](docs/es/README.md) · [Português](docs/pt/README.md)
 
@@ -14,7 +14,7 @@ KACE Studio guides you through choosing a Raspberry Pi image, setting up first b
 
 **KACE Studio prepares the host; KACE configures the printer.**
 
-**[⬇ Download for Windows x64 (ZIP)](https://github.com/3D-uy/KACE-studio/releases/download/v0.5.0-rc.2/KACE-Studio-0.5.0-rc.2-Windows-x64.zip)** · [Releases](https://github.com/3D-uy/KACE-studio/releases) · [KACE](https://github.com/3D-uy/KACE)
+**[⬇ Download for Windows x64 (ZIP)](https://github.com/3D-uy/KACE-studio/releases/download/v0.5.0-rc.3/KACE-Studio-0.5.0-rc.3-Windows-x64.zip)** · [Releases](https://github.com/3D-uy/KACE-studio/releases) · [KACE](https://github.com/3D-uy/KACE)
 
 ## ✨ What Studio does
 
@@ -29,6 +29,8 @@ KACE Studio guides you through choosing a Raspberry Pi image, setting up first b
 
 > **Choose hardware → Choose image → Configure first boot → Write & verify<br>→ Boot the Pi → Connect over SSH → Continue with KACE**
 
+Imager keeps paired settings aligned and opens GPIO relay options when enabled. Discovery pauses when new devices respond. Choose Connect, Keep searching (already reviewed addresses do not pause it again), or Stop search. Each search period is bounded to ten minutes; finding a device does not verify a KACE installation.
+
 <a id="quick-start"></a>
 <a id="download-and-install"></a>
 
@@ -36,8 +38,8 @@ KACE Studio guides you through choosing a Raspberry Pi image, setting up first b
 
 Requires **Windows 10/11 x64** and [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/). If Studio cannot open because WebView2 is missing, install Microsoft's **Evergreen Standalone Installer (x64)** and try again.
 
-1. Open [Releases](https://github.com/3D-uy/KACE-studio/releases) and select **v0.5.0-rc.2** (pre-release).
-2. Under **Assets**, download **`KACE-Studio-0.5.0-rc.2-Windows-x64.zip`**. The automatically generated “Source code” archives are for developers.
+1. Open [Releases](https://github.com/3D-uy/KACE-studio/releases) and select **v0.5.0-rc.3** (pre-release).
+2. Under **Assets**, download **`KACE-Studio-0.5.0-rc.3-Windows-x64.zip`**. The automatically generated “Source code” archives are for developers.
 3. Right-click the ZIP, choose **Extract All**, and open the extracted folder.
 4. Double-click **`KACE-studio.exe`**. You do not need to install Python or Git.
 5. If Windows shows **“Windows protected your PC”**, this prerelease is **unsigned**. First check that the ZIP came from this repository and that its SHA-256 matches the release. If it matches and you choose to proceed, select **More info → Run anyway**. If that option is unavailable on a managed computer, contact its administrator.
@@ -49,7 +51,7 @@ Requires **Windows 10/11 x64** and [Microsoft Edge WebView2 Runtime](https://dev
 Compare the result with the SHA-256 published in the release notes and `SHA256SUMS.txt`:
 
 ```powershell
-Get-FileHash .\KACE-Studio-0.5.0-rc.2-Windows-x64.zip -Algorithm SHA256
+Get-FileHash .\KACE-Studio-0.5.0-rc.3-Windows-x64.zip -Algorithm SHA256
 ```
 
 </details>
@@ -91,7 +93,7 @@ Pi model/architecture combinations and custom-image requirements are detailed in
 
 ## 🧪 Project status
 
-**0.5.0-rc.2 is an unsigned prerelease.** Automated tests and package checks do not establish physical hardware qualification. Real media writing, first boot and printer commissioning still need validation on your equipment.
+**0.5.0-rc.3 is an unsigned prerelease.** Automated tests and package checks do not establish physical hardware qualification. Real media writing, first boot and printer commissioning still need validation on your equipment.
 
 Release builds carry their source commit, checksums and independent Windows rebuild evidence. For signing policy, build contracts, recovery boundaries and qualification, see the [release checklist](RELEASE_CHECKLIST.md) and [roadmap](ROADMAP.md).
 
