@@ -113,7 +113,7 @@ def test_http_client_uses_selected_host_and_moonraker_port(monkeypatch):
         )
         return Response()
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("backend.moonraker_client._urlopen", fake_urlopen)
     client = MoonrakerHttpClient("192.168.1.20:2222", timeout=2)
     client.post(
         "/machine/device_power/device",
@@ -300,7 +300,7 @@ def test_end_to_end_status_then_power_on_with_session_authority(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("backend.moonraker_client._urlopen", fake_urlopen)
     api = main.Api()
 
     context = bind_power_session(api)
@@ -355,7 +355,7 @@ def test_studio_on_off_and_displayed_state_share_moonraker_truth(monkeypatch):
             }
         })
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("backend.moonraker_client._urlopen", fake_urlopen)
     api = main.Api()
 
     context = bind_power_session(api)

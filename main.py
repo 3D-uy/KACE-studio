@@ -27,7 +27,7 @@ from backend.provisioning import (
     validate_provisioning,
 )
 from backend.ejector import request_safe_eject
-from backend.discovery import scan_network, probe_manual_ip
+from backend.discovery import scan_network, probe_manual_ip, DiscoveryError
 from backend.ssh_client import SSHSession
 from backend.power_controller import MoonrakerPowerController, PowerControllerError
 from backend.moonraker_authorization import moonraker_client_access
@@ -118,7 +118,7 @@ class KaceWsgiApp:
                 ])
                 return [data]
             except Exception as e:
-                err_msg = json.dumps({"error": self.api._sanitize_error(e)}).encode('utf-8')
+                err_msg = json.dumps({"error": self.api._sanitize_error(e), "code": getattr(e, "code", "directoryError")}).encode('utf-8')
                 start_response('500 Internal Server Error', [
                     ('Content-Type', 'application/json'),
                     ('Content-Length', str(len(err_msg))),
@@ -448,6 +448,13 @@ class Api:
             )
         except (OSError, ProvisioningValidationError, ValueError, ResourceContractError) as exc:
             self.set_device_state("ERROR", 0, f"Provisioning preflight failed: {self._sanitize_error(exc)}")
+            if isinstance(exc, ProvisioningValidationError) and self._window:
+                try:
+                    self._window.evaluate_js(
+                        f"window.showProvisioningError({json.dumps(exc.field)}, {json.dumps(exc.code)});"
+                    )
+                except Exception:
+                    pass  # A closed renderer cannot change the rejected operation.
             return False
 
         with self._flash_lock:
@@ -1042,7 +1049,10 @@ class Api:
         if now - self._last_scan_time < _MIN_SCAN_INTERVAL:
             return {"status": "rate_limited", "wait_seconds": _MIN_SCAN_INTERVAL - (now - self._last_scan_time)}
         self._last_scan_time = now
-        return scan_network()
+        try:
+            return scan_network()
+        except DiscoveryError as exc:
+            return {"status": "unavailable", "code": exc.code}
 
     def probe_device_ip(self, ip: str):
         """

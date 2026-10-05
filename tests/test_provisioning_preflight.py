@@ -165,6 +165,7 @@ def _drive_snapshot():
         "ssh_password",
         "wifi_ssid",
         "wifi_password",
+        "wifi_parser",
         "dashboard",
         "architecture",
         "power_device",
@@ -206,6 +207,8 @@ def test_every_invalid_start_flash_case_stops_before_worker_and_writer(monkeypat
         arguments["wifi_ssid"] = "x" * 33
     elif case == "wifi_password":
         arguments["wifi_password"] = "short"
+    elif case == "wifi_parser":
+        arguments.update(image_type=ImageType.MAINSAILOS_PREBAKED.value, image_path="default_prebaked", wifi_ssid="-n")
     elif case == "dashboard":
         arguments["dashboard_ui"] = "unknown"
     elif case == "architecture":

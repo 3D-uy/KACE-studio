@@ -42,8 +42,9 @@ class WifiSecurity(str, Enum):
 
 
 class ProvisioningValidationError(ValueError):
-    def __init__(self, field: str, message: str):
+    def __init__(self, field: str, message: str, code: str = "provisioningInvalid"):
         self.field = field
+        self.code = code
         super().__init__(message)
 
 
@@ -84,8 +85,22 @@ _SUPPORTED_PI_ARCHES = {
 }
 
 
-def _invalid(field: str, message: str):
-    raise ProvisioningValidationError(field, message)
+def _invalid(field: str, message: str, code: str = "provisioningInvalid"):
+    raise ProvisioningValidationError(field, message, code)
+
+
+def quote_headless_value(value: str, field: str) -> str:
+    """Serialize for the pinned headless_nm parser, which does not unescape."""
+    quotes = ('"', "'", '`', '´')
+    # Its echo builtins interpret these exact values as options, even when quoted.
+    if re.fullmatch(r"-[neE]+", value):
+        _invalid(field, "This value cannot be preserved by the image Wi-Fi parser.", "wifiParserUnsupported")
+    for quote in quotes:
+        if quote not in value:
+            return f"{quote}{value}{quote}"
+    if value == value.strip() and value and value[0] not in quotes:
+        return value
+    _invalid(field, "This value cannot be preserved by the image Wi-Fi parser.", "wifiParserUnsupported")
 
 
 def _coerce_image_type(value) -> ImageType:
@@ -185,6 +200,10 @@ def validate_provisioning(
             _invalid("wifi_password", "WPA2 passphrases must contain 8-63 characters or 64 hexadecimal digits.")
         if any(char in normalized_wifi_password for char in ("\x00", "\r", "\n")):
             _invalid("wifi_password", "Wi-Fi passwords cannot contain line breaks.")
+
+    if resolved_image_type.is_prebaked and normalized_ssid:
+        quote_headless_value(normalized_ssid, "wifi_ssid")
+        quote_headless_value(normalized_wifi_password, "wifi_password")
 
     normalized_dashboard = str(dashboard_ui or "").strip().lower()
     if normalized_dashboard not in {"mainsail", "fluidd", "both"}:

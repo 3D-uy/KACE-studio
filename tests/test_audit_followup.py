@@ -129,5 +129,5 @@ firmwareGeneration=9;sshConnected=false;
 assert.equal(downloadKaceFirmwareArtifact(),false);
 assert.equal(calls.length,1);
 '''
-    result = subprocess.run([node, "-e", harness + function + scenario], capture_output=True, text=True, timeout=10)
+    result = subprocess.run([node, "-"], input=harness + function + scenario, capture_output=True, text=True, encoding="utf-8", timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr

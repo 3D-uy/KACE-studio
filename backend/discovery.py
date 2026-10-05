@@ -1,4 +1,8 @@
 import socket
+import ipaddress
+import json
+import os
+import subprocess
 import concurrent.futures
 import threading
 from typing import List, Dict
@@ -64,59 +68,76 @@ def probe_ip_ports(ip: str, ports: List[int] = None, timeout: float = 0.5) -> Di
             s.close()
     return results
 
-def get_local_subnet_ips() -> List[str]:
-    """
-    Discovers the active network interface and returns a list of all host IPs in its /24 subnet.
-    Supports offline mode.
-    """
-    ips = []
-    local_ip = ""
-    
-    # Method 1: Try dummy socket to public DNS (fastest if online)
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(0.5)
-        s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-    except Exception:
-        pass
-        
-    # Method 2: Offline fallback via getaddrinfo on hostname
-    if not local_ip or local_ip.startswith("127."):
-        try:
-            hostname = socket.gethostname()
-            addr_infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
-            for info in addr_infos:
-                ip = info[4][0]
-                if ip and not ip.startswith("127."):
-                    local_ip = ip
-                    break
-        except Exception:
-            pass
-            
-    # Method 3: Offline socket binding check
-    if not local_ip or local_ip.startswith("127."):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("10.255.255.255", 1))
-            local_ip = s.getsockname()[0]
-            s.close()
-        except Exception:
-            pass
+MAX_AUTOMATIC_SCAN_ADDRESSES = 1024
 
-    if local_ip and not local_ip.startswith("127."):
-        parts = local_ip.split(".")
-        if len(parts) == 4:
-            subnet_prefix = f"{parts[0]}.{parts[1]}.{parts[2]}."
-            for i in range(1, 255):
-                # Exclude local host IP to save time
-                ip_str = f"{subnet_prefix}{i}"
-                if ip_str != local_ip:
-                    ips.append(ip_str)
-    # If no active IPv4 interface can be identified, do not scan an arbitrary
-    # private subnet.  Manual discovery remains available to the user.
-    return ips
+
+class DiscoveryError(RuntimeError):
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
+def get_ipv4_interfaces() -> list[dict]:
+    """Read active IPv4 prefixes without guessing a mask or contacting a host."""
+    try:
+        if os.name == "nt":
+            script = (
+                "$connected = @(Get-NetIPInterface -AddressFamily IPv4 | "
+                "Where-Object ConnectionState -eq 'Connected'); "
+                "@(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { "
+                "$_.InterfaceIndex -in $connected.InterfaceIndex -and "
+                "$_.AddressState -eq 'Preferred' } | "
+                "Select-Object IPAddress,PrefixLength) | ConvertTo-Json -Compress"
+            )
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True, text=True, timeout=5, check=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            records = json.loads(result.stdout.strip() or "[]")
+            if isinstance(records, dict):
+                return [records]
+            return records if isinstance(records, list) else []
+        result = subprocess.run(
+            ["ip", "-j", "-4", "address", "show", "up"],
+            capture_output=True, text=True, timeout=5, check=True,
+        )
+        return [
+            {"IPAddress": address["local"], "PrefixLength": address["prefixlen"]}
+            for interface in json.loads(result.stdout)
+            for address in interface.get("addr_info", [])
+            if address.get("family") == "inet"
+        ]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        return []
+
+
+def get_local_subnet_ips() -> List[str]:
+    """Use a single unambiguous active subnet; retain manual discovery otherwise."""
+    networks = set()
+    local_addresses = set()
+    for record in get_ipv4_interfaces():
+        try:
+            interface = ipaddress.IPv4Interface(
+                f"{record['IPAddress']}/{record['PrefixLength']}"
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            raise DiscoveryError("discoveryInvalidPrefix", "The interface prefix is invalid. Use a manual address.") from exc
+        address = interface.ip
+        if address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast:
+            continue
+        local_addresses.add(address)
+        networks.add(interface.network)
+    if not networks:
+        return []
+    if len(networks) != 1:
+        raise DiscoveryError("discoveryAmbiguous", "Several local networks are active. Use a manual address.")
+    network = next(iter(networks))
+    host_count = network.num_addresses if network.prefixlen >= 31 else network.num_addresses - 2
+    if host_count > MAX_AUTOMATIC_SCAN_ADDRESSES:
+        raise DiscoveryError("discoveryTooLarge", "This subnet exceeds the automatic scan limit. Use a manual address.")
+    return [str(address) for address in network.hosts() if address not in local_addresses]
+
 
 def check_klipper(ip: str) -> bool:
     """
@@ -137,6 +158,10 @@ def scan_network(custom_subnet_ips: List[str] = None) -> List[Dict]:
     """
     discovered = []
     ips_to_scan = custom_subnet_ips if custom_subnet_ips is not None else get_local_subnet_ips()
+    if custom_subnet_ips is None and not ips_to_scan:
+        raise DiscoveryError("discoveryUnavailable", "No usable local interface prefix was found. Use a manual address.")
+    if len(ips_to_scan) > MAX_AUTOMATIC_SCAN_ADDRESSES:
+        raise DiscoveryError("discoveryTooLarge", "This subnet exceeds the automatic scan limit. Use a manual address.")
     
     # We use a ThreadPoolExecutor for fast parallel socket probing
     # 50 threads can scan 254 IPs on three ports in ~2-3 seconds with a 0.5s timeout

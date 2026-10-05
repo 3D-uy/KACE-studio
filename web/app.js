@@ -539,6 +539,9 @@ function initAccessibility() {
     document.querySelectorAll('[data-ui-text]').forEach(el => {
         el.textContent = studioText(el.dataset.uiText);
     });
+    document.querySelectorAll('[data-ui-placeholder]').forEach(el => {
+        el.placeholder = studioText(el.dataset.uiPlaceholder);
+    });
     initIllustratedSelects();
     document.querySelectorAll('[data-password-label]').forEach(el => {
         el.textContent = studioText(el.dataset.passwordLabel);
@@ -579,7 +582,7 @@ function validateSshPasswords() {
 
     // If confirmation is introduced and does not match, show error immediately
     if (passwordConfirm && password !== passwordConfirm) {
-        showInputError('ssh-password-confirm', "User credentials passwords do not match.");
+        showInputError('ssh-password-confirm', studioText('passwordMismatch'));
         return false;
     }
     return true;
@@ -595,7 +598,7 @@ function validateWifiPasswords() {
 
     // If confirmation is introduced and does not match, show error immediately
     if (wifiSecurity !== 'open' && wifiPasswordConfirm && wifiPassword !== wifiPasswordConfirm) {
-        showInputError('wifi-password-confirm', "Wi-Fi passwords do not match.");
+        showInputError('wifi-password-confirm', studioText('wifiMismatch'));
         return false;
     }
     return true;
@@ -654,7 +657,7 @@ function openFormatModal() {
     if (imageSource === 'custom') {
         const customPath = document.getElementById('custom-image-path').value.trim();
         if (!customPath) {
-            showInputError('custom-image-path', "Please browse and select a custom local OS image.");
+            showInputError('custom-image-path', studioText('customImageRequired'));
             hasErrors = true;
         }
     }
@@ -662,34 +665,34 @@ function openFormatModal() {
     const driveSelect = document.getElementById('drive-select');
     const driveId = driveSelect.value;
     if (!driveId) {
-        showInputError('drive-select', "Please select a target storage drive.");
+        showInputError('drive-select', studioText('driveRequired'));
         hasErrors = true;
     }
 
     const hostname = document.getElementById('hostname-input').value.trim();
     if (!hostname) {
-        showInputError('hostname-input', "Please specify a Hostname.");
+        showInputError('hostname-input', studioText('hostnameRequired'));
         hasErrors = true;
     }
 
     // Step 7: User Credentials check
     const username = document.getElementById('ssh-username').value.trim();
     if (!username) {
-        showInputError('ssh-username', "An SSH username must be specified.");
+        showInputError('ssh-username', studioText('usernameRequired'));
         hasErrors = true;
     } else if (!/^[a-z_][a-z0-9_-]*$/.test(username)) {
-        showInputError('ssh-username', "Username must start with a lowercase letter or underscore, and only contain lowercase letters, numbers, hyphens, or underscores.");
+        showInputError('ssh-username', studioText('usernameInvalid'));
         hasErrors = true;
     }
 
     const password = document.getElementById('ssh-password').value;
     const passwordConfirm = document.getElementById('ssh-password-confirm').value;
     if (password.length < 8) {
-        showInputError('ssh-password', `The account password for '${username || 'kace'}' must contain at least 8 characters.`);
+        showInputError('ssh-password', studioText('accountPasswordInvalid'));
         hasErrors = true;
     }
     if (password !== passwordConfirm) {
-        showInputError('ssh-password-confirm', "User credentials passwords do not match.");
+        showInputError('ssh-password-confirm', studioText('passwordMismatch'));
         hasErrors = true;
     }
 
@@ -701,22 +704,22 @@ function openFormatModal() {
 
     if (wifiSsid || wifiPassword || wifiPasswordConfirm) {
         if (!wifiSsid) {
-            showInputError('wifi-ssid', "SSID is required when Wi-Fi passwords are provided.");
+            showInputError('wifi-ssid', studioText('ssidRequired'));
             hasErrors = true;
         }
         if (new TextEncoder().encode(wifiSsid).length > 32) {
-            showInputError('wifi-ssid', "SSID must be at most 32 UTF-8 bytes.");
+            showInputError('wifi-ssid', studioText('ssidLength'));
             hasErrors = true;
         }
         const validWpaPassword = wifiSecurity === 'open' ||
             (wifiPassword.length >= 8 && wifiPassword.length <= 63) ||
             /^[0-9A-Fa-f]{64}$/.test(wifiPassword);
         if (!validWpaPassword) {
-            showInputError('wifi-password', "WPA passphrases must contain 8-63 characters or 64 hexadecimal digits.");
+            showInputError('wifi-password', studioText('wpaPasswordInvalid'));
             hasErrors = true;
         }
         if (wifiSecurity !== 'open' && wifiPassword !== wifiPasswordConfirm) {
-            showInputError('wifi-password-confirm', "Wi-Fi passwords do not match.");
+            showInputError('wifi-password-confirm', studioText('wifiMismatch'));
             hasErrors = true;
         }
     }
@@ -734,7 +737,7 @@ function openFormatModal() {
     // maliciously-named USB drives (e.g. a drive named "<script>...").
     const modalDriveName = document.getElementById('modal-drive-name');
     modalDriveName.textContent = '';
-    const prefix = document.createTextNode('Target Drive: ');
+    const prefix = document.createTextNode(studioText('targetDrivePrefix'));
     const strong = document.createElement('strong');
     strong.textContent = selectedOption.textContent;
     modalDriveName.appendChild(prefix);
@@ -1254,6 +1257,13 @@ function triggerScan() {
             if (devices && !Array.isArray(devices) && devices.status === 'rate_limited') {
                 const wait = Math.ceil(devices.wait_seconds || 10);
                 text.textContent = studioText('scanWait').replace('{seconds}', wait);
+                list.innerHTML = '';
+                return;
+            }
+            if (devices && !Array.isArray(devices) && devices.status === 'unavailable') {
+                if (firstBootDiscovery) firstBootDiscovery.paused = true;
+                updateDiscoveryControls();
+                text.textContent = studioText(devices.code) || studioText('scanFailed');
                 list.innerHTML = '';
                 return;
             }
@@ -2877,11 +2887,14 @@ window.loadSftpDirectory = function (path) {
         headers: { 'X-Pywebview-Token': window.pywebview?.token || '' },
         cache: 'no-store',
     })
-        .then(response => {
+        .then(async response => {
+            const data = await response.json();
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                const error = new Error('Directory listing failed');
+                error.code = data.code;
+                throw error;
             }
-            return response.json();
+            return data;
         })
         .then(data => {
             if (request !== sftpRequestSequence || !sshConnected) return;
@@ -2897,7 +2910,7 @@ window.loadSftpDirectory = function (path) {
         .catch(err => {
             if (request !== sftpRequestSequence || !sshConnected) return;
             console.error("Failed to load SFTP directory:", err);
-            setSftpStatus(`${studioText('directoryError')}: ${path}. ${studioText('retryDirectory')}`, false);
+            setSftpStatus(`${studioText(err.code) || studioText('directoryError')}: ${path}. ${studioText('retryDirectory')}`, false);
         });
 };
 
@@ -2910,7 +2923,7 @@ function renderSftpList(items) {
     if (!items || items.length === 0) {
         listContainer.innerHTML = `
             <div class="list-empty">
-                <i class="fa-solid fa-folder-open"></i> This directory is empty.
+                <i class="fa-solid fa-folder-open"></i> ${studioText('emptyDirectory')}
             </div>
         `;
         return;
@@ -3224,20 +3237,557 @@ function startFirstBootDiscovery(previousDevices = []) {
 
 
 const STUDIO_INSTALLATION_TEXT = {
-    English: {searchWaiting: "Search active. Waiting for other devices…", "localScan": "LOCAL NETWORK", "scanningTitle": "Searching for devices", "scanningDetail": "Checking for devices as they become available.", "elapsed": "Elapsed time", "waitBoot": "The first boot can take a few minutes.", "sameNetwork": "Check that both devices are on the same network.", "useManual": "You can also enter an IP address below.", "useHostname": "If you know the hostname, enter it below (e.g. kace.local).", "noResponse": "NO RESPONSE YET", "bootingTitle": "Your device may still be starting", "bootingDetail": "Wait a moment, check the connection, then search again or enter an address below.", "lookingTitle": "Find your KACE device", "scanNow": "Scan now", "continueSearch": "Keep searching", "searchPaused": "Search paused. Is one of these your device? Connect or keep searching.", "devicesFound": "Devices found. Connect or keep searching.", "searchStopped": "Search stopped.", "scanning": "Searching the local network…", "scanDone": "Scan completed.", "scanFailed": "Could not search the network. Try again.", "scanWait": "Wait {seconds}s before searching again.", "networkDevice": "Network device", "connect": "Connect", "sshAvailable": "SSH available", "sshUnavailable": "SSH is not available yet. Keep searching.", "discoveryTitle": "Device Discovery", "discoveryIntro": "Find your KACE device on the local network, then choose which device to connect to.", "manualConnection": "Manual connection", "deviceAddress": "Device IP / hostname", "connectTarget": "Connect to target", "show": "Show", "hide": "Hide", "architecture": "Architecture", "refreshDrives": "Refresh drives", "theme": "Toggle Light/Dark Mode", "directory": "Remote directory", "up": "Go up a directory", "refreshDirectory": "Refresh directory", "downloadFile": "Download selected file", "correctErrors": "Correct these fields before continuing:", "loadingDirectory": "Loading directory", "items": "items", "directoryError": "Could not load directory", "retryDirectory": "Use Refresh directory to retry", "downloadingFile": "Downloading", "fileDownloaded": "Downloaded", "downloadCancelled": "Download cancelled or failed", "downloadError": "Download failed", "downloadUnavailable": "Download requires the desktop connection", "ssh-password": "Password", "ssh-password-confirm": "Confirm password", "wifi-password": "Wi-Fi password", "wifi-password-confirm": "Confirm Wi-Fi password", powerPending: 'Pending setup', verifying: 'Verifying image...', writing: 'Writing...', search: 'First-boot search', searchDone: 'First-boot search finished. Manual scan remains available.', stop: 'Stop search', download: 'Download firmware'},
-    'Español': {searchWaiting: "Búsqueda activa. Esperando otros equipos…", "localScan": "RED LOCAL", "scanningTitle": "Buscando equipos", "scanningDetail": "Buscando equipos a medida que estén disponibles.", "elapsed": "Tiempo transcurrido", "waitBoot": "El primer arranque puede tardar unos minutos.", "sameNetwork": "Verificá que ambos equipos estén en la misma red.", "useManual": "También podés ingresar una dirección IP abajo.", "useHostname": "Si conocés el nombre del equipo, ingresalo abajo (ej. kace.local).", "noResponse": "SIN RESPUESTA TODAVÍA", "bootingTitle": "Tu equipo puede estar arrancando", "bootingDetail": "Esperá un momento, revisá la conexión y volvé a buscar o ingresá una dirección abajo.", "lookingTitle": "Encontrá tu equipo KACE", "scanNow": "Buscar ahora", "continueSearch": "Seguir buscando", "searchPaused": "Búsqueda en pausa. ¿Alguno es tu equipo? Conectate o seguí buscando.", "devicesFound": "Equipos encontrados. Conectate o seguí buscando.", "searchStopped": "Búsqueda detenida.", "scanning": "Buscando en la red local…", "scanDone": "Búsqueda completada.", "scanFailed": "No se pudo buscar en la red. Volvé a intentarlo.", "scanWait": "Esperá {seconds}s antes de volver a buscar.", "networkDevice": "Equipo de red", "connect": "Conectar", "sshAvailable": "SSH disponible", "sshUnavailable": "SSH todavía no está disponible. Seguí buscando.", "discoveryTitle": "Buscar equipos", "discoveryIntro": "Encontrá tu equipo KACE en la red local y elegí a cuál conectarte.", "manualConnection": "Conexión manual", "deviceAddress": "IP / nombre del equipo", "connectTarget": "Conectar al equipo", "show": "Mostrar", "hide": "Ocultar", "architecture": "Arquitectura", "refreshDrives": "Actualizar unidades", "theme": "Cambiar tema claro/oscuro", "directory": "Directorio remoto", "up": "Subir un directorio", "refreshDirectory": "Actualizar directorio", "downloadFile": "Descargar archivo seleccionado", "correctErrors": "Corregí estos campos antes de continuar:", "loadingDirectory": "Cargando directorio", "items": "elementos", "directoryError": "No se pudo cargar el directorio", "retryDirectory": "Usá Actualizar directorio para reintentar", "downloadingFile": "Descargando", "fileDownloaded": "Descargado", "downloadCancelled": "Descarga cancelada o fallida", "downloadError": "Falló la descarga", "downloadUnavailable": "La descarga requiere la conexión de escritorio", "ssh-password": "Contraseña", "ssh-password-confirm": "Confirmar contraseña", "wifi-password": "Contraseña Wi-Fi", "wifi-password-confirm": "Confirmar contraseña Wi-Fi", powerPending: 'Pendiente de configuración', verifying: 'Verificando imagen...', writing: 'Grabando...', search: 'Buscar primer arranque', searchDone: 'Terminó la búsqueda automática. Podés seguir buscando manualmente.', stop: 'Detener búsqueda', download: 'Descargar firmware'},
-    'Português': {searchWaiting: "Busca ativa. Aguardando outros dispositivos…", "localScan": "REDE LOCAL", "scanningTitle": "Buscando dispositivos", "scanningDetail": "Buscando dispositivos conforme ficam disponíveis.", "elapsed": "Tempo decorrido", "waitBoot": "A primeira inicialização pode levar alguns minutos.", "sameNetwork": "Verifique se ambos os dispositivos estão na mesma rede.", "useManual": "Você também pode informar um endereço IP abaixo.", "useHostname": "Se souber o nome do dispositivo, informe abaixo (ex. kace.local).", "noResponse": "AINDA SEM RESPOSTA", "bootingTitle": "Seu dispositivo pode estar iniciando", "bootingDetail": "Aguarde, verifique a conexão e busque novamente ou informe um endereço abaixo.", "lookingTitle": "Encontre seu dispositivo KACE", "scanNow": "Buscar agora", "continueSearch": "Continuar buscando", "searchPaused": "Busca pausada. Algum destes é seu dispositivo? Conecte ou continue buscando.", "devicesFound": "Dispositivos encontrados. Conecte ou continue buscando.", "searchStopped": "Busca interrompida.", "scanning": "Buscando na rede local…", "scanDone": "Busca concluída.", "scanFailed": "Não foi possível buscar na rede. Tente novamente.", "scanWait": "Aguarde {seconds}s antes de buscar novamente.", "networkDevice": "Dispositivo de rede", "connect": "Conectar", "sshAvailable": "SSH disponível", "sshUnavailable": "SSH ainda não está disponível. Continue buscando.", "discoveryTitle": "Buscar dispositivos", "discoveryIntro": "Encontre seu dispositivo KACE na rede local e escolha a qual se conectar.", "manualConnection": "Conexão manual", "deviceAddress": "IP / nome do dispositivo", "connectTarget": "Conectar ao dispositivo", "show": "Mostrar", "hide": "Ocultar", "architecture": "Arquitetura", "refreshDrives": "Atualizar unidades", "theme": "Alternar tema claro/escuro", "directory": "Diretório remoto", "up": "Subir um diretório", "refreshDirectory": "Atualizar diretório", "downloadFile": "Baixar arquivo selecionado", "correctErrors": "Corrija estes campos antes de continuar:", "loadingDirectory": "Carregando diretório", "items": "itens", "directoryError": "Não foi possível carregar o diretório", "retryDirectory": "Use Atualizar diretório para tentar novamente", "downloadingFile": "Baixando", "fileDownloaded": "Baixado", "downloadCancelled": "Download cancelado ou falhou", "downloadError": "Falha no download", "downloadUnavailable": "O download requer a conexão do aplicativo", "ssh-password": "Senha", "ssh-password-confirm": "Confirmar senha", "wifi-password": "Senha Wi-Fi", "wifi-password-confirm": "Confirmar senha Wi-Fi", powerPending: 'Configuração pendente', verifying: 'Verificando imagem...', writing: 'Gravando...', search: 'Buscar primeira inicialização', searchDone: 'A busca automática terminou. A busca manual continua disponível.', stop: 'Parar busca', download: 'Baixar firmware'},
+    "English": {
+        "navImager": "Smart Imager",
+        "navCredentials": "Credentials",
+        "navDiscovery": "Discovery",
+        "navSsh": "SSH Workspace",
+        "sftpBrowser": "SSH browser (SFTP)",
+        "imagerTitle": "Smart SD Card Imager",
+        "imagerIntro": "Prepare a bootable Raspberry Pi OS image pre-configured with primary settings.",
+        "configurationOptions": "Configuration Options",
+        "piModel": "RASPBERRY PI MODEL",
+        "osDashboard": "OS DASHBOARD",
+        "imageSource": "OS IMAGE SOURCE",
+        "targetStorage": "TARGET SD CARD / USB",
+        "hostnameLabel": "HOSTNAME",
+        "timezoneLabel": "SYSTEM TIME ZONE",
+        "accountUsername": "ACCOUNT USERNAME",
+        "wifiNetwork": "WI-FI NETWORK",
+        "systemServices": "SYSTEM SERVICES",
+        "resumeWrite": "RESUME & WRITE",
+        "prebakedImage": "Pre-baked OS Image (Recommended)",
+        "liteImage": "Advanced / Custom (Raspberry Pi OS Lite)",
+        "customImage": "Custom OS Image (Local file)",
+        "browse": "Browse",
+        "customFamily": "CUSTOM IMAGE FAMILY",
+        "prebakedHint": "Choose pre-baked only when Klipper/Moonraker are already installed in the image.",
+        "scanningDrives": "Scanning for removable drives...",
+        "removableHint": "Only removable drives are listed to prevent data loss.",
+        "next": "Next",
+        "credentialsTitle": "Credentials & Services",
+        "credentialsIntro": "Configure account credentials, WiFi networks, choose services, and run write tasks.",
+        "securityLabel": "Security",
+        "openWifi": "Open",
+        "enableSsh": "Enable SSH",
+        "sshHint": "Allows KACE Studio to connect to the Pi after it boots and opens the SSH Workspace.",
+        "installCrowsnest": "Install Crowsnest (Webcam Streamer)",
+        "crowsnestHint": "Installs the webcam streaming service. Leave it disabled when the printer has no camera.",
+        "passwordAuth": "Enable Password Authentication",
+        "passwordAuthHint": "Lets you sign in using the password above. Disable it only when SSH keys are already configured.",
+        "relayEnabled": "Pi controls printer power through a GPIO relay",
+        "relayHint": "Use only when a relay wired to the Pi physically switches printer power. It enables Moonraker power control.",
+        "skipReadback": "Skip SD readback verification (faster)",
+        "readbackHint": "Not recommended. Verification reads the full image back from the SD card and detects write errors before the card is used.",
+        "deviceName": "Device name",
+        "gpioNumber": "GPIO number",
+        "activeLow": "Signal is active low",
+        "activeLowHint": "Enable this when the relay turns on when the GPIO signal is low. Check the relay board documentation first.",
+        "restartPowered": "Restart Klipper when power is enabled",
+        "restartHint": "Restarts Klipper after the printer powers on so it can reconnect to the controller.",
+        "write": "Write",
+        "cancel": "Cancel",
+        "flashingComplete": "Flashing Completed!",
+        "provisioned": "SD Card successfully flashed and provisioned!",
+        "eject": "Eject SD Card",
+        "done": "Done",
+        "sshDisconnected": "SSH Session: Disconnected",
+        "noSshSession": "No active session. Select a device in the Discovery tab to connect.",
+        "bootstrapAction": "Bootstrap KACE",
+        "authorizeComputer": "Authorize this computer for Moonraker",
+        "disconnect": "Disconnect",
+        "confirmWrite": "Confirm & Write",
+        "warning": "Warning!",
+        "formatWarning": "This operation will completely format the selected storage device:",
+        "partitionsWarning": "All existing partitions and data on this drive will be",
+        "destroyed": "permanently destroyed",
+        "cannotUndo": ". This action cannot be undone.",
+        "highRisk": "High-risk destination:",
+        "highRiskHint": "this USB/1394 device appears to be an HDD or SSD.",
+        "typeConfirm": "Type",
+        "toConfirm": "to confirm:",
+        "agreeFlash": "Agree and Flash",
+        "emptyDirectory": "This directory is empty.",
+        "sftpDisconnected": "SSH is disconnected. Reconnect to list files.",
+        "sftpUnavailable": "The SFTP channel could not be initialized.",
+        "sftpPermissionDenied": "Permission denied while listing this directory.",
+        "sftpTimedOut": "The directory listing timed out.",
+        "sftpListFailed": "The remote directory could not be read.",
+        "discoveryUnavailable": "No usable local interface prefix was found. Use a manual address.",
+        "discoveryAmbiguous": "Several local networks are active. Use a manual address.",
+        "discoveryTooLarge": "This subnet exceeds the automatic scan limit. Use a manual address.",
+        "discoveryInvalidPrefix": "The interface prefix is invalid. Use a manual address.",
+        "customImageRequired": "Please browse and select a custom local OS image.",
+        "driveRequired": "Please select a target storage drive.",
+        "hostnameRequired": "Please specify a Hostname.",
+        "usernameRequired": "An SSH username must be specified.",
+        "usernameInvalid": "Username must start with a lowercase letter or underscore, and only contain lowercase letters, numbers, hyphens, or underscores.",
+        "passwordMismatch": "User credentials passwords do not match.",
+        "wifiMismatch": "Wi-Fi passwords do not match.",
+        "ssidRequired": "SSID is required when Wi-Fi passwords are provided.",
+        "ssidLength": "SSID must be at most 32 UTF-8 bytes.",
+        "wpaPasswordInvalid": "WPA passphrases must contain 8-63 characters or 64 hexadecimal digits.",
+        "accountPasswordInvalid": "The account password must contain at least 8 characters.",
+        "targetDrivePrefix": "Target Drive: ",
+        "wifiParserUnsupported": "This value cannot be preserved by the image Wi-Fi parser.",
+        "provisioningInvalid": "Review this field before writing the image.",
+        "provisioningFailed": "Provisioning validation failed. Correct the indicated field.",
+        "step1": "STEP 1:",
+        "step2": "STEP 2:",
+        "step3": "STEP 3:",
+        "step4": "STEP 4:",
+        "step5": "STEP 5:",
+        "step6": "STEP 6:",
+        "step7": "STEP 7:",
+        "step8": "STEP 8:",
+        "step9": "STEP 9:",
+        "step10": "STEP 10:",
+        "searchWaiting": "Search active. Waiting for other devices…",
+        "localScan": "LOCAL NETWORK",
+        "scanningTitle": "Searching for devices",
+        "scanningDetail": "Checking for devices as they become available.",
+        "elapsed": "Elapsed time",
+        "waitBoot": "The first boot can take a few minutes.",
+        "sameNetwork": "Check that both devices are on the same network.",
+        "useManual": "You can also enter an IP address below.",
+        "useHostname": "If you know the hostname, enter it below (e.g. kace.local).",
+        "noResponse": "NO RESPONSE YET",
+        "bootingTitle": "Your device may still be starting",
+        "bootingDetail": "Wait a moment, check the connection, then search again or enter an address below.",
+        "lookingTitle": "Find your KACE device",
+        "scanNow": "Scan now",
+        "continueSearch": "Keep searching",
+        "searchPaused": "Search paused. Is one of these your device? Connect or keep searching.",
+        "devicesFound": "Devices found. Connect or keep searching.",
+        "searchStopped": "Search stopped.",
+        "scanning": "Searching the local network…",
+        "scanDone": "Scan completed.",
+        "scanFailed": "Could not search the network. Try again.",
+        "scanWait": "Wait {seconds}s before searching again.",
+        "networkDevice": "Network device",
+        "connect": "Connect",
+        "sshAvailable": "SSH available",
+        "sshUnavailable": "SSH is not available yet. Keep searching.",
+        "discoveryTitle": "Device Discovery",
+        "discoveryIntro": "Find your KACE device on the local network, then choose which device to connect to.",
+        "manualConnection": "Manual connection",
+        "deviceAddress": "Device IP / hostname",
+        "connectTarget": "Connect to target",
+        "show": "Show",
+        "hide": "Hide",
+        "architecture": "Architecture",
+        "refreshDrives": "Refresh drives",
+        "theme": "Toggle Light/Dark Mode",
+        "directory": "Remote directory",
+        "up": "Go up a directory",
+        "refreshDirectory": "Refresh directory",
+        "downloadFile": "Download selected file",
+        "correctErrors": "Correct these fields before continuing:",
+        "loadingDirectory": "Loading directory",
+        "items": "items",
+        "directoryError": "Could not load directory",
+        "retryDirectory": "Use Refresh directory to retry",
+        "downloadingFile": "Downloading",
+        "fileDownloaded": "Downloaded",
+        "downloadCancelled": "Download cancelled or failed",
+        "downloadError": "Download failed",
+        "downloadUnavailable": "Download requires the desktop connection",
+        "ssh-password": "Password",
+        "ssh-password-confirm": "Confirm password",
+        "wifi-password": "Wi-Fi password",
+        "wifi-password-confirm": "Confirm Wi-Fi password",
+        "powerPending": "Pending setup",
+        "verifying": "Verifying image...",
+        "writing": "Writing...",
+        "search": "First-boot search",
+        "searchDone": "First-boot search finished. Manual scan remains available.",
+        "stop": "Stop search",
+        "download": "Download firmware",
+        "progressDrive": "Drive",
+        "progressFlash": "Flash",
+        "progressBoot": "Boot",
+        "progressDiscover": "Discover",
+        "progressBootstrap": "Install",
+        "remoteFiles": "Remote files",
+        "prebakedFamily": "Pre-baked Klipper image",
+        "powerLabel": "Power",
+        "ssidPlaceholder": "Network name / SSID"
+    },
+    "Español": {
+        "navImager": "Grabador de imágenes",
+        "navCredentials": "Credenciales",
+        "navDiscovery": "Descubrimiento",
+        "navSsh": "Espacio SSH",
+        "sftpBrowser": "Archivos SSH (SFTP)",
+        "imagerTitle": "Grabador de tarjetas SD",
+        "imagerIntro": "Prepará una imagen de Raspberry Pi OS con la configuración inicial.",
+        "configurationOptions": "Opciones de configuración",
+        "piModel": "MODELO RASPBERRY PI",
+        "osDashboard": "INTERFAZ WEB",
+        "imageSource": "ORIGEN DE LA IMAGEN",
+        "targetStorage": "SD / USB DE DESTINO",
+        "hostnameLabel": "NOMBRE DEL EQUIPO",
+        "timezoneLabel": "ZONA HORARIA",
+        "accountUsername": "USUARIO DE LA CUENTA",
+        "wifiNetwork": "RED WI-FI",
+        "systemServices": "SERVICIOS DEL SISTEMA",
+        "resumeWrite": "REVISAR Y GRABAR",
+        "prebakedImage": "Imagen preinstalada (recomendada)",
+        "liteImage": "Avanzado / Personalizado (Raspberry Pi OS Lite)",
+        "customImage": "Imagen personalizada (archivo local)",
+        "browse": "Examinar",
+        "customFamily": "TIPO DE IMAGEN PERSONALIZADA",
+        "prebakedHint": "Elegí preinstalada solo si la imagen ya incluye Klipper/Moonraker.",
+        "scanningDrives": "Buscando unidades extraíbles...",
+        "removableHint": "Solo se muestran unidades extraíbles para evitar la pérdida de datos.",
+        "next": "Siguiente",
+        "credentialsTitle": "Credenciales y servicios",
+        "credentialsIntro": "Configurá la cuenta, la red WiFi y los servicios antes de grabar.",
+        "securityLabel": "Seguridad",
+        "openWifi": "Abierta",
+        "enableSsh": "Habilitar SSH",
+        "sshHint": "Permite conectarse al Pi después del arranque y abrir el espacio SSH.",
+        "installCrowsnest": "Instalar Crowsnest (cámara web)",
+        "crowsnestHint": "Instala el servicio de cámara web. Dejalo deshabilitado si no hay cámara.",
+        "passwordAuth": "Habilitar autenticación por contraseña",
+        "passwordAuthHint": "Permite ingresar con la contraseña indicada. Deshabilitalo solo si las claves SSH ya están configuradas.",
+        "relayEnabled": "El Pi controla la energía mediante un relé GPIO",
+        "relayHint": "Usalo solo si un relé conectado al Pi conmuta físicamente la energía de la impresora. Habilita el control mediante Moonraker.",
+        "skipReadback": "Omitir verificación de lectura de la SD (más rápido)",
+        "readbackHint": "No se recomienda. Vuelve a leer la imagen completa para detectar errores antes de usar la tarjeta.",
+        "deviceName": "Nombre del dispositivo",
+        "gpioNumber": "Número GPIO",
+        "activeLow": "Señal activa en nivel bajo",
+        "activeLowHint": "Habilitalo si el relé se activa con señal GPIO baja. Consultá primero su documentación.",
+        "restartPowered": "Reiniciar Klipper al encender",
+        "restartHint": "Reinicia Klipper después del encendido para reconectarse al controlador.",
+        "write": "Grabar",
+        "cancel": "Cancelar",
+        "flashingComplete": "¡Grabación completada!",
+        "provisioned": "¡Tarjeta SD grabada y configurada!",
+        "eject": "Expulsar tarjeta SD",
+        "done": "Listo",
+        "sshDisconnected": "Sesión SSH: desconectada",
+        "noSshSession": "No hay una sesión activa. Elegí un equipo en Descubrimiento.",
+        "bootstrapAction": "Instalar KACE",
+        "authorizeComputer": "Autorizar este equipo para Moonraker",
+        "disconnect": "Desconectar",
+        "confirmWrite": "Confirmar y grabar",
+        "warning": "¡Advertencia!",
+        "formatWarning": "Esta operación formateará por completo la unidad seleccionada:",
+        "partitionsWarning": "Todas las particiones y los datos de esta unidad serán",
+        "destroyed": "destruidos permanentemente",
+        "cannotUndo": ". Esta acción no se puede deshacer.",
+        "highRisk": "Destino de alto riesgo:",
+        "highRiskHint": "este dispositivo USB/1394 parece ser un HDD o SSD.",
+        "typeConfirm": "Escribí",
+        "toConfirm": "para confirmar:",
+        "agreeFlash": "Aceptar y grabar",
+        "emptyDirectory": "Este directorio está vacío.",
+        "sftpDisconnected": "SSH está desconectado. Reconectate para listar archivos.",
+        "sftpUnavailable": "No se pudo iniciar el canal SFTP. Reconectate e intentá de nuevo.",
+        "sftpPermissionDenied": "No tenés permiso para listar este directorio.",
+        "sftpTimedOut": "Se agotó el tiempo para listar el directorio.",
+        "sftpListFailed": "No se pudo leer el directorio remoto.",
+        "discoveryUnavailable": "No se pudo determinar la subred local. Ingresá una dirección manual.",
+        "discoveryAmbiguous": "Hay varias redes activas. Ingresá la dirección del equipo manualmente.",
+        "discoveryTooLarge": "La subred supera el límite de búsqueda automática. Ingresá una dirección manual.",
+        "discoveryInvalidPrefix": "El prefijo de red no es válido. Ingresá una dirección manual.",
+        "customImageRequired": "Elegí una imagen local del sistema operativo.",
+        "driveRequired": "Elegí una unidad de destino.",
+        "hostnameRequired": "Ingresá el nombre del equipo.",
+        "usernameRequired": "Ingresá un usuario SSH.",
+        "usernameInvalid": "El usuario debe empezar con minúscula o guion bajo y usar solo minúsculas, números, guiones o guiones bajos.",
+        "passwordMismatch": "Las contraseñas de la cuenta no coinciden.",
+        "wifiMismatch": "Las contraseñas Wi-Fi no coinciden.",
+        "ssidRequired": "Ingresá el SSID si indicás una contraseña Wi-Fi.",
+        "ssidLength": "El SSID debe tener como máximo 32 bytes UTF-8.",
+        "wpaPasswordInvalid": "La contraseña WPA debe tener 8-63 caracteres o 64 dígitos hexadecimales.",
+        "accountPasswordInvalid": "La contraseña de la cuenta debe tener al menos 8 caracteres.",
+        "targetDrivePrefix": "Unidad de destino: ",
+        "wifiParserUnsupported": "La imagen no puede conservar este valor Wi-Fi. Cambialo antes de grabar.",
+        "provisioningInvalid": "Revisá este campo antes de grabar la imagen.",
+        "provisioningFailed": "La configuración no es válida. Corregí el campo indicado.",
+        "step1": "PASO 1:",
+        "step2": "PASO 2:",
+        "step3": "PASO 3:",
+        "step4": "PASO 4:",
+        "step5": "PASO 5:",
+        "step6": "PASO 6:",
+        "step7": "PASO 7:",
+        "step8": "PASO 8:",
+        "step9": "PASO 9:",
+        "step10": "PASO 10:",
+        "searchWaiting": "Búsqueda activa. Esperando otros equipos…",
+        "localScan": "RED LOCAL",
+        "scanningTitle": "Buscando equipos",
+        "scanningDetail": "Buscando equipos a medida que estén disponibles.",
+        "elapsed": "Tiempo transcurrido",
+        "waitBoot": "El primer arranque puede tardar unos minutos.",
+        "sameNetwork": "Verificá que ambos equipos estén en la misma red.",
+        "useManual": "También podés ingresar una dirección IP abajo.",
+        "useHostname": "Si conocés el nombre del equipo, ingresalo abajo (ej. kace.local).",
+        "noResponse": "SIN RESPUESTA TODAVÍA",
+        "bootingTitle": "Tu equipo puede estar arrancando",
+        "bootingDetail": "Esperá un momento, revisá la conexión y volvé a buscar o ingresá una dirección abajo.",
+        "lookingTitle": "Encontrá tu equipo KACE",
+        "scanNow": "Buscar ahora",
+        "continueSearch": "Seguir buscando",
+        "searchPaused": "Búsqueda en pausa. ¿Alguno es tu equipo? Conectate o seguí buscando.",
+        "devicesFound": "Equipos encontrados. Conectate o seguí buscando.",
+        "searchStopped": "Búsqueda detenida.",
+        "scanning": "Buscando en la red local…",
+        "scanDone": "Búsqueda completada.",
+        "scanFailed": "No se pudo buscar en la red. Volvé a intentarlo.",
+        "scanWait": "Esperá {seconds}s antes de volver a buscar.",
+        "networkDevice": "Equipo de red",
+        "connect": "Conectar",
+        "sshAvailable": "SSH disponible",
+        "sshUnavailable": "SSH todavía no está disponible. Seguí buscando.",
+        "discoveryTitle": "Buscar equipos",
+        "discoveryIntro": "Encontrá tu equipo KACE en la red local y elegí a cuál conectarte.",
+        "manualConnection": "Conexión manual",
+        "deviceAddress": "IP / nombre del equipo",
+        "connectTarget": "Conectar al equipo",
+        "show": "Mostrar",
+        "hide": "Ocultar",
+        "architecture": "Arquitectura",
+        "refreshDrives": "Actualizar unidades",
+        "theme": "Cambiar tema claro/oscuro",
+        "directory": "Directorio remoto",
+        "up": "Subir un directorio",
+        "refreshDirectory": "Actualizar directorio",
+        "downloadFile": "Descargar archivo seleccionado",
+        "correctErrors": "Corregí estos campos antes de continuar:",
+        "loadingDirectory": "Cargando directorio",
+        "items": "elementos",
+        "directoryError": "No se pudo cargar el directorio",
+        "retryDirectory": "Usá Actualizar directorio para reintentar",
+        "downloadingFile": "Descargando",
+        "fileDownloaded": "Descargado",
+        "downloadCancelled": "Descarga cancelada o fallida",
+        "downloadError": "Falló la descarga",
+        "downloadUnavailable": "La descarga requiere la conexión de escritorio",
+        "ssh-password": "Contraseña",
+        "ssh-password-confirm": "Confirmar contraseña",
+        "wifi-password": "Contraseña Wi-Fi",
+        "wifi-password-confirm": "Confirmar contraseña Wi-Fi",
+        "powerPending": "Pendiente de configuración",
+        "verifying": "Verificando imagen...",
+        "writing": "Grabando...",
+        "search": "Buscar primer arranque",
+        "searchDone": "Terminó la búsqueda automática. Podés seguir buscando manualmente.",
+        "stop": "Detener búsqueda",
+        "download": "Descargar firmware",
+        "progressDrive": "Unidad",
+        "progressFlash": "Grabar",
+        "progressBoot": "Arrancar",
+        "progressDiscover": "Buscar",
+        "progressBootstrap": "Instalar",
+        "remoteFiles": "Archivos remotos",
+        "prebakedFamily": "Imagen con Klipper preinstalado",
+        "powerLabel": "Energía",
+        "ssidPlaceholder": "Nombre de la red / SSID"
+    },
+    "Português": {
+        "navImager": "Gravador de imagens",
+        "navCredentials": "Credenciais",
+        "navDiscovery": "Descoberta",
+        "navSsh": "Área SSH",
+        "sftpBrowser": "Arquivos SSH (SFTP)",
+        "imagerTitle": "Gravador de cartões SD",
+        "imagerIntro": "Prepare uma imagem do Raspberry Pi OS com as configurações iniciais.",
+        "configurationOptions": "Opções de configuração",
+        "piModel": "MODELO RASPBERRY PI",
+        "osDashboard": "INTERFACE WEB",
+        "imageSource": "ORIGEM DA IMAGEM",
+        "targetStorage": "SD / USB DE DESTINO",
+        "hostnameLabel": "NOME DO DISPOSITIVO",
+        "timezoneLabel": "FUSO HORÁRIO",
+        "accountUsername": "USUÁRIO DA CONTA",
+        "wifiNetwork": "REDE WI-FI",
+        "systemServices": "SERVIÇOS DO SISTEMA",
+        "resumeWrite": "REVISAR E GRAVAR",
+        "prebakedImage": "Imagem pré-instalada (recomendada)",
+        "liteImage": "Avançado / Personalizado (Raspberry Pi OS Lite)",
+        "customImage": "Imagem personalizada (arquivo local)",
+        "browse": "Procurar",
+        "customFamily": "TIPO DE IMAGEM PERSONALIZADA",
+        "prebakedHint": "Escolha pré-instalada somente se a imagem já inclui Klipper/Moonraker.",
+        "scanningDrives": "Buscando unidades removíveis...",
+        "removableHint": "Somente unidades removíveis são exibidas para evitar perda de dados.",
+        "next": "Próximo",
+        "credentialsTitle": "Credenciais e serviços",
+        "credentialsIntro": "Configure a conta, a rede WiFi e os serviços antes de gravar.",
+        "securityLabel": "Segurança",
+        "openWifi": "Aberta",
+        "enableSsh": "Habilitar SSH",
+        "sshHint": "Permite conectar ao Pi após a inicialização e abrir a área SSH.",
+        "installCrowsnest": "Instalar Crowsnest (câmera web)",
+        "crowsnestHint": "Instala o serviço de câmera web. Deixe desabilitado se não há câmera.",
+        "passwordAuth": "Habilitar autenticação por senha",
+        "passwordAuthHint": "Permite entrar com a senha informada. Desabilite somente se as chaves SSH já estão configuradas.",
+        "relayEnabled": "O Pi controla a energia por um relé GPIO",
+        "relayHint": "Use somente se um relé conectado ao Pi comuta fisicamente a energia da impressora. Habilita o controle pelo Moonraker.",
+        "skipReadback": "Ignorar verificação de leitura da SD (mais rápido)",
+        "readbackHint": "Não recomendado. Lê novamente a imagem completa para detectar erros antes de usar o cartão.",
+        "deviceName": "Nome do dispositivo",
+        "gpioNumber": "Número GPIO",
+        "activeLow": "Sinal ativo em nível baixo",
+        "activeLowHint": "Habilite se o relé ativa com sinal GPIO baixo. Consulte primeiro sua documentação.",
+        "restartPowered": "Reiniciar o Klipper ao ligar",
+        "restartHint": "Reinicia o Klipper após ligar para reconectar ao controlador.",
+        "write": "Gravar",
+        "cancel": "Cancelar",
+        "flashingComplete": "Gravação concluída!",
+        "provisioned": "Cartão SD gravado e configurado!",
+        "eject": "Ejetar cartão SD",
+        "done": "Concluído",
+        "sshDisconnected": "Sessão SSH: desconectada",
+        "noSshSession": "Não há uma sessão ativa. Escolha um dispositivo em Descoberta.",
+        "bootstrapAction": "Instalar KACE",
+        "authorizeComputer": "Autorizar este computador no Moonraker",
+        "disconnect": "Desconectar",
+        "confirmWrite": "Confirmar e gravar",
+        "warning": "Aviso!",
+        "formatWarning": "Esta operação formatará completamente a unidade selecionada:",
+        "partitionsWarning": "Todas as partições e os dados desta unidade serão",
+        "destroyed": "destruídos permanentemente",
+        "cannotUndo": ". Esta ação não pode ser desfeita.",
+        "highRisk": "Destino de alto risco:",
+        "highRiskHint": "este dispositivo USB/1394 parece ser um HDD ou SSD.",
+        "typeConfirm": "Digite",
+        "toConfirm": "para confirmar:",
+        "agreeFlash": "Aceitar e gravar",
+        "emptyDirectory": "Este diretório está vazio.",
+        "sftpDisconnected": "SSH está desconectado. Reconecte para listar arquivos.",
+        "sftpUnavailable": "Não foi possível iniciar o canal SFTP. Reconecte e tente novamente.",
+        "sftpPermissionDenied": "Você não tem permissão para listar este diretório.",
+        "sftpTimedOut": "O tempo para listar o diretório esgotou.",
+        "sftpListFailed": "Não foi possível ler o diretório remoto.",
+        "discoveryUnavailable": "Não foi possível determinar a sub-rede local. Informe um endereço manual.",
+        "discoveryAmbiguous": "Há várias redes ativas. Informe o endereço do dispositivo manualmente.",
+        "discoveryTooLarge": "A sub-rede excede o limite de busca automática. Informe um endereço manual.",
+        "discoveryInvalidPrefix": "O prefixo de rede é inválido. Informe um endereço manual.",
+        "customImageRequired": "Escolha uma imagem local do sistema operacional.",
+        "driveRequired": "Escolha uma unidade de destino.",
+        "hostnameRequired": "Informe o nome do dispositivo.",
+        "usernameRequired": "Informe um usuário SSH.",
+        "usernameInvalid": "O usuário deve começar com minúscula ou sublinhado e usar apenas minúsculas, números, hífens ou sublinhados.",
+        "passwordMismatch": "As senhas da conta não coincidem.",
+        "wifiMismatch": "As senhas Wi-Fi não coincidem.",
+        "ssidRequired": "Informe o SSID ao fornecer uma senha Wi-Fi.",
+        "ssidLength": "O SSID deve ter no máximo 32 bytes UTF-8.",
+        "wpaPasswordInvalid": "A senha WPA deve ter 8-63 caracteres ou 64 dígitos hexadecimais.",
+        "accountPasswordInvalid": "A senha da conta deve ter pelo menos 8 caracteres.",
+        "targetDrivePrefix": "Unidade de destino: ",
+        "wifiParserUnsupported": "A imagem não pode preservar este valor Wi-Fi. Altere antes de gravar.",
+        "provisioningInvalid": "Revise este campo antes de gravar a imagem.",
+        "provisioningFailed": "A configuração é inválida. Corrija o campo indicado.",
+        "step1": "ETAPA 1:",
+        "step2": "ETAPA 2:",
+        "step3": "ETAPA 3:",
+        "step4": "ETAPA 4:",
+        "step5": "ETAPA 5:",
+        "step6": "ETAPA 6:",
+        "step7": "ETAPA 7:",
+        "step8": "ETAPA 8:",
+        "step9": "ETAPA 9:",
+        "step10": "ETAPA 10:",
+        "searchWaiting": "Busca ativa. Aguardando outros dispositivos…",
+        "localScan": "REDE LOCAL",
+        "scanningTitle": "Buscando dispositivos",
+        "scanningDetail": "Buscando dispositivos conforme ficam disponíveis.",
+        "elapsed": "Tempo decorrido",
+        "waitBoot": "A primeira inicialização pode levar alguns minutos.",
+        "sameNetwork": "Verifique se ambos os dispositivos estão na mesma rede.",
+        "useManual": "Você também pode informar um endereço IP abaixo.",
+        "useHostname": "Se souber o nome do dispositivo, informe abaixo (ex. kace.local).",
+        "noResponse": "AINDA SEM RESPOSTA",
+        "bootingTitle": "Seu dispositivo pode estar iniciando",
+        "bootingDetail": "Aguarde, verifique a conexão e busque novamente ou informe um endereço abaixo.",
+        "lookingTitle": "Encontre seu dispositivo KACE",
+        "scanNow": "Buscar agora",
+        "continueSearch": "Continuar buscando",
+        "searchPaused": "Busca pausada. Algum destes é seu dispositivo? Conecte ou continue buscando.",
+        "devicesFound": "Dispositivos encontrados. Conecte ou continue buscando.",
+        "searchStopped": "Busca interrompida.",
+        "scanning": "Buscando na rede local…",
+        "scanDone": "Busca concluída.",
+        "scanFailed": "Não foi possível buscar na rede. Tente novamente.",
+        "scanWait": "Aguarde {seconds}s antes de buscar novamente.",
+        "networkDevice": "Dispositivo de rede",
+        "connect": "Conectar",
+        "sshAvailable": "SSH disponível",
+        "sshUnavailable": "SSH ainda não está disponível. Continue buscando.",
+        "discoveryTitle": "Buscar dispositivos",
+        "discoveryIntro": "Encontre seu dispositivo KACE na rede local e escolha a qual se conectar.",
+        "manualConnection": "Conexão manual",
+        "deviceAddress": "IP / nome do dispositivo",
+        "connectTarget": "Conectar ao dispositivo",
+        "show": "Mostrar",
+        "hide": "Ocultar",
+        "architecture": "Arquitetura",
+        "refreshDrives": "Atualizar unidades",
+        "theme": "Alternar tema claro/escuro",
+        "directory": "Diretório remoto",
+        "up": "Subir um diretório",
+        "refreshDirectory": "Atualizar diretório",
+        "downloadFile": "Baixar arquivo selecionado",
+        "correctErrors": "Corrija estes campos antes de continuar:",
+        "loadingDirectory": "Carregando diretório",
+        "items": "itens",
+        "directoryError": "Não foi possível carregar o diretório",
+        "retryDirectory": "Use Atualizar diretório para tentar novamente",
+        "downloadingFile": "Baixando",
+        "fileDownloaded": "Baixado",
+        "downloadCancelled": "Download cancelado ou falhou",
+        "downloadError": "Falha no download",
+        "downloadUnavailable": "O download requer a conexão do aplicativo",
+        "ssh-password": "Senha",
+        "ssh-password-confirm": "Confirmar senha",
+        "wifi-password": "Senha Wi-Fi",
+        "wifi-password-confirm": "Confirmar senha Wi-Fi",
+        "powerPending": "Configuração pendente",
+        "verifying": "Verificando imagem...",
+        "writing": "Gravando...",
+        "search": "Buscar primeira inicialização",
+        "searchDone": "A busca automática terminou. A busca manual continua disponível.",
+        "stop": "Parar busca",
+        "download": "Baixar firmware",
+        "progressDrive": "Unidade",
+        "progressFlash": "Gravar",
+        "progressBoot": "Iniciar",
+        "progressDiscover": "Buscar",
+        "progressBootstrap": "Instalar",
+        "remoteFiles": "Arquivos remotos",
+        "prebakedFamily": "Imagem com Klipper pré-instalado",
+        "powerLabel": "Energia",
+        "ssidPlaceholder": "Nome da rede / SSID"
+    }
 };
 function studioLanguage() {
     const locale = typeof navigator === 'undefined' ? 'en' : navigator.language;
     return /^es/i.test(locale) ? 'Español' : /^pt/i.test(locale) ? 'Português' : 'English';
 }
 function studioText(key, language = studioLanguage()) {
-    return (STUDIO_INSTALLATION_TEXT[language] || STUDIO_INSTALLATION_TEXT.English)[key];
+    return (STUDIO_INSTALLATION_TEXT[language] || STUDIO_INSTALLATION_TEXT.English)[key] ?? STUDIO_INSTALLATION_TEXT.English[key];
 }
 document.addEventListener('DOMContentLoaded', () => {
+    document.documentElement.lang = /^es/i.test(navigator.language) ? 'es' : /^pt/i.test(navigator.language) ? 'pt' : 'en';
     const start = document.getElementById('start-first-boot-scan');
     const stop = document.getElementById('stop-first-boot-scan');
     if (start) start.textContent = studioText('search');
     if (stop) stop.textContent = studioText('stop');
 });
+
+window.showProvisioningError = function (field, code) {
+    const fields = {wifi_ssid: 'wifi-ssid', wifi_password: 'wifi-password', ssh_password: 'ssh-password', username: 'ssh-username', hostname: 'hostname-input', target_drive: 'drive-select', image_path: 'custom-image-path'};
+    const id = fields[field];
+    if (id) {
+        showInputError(id, studioText(code) || studioText('provisioningInvalid'));
+        updateInputErrorSummary();
+        focusInputError(id);
+    }
+    window.updateDeviceState('ERROR', 0, studioText('provisioningFailed'));
+};

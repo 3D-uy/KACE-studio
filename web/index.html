@@ -38,22 +38,22 @@
                 <img src="KACE-studio-logo.png" alt="KACE Studio Logo" class="sidebar-logo">
             </div>
             <nav class="nav-menu">
-                <button class="nav-item active" onclick="switchTab('imager-tab')" aria-label="Smart Imager" title="Smart Imager">
-                    <i class="fa-solid fa-compact-disc"></i> <span class="nav-text">Smart Imager</span>
+                <button class="nav-item active" onclick="switchTab('imager-tab')" aria-label="Smart Imager" title="Smart Imager" data-ui-label="navImager">
+                    <i class="fa-solid fa-compact-disc"></i> <span class="nav-text"><span data-ui-text="navImager">Smart Imager</span></span>
                 </button>
-                <button class="nav-item" onclick="switchTab('credentials-tab')" id="credentials-nav-btn" aria-label="Credentials" title="Credentials">
-                    <i class="fa-solid fa-key"></i> <span class="nav-text">Credentials</span>
+                <button class="nav-item" onclick="switchTab('credentials-tab')" id="credentials-nav-btn" aria-label="Credentials" title="Credentials" data-ui-label="navCredentials">
+                    <i class="fa-solid fa-key"></i> <span class="nav-text"><span data-ui-text="navCredentials">Credentials</span></span>
                 </button>
-                <button class="nav-item" onclick="switchTab('discovery-tab')" aria-label="Discovery" title="Discovery">
-                    <i class="fa-solid fa-satellite-dish"></i> <span class="nav-text">Discovery</span>
+                <button class="nav-item" onclick="switchTab('discovery-tab')" aria-label="Discovery" title="Discovery" data-ui-label="navDiscovery">
+                    <i class="fa-solid fa-satellite-dish"></i> <span class="nav-text"><span data-ui-text="navDiscovery">Discovery</span></span>
                 </button>
-                <button class="nav-item" id="terminal-nav-btn" onclick="switchTab('terminal-tab')" aria-label="SSH Workspace" title="SSH Workspace">
-                    <i class="fa-solid fa-terminal"></i> <span class="nav-text">SSH Workspace</span>
+                <button class="nav-item" id="terminal-nav-btn" onclick="switchTab('terminal-tab')" aria-label="SSH Workspace" title="SSH Workspace" data-ui-label="navSsh">
+                    <i class="fa-solid fa-terminal"></i> <span class="nav-text"><span data-ui-text="navSsh">SSH Workspace</span></span>
                 </button>
 
                 <div class="sftp-browser-card" id="sftp-browser-panel" style="display: none; margin-top: 8px;">
                     <div class="sftp-header">
-                        <span class="sftp-title"><i class="fa-solid fa-folder-open"></i> SSH browser (SFTP)</span>
+                        <span class="sftp-title"><i class="fa-solid fa-folder-open"></i> <span data-ui-text="sftpBrowser">SSH browser (SFTP)</span></span>
                         <div class="sftp-path-container">
                             <input type="text" aria-label="Remote directory" data-ui-label="directory" id="sftp-current-path" value="/home/kace" readonly>
                             <button class="btn btn-secondary btn-sm" onclick="navigateSftpUp()" aria-label="Go up a directory" data-ui-label="up" title="Go up a directory"><i class="fa-solid fa-arrow-up"></i></button>
@@ -62,7 +62,7 @@
                         </div>
                     </div>
                     <p id="sftp-status" class="sftp-status" role="status" aria-live="polite"></p>
-                    <div class="sftp-file-list" id="sftp-file-list" role="group" aria-label="Remote files">
+                    <div class="sftp-file-list" id="sftp-file-list" role="group" aria-label="Remote files" data-ui-label="remoteFiles">
                         <!-- Populated dynamically via JS -->
                     </div>
                 </div>
@@ -72,7 +72,7 @@
                 <button id="printer-power-btn" class="power-control state-init" type="button"
                         onclick="togglePrinterPower()" disabled title="Select a Moonraker device to read printer power">
                     <i class="fa-solid fa-power-off" aria-hidden="true"></i>
-                    <span class="power-control-label">Power</span>
+                    <span class="power-control-label" data-ui-text="powerLabel">Power</span>
                     <span id="printer-power-state" class="power-control-state">init</span>
                 </button>
             </div>
@@ -85,19 +85,19 @@
                 <div class="vertical-progress-line"></div>
                 <div class="vertical-step active" id="step-unknown">
                     <span class="step-num">1</span>
-                    <span class="step-label">Drive</span>
+                    <span class="step-label" data-ui-text="progressDrive">Drive</span>
                 </div>
                 <div class="vertical-step" id="step-flashing">
                     <span class="step-num">2</span>
-                    <span class="step-label">Flash</span>
+                    <span class="step-label" data-ui-text="progressFlash">Flash</span>
                 </div>
                 <div class="vertical-step" id="step-booting">
                     <span class="step-num">3</span>
-                    <span class="step-label">Boot</span>
+                    <span class="step-label" data-ui-text="progressBoot">Boot</span>
                 </div>
                 <div class="vertical-step" id="step-discovered">
                     <span class="step-num">4</span>
-                    <span class="step-label">Discover</span>
+                    <span class="step-label" data-ui-text="progressDiscover">Discover</span>
                 </div>
                 <div class="vertical-step" id="step-ssh">
                     <span class="step-num">5</span>
@@ -105,7 +105,7 @@
                 </div>
                 <div class="vertical-step" id="step-bootstrapped">
                     <span class="step-num">6</span>
-                    <span class="step-label">Bootstrap</span>
+                    <span class="step-label" data-ui-text="progressBootstrap">Bootstrap</span>
                 </div>
             </div>
             
@@ -122,17 +122,17 @@
             <!-- Stage A: Smart SD Card Imager -->
             <section id="imager-tab" class="tab-content active">
                 <div class="header">
-                    <h2>Smart SD Card Imager</h2>
-                    <p>Prepare a bootable Raspberry Pi OS image pre-configured with primary settings.</p>
+                    <h2><span data-ui-text="imagerTitle">Smart SD Card Imager</span></h2>
+                    <p><span data-ui-text="imagerIntro">Prepare a bootable Raspberry Pi OS image pre-configured with primary settings.</span></p>
                 </div>
                 
                 <div class="card">
                     <div class="form-section imager-grid">
-                        <h3>Configuration Options</h3>
+                        <h3><span data-ui-text="configurationOptions">Configuration Options</span></h3>
                         
                         <!-- Step 1: Select Raspberry Pi -->
                         <div class="form-group">
-                            <label><span class="brand-orange">STEP 1:</span> RASPBERRY PI MODEL</label>
+                            <label><span class="brand-orange"><span data-ui-text="step1">STEP 1:</span></span> <span data-ui-text="piModel">RASPBERRY PI MODEL</span></label>
                             <div class="illustrated-select">
                                     <span class="select-logos" aria-hidden="true"><img src="pi_icon.png" alt=""></span>
                                     <select id="pi-model-select" aria-describedby="pi-model-select-description" aria-label="Raspberry Pi model">
@@ -148,7 +148,7 @@
 
                         <!-- Step 2: Select OS / Dashboard -->
                         <div class="form-group">
-                            <label><span class="brand-orange">STEP 2:</span> OS DASHBOARD</label>
+                            <label><span class="brand-orange"><span data-ui-text="step2">STEP 2:</span></span> <span data-ui-text="osDashboard">OS DASHBOARD</span></label>
                             <div class="imager-dashboard-row">
                                 <div class="imager-dashboard">
                                     <div class="illustrated-select">
@@ -173,53 +173,53 @@
 
                         <!-- Step 3: OS Image Source -->
                         <div class="form-group">
-                            <label for="image-source-select"><span class="brand-orange">STEP 3:</span> OS IMAGE SOURCE</label>
+                            <label for="image-source-select"><span class="brand-orange"><span data-ui-text="step3">STEP 3:</span></span> <span data-ui-text="imageSource">OS IMAGE SOURCE</span></label>
                             <select id="image-source-select" onchange="toggleImageSource(this.value)">
-                                <option value="default" selected>Pre-baked OS Image (Recommended)</option>
-                                <option value="raspios_lite">Advanced / Custom (Raspberry Pi OS Lite)</option>
-                                <option value="custom">Custom OS Image (Local file)</option>
+                                <option value="default" selected data-ui-text="prebakedImage">Pre-baked OS Image (Recommended)</option>
+                                <option value="raspios_lite" data-ui-text="liteImage">Advanced / Custom (Raspberry Pi OS Lite)</option>
+                                <option value="custom" data-ui-text="customImage">Custom OS Image (Local file)</option>
                             </select>
                             <div class="input-row" id="custom-image-wrapper" style="display: none; margin-top: 8px;">
                                 <input type="text" id="custom-image-path" readonly placeholder="Click Browse to select local image..." style="flex-grow: 1;">
                                 <button type="button" class="btn btn-secondary" onclick="browseLocalImage()">
-                                    <i class="fa-solid fa-folder-open"></i> Browse
+                                    <i class="fa-solid fa-folder-open"></i> <span data-ui-text="browse">Browse</span>
                                 </button>
                             </div>
                             <div id="custom-image-type-wrapper" style="display: none; margin-top: 8px;">
-                                <label for="custom-image-type" style="font-size: 12px;">CUSTOM IMAGE FAMILY</label>
+                                <label for="custom-image-type" style="font-size: 12px;"><span data-ui-text="customFamily">CUSTOM IMAGE FAMILY</span></label>
                                 <select id="custom-image-type">
                                     <option value="custom_vanilla" selected>Vanilla Raspberry Pi OS</option>
-                                    <option value="custom_prebaked">Pre-baked Klipper image</option>
+                                    <option value="custom_prebaked" data-ui-text="prebakedFamily">Pre-baked Klipper image</option>
                                 </select>
-                                <span class="tip-text">Choose pre-baked only when Klipper/Moonraker are already installed in the image.</span>
+                                <span class="tip-text"><span data-ui-text="prebakedHint">Choose pre-baked only when Klipper/Moonraker are already installed in the image.</span></span>
                             </div>
                         </div>
 
                         <!-- Step 4: Target Storage Device -->
                         <div class="form-group">
-                            <label for="drive-select"><span class="brand-orange">STEP 4:</span> TARGET SD CARD / USB</label>
+                            <label for="drive-select"><span class="brand-orange"><span data-ui-text="step4">STEP 4:</span></span> <span data-ui-text="targetStorage">TARGET SD CARD / USB</span></label>
                             <div class="input-row">
                                 <select id="drive-select">
-                                    <option value="">Scanning for removable drives...</option>
+                                    <option value="" data-ui-text="scanningDrives">Scanning for removable drives...</option>
                                 </select>
                                 <button type="button" class="btn btn-secondary" onclick="refreshDrives()" aria-label="Refresh drives" data-ui-label="refreshDrives">
                                     <i class="fa-solid fa-rotate"></i>
                                 </button>
                             </div>
-                            <span class="tip-text"><i class="fa-solid fa-circle-exclamation"></i> Only removable drives are listed to prevent data loss.</span>
+                            <span class="tip-text"><i class="fa-solid fa-circle-exclamation"></i> <span data-ui-text="removableHint">Only removable drives are listed to prevent data loss.</span></span>
                         </div>
 
                         <!-- Steps 5 & 6: Hostname & Time Zone side-by-side -->
                         <div class="imager-identity-row">
                             <!-- Step 5: Hostname -->
                             <div class="form-group" style="flex: 1; margin-bottom: 0;">
-                                <label for="hostname-input"><span class="brand-orange">STEP 5:</span> HOSTNAME</label>
+                                <label for="hostname-input"><span class="brand-orange"><span data-ui-text="step5">STEP 5:</span></span> <span data-ui-text="hostnameLabel">HOSTNAME</span></label>
                                 <input type="text" id="hostname-input" value="kace.local" placeholder="e.g. kace.local">
                             </div>
 
                             <!-- Step 6: Time Zone -->
                             <div class="form-group" style="flex: 1; margin-bottom: 0;">
-                                <label for="timezone-select"><span class="brand-orange">STEP 6:</span> SYSTEM TIME ZONE</label>
+                                <label for="timezone-select"><span class="brand-orange"><span data-ui-text="step6">STEP 6:</span></span> <span data-ui-text="timezoneLabel">SYSTEM TIME ZONE</span></label>
                                 <select id="timezone-select">
                                     <option value="America/Argentina/Buenos_Aires">America/Argentina/Buenos_Aires (GMT-3)</option>
                                     <option value="America/Sao_Paulo" selected>America/Sao_Paulo (GMT-3)</option>
@@ -246,7 +246,7 @@
                         </div>
                         <div class="imager-actions">
                             <button type="button" class="btn btn-primary" onclick="switchTab('credentials-tab')" style="padding: 8px 24px;">
-                                Next <i class="fa-solid fa-arrow-right" style="margin-left: 6px;"></i>
+                                <span data-ui-text="next">Next</span> <i class="fa-solid fa-arrow-right" style="margin-left: 6px;"></i>
                             </button>
                         </div>
                     </div>
@@ -256,8 +256,8 @@
             <!-- Stage A2: Credentials & Services -->
             <section id="credentials-tab" class="tab-content">
                 <div class="header">
-                    <h2>Credentials & Services</h2>
-                    <p>Configure account credentials, WiFi networks, choose services, and run write tasks.</p>
+                    <h2><span data-ui-text="credentialsTitle">Credentials & Services</span></h2>
+                    <p><span data-ui-text="credentialsIntro">Configure account credentials, WiFi networks, choose services, and run write tasks.</span></p>
                 </div>
                 
                 <div class="card">
@@ -267,16 +267,16 @@
                         <div class="credentials-fields">
                             <!-- Step 7: Credentials -->
                             <div class="form-group" style="margin-bottom: 0;">
-                                <label for="ssh-username"><span class="brand-orange">STEP 7:</span> ACCOUNT USERNAME</label>
+                                <label for="ssh-username"><span class="brand-orange"><span data-ui-text="step7">STEP 7:</span></span> <span data-ui-text="accountUsername">ACCOUNT USERNAME</span></label>
                                 <input type="text" id="ssh-username" value="kace" placeholder="Username" style="margin-bottom: 8px;">
                                 <div class="password-wrapper" style="margin-bottom: 8px;">
                                     <label for="ssh-password" data-password-label="ssh-password">Password</label>
-                                    <input type="password" id="ssh-password" placeholder="Password">
+                                    <input type="password" id="ssh-password" placeholder="Password" data-ui-placeholder="ssh-password">
                                     <button type="button" class="password-toggle-icon" aria-label="Show password" aria-controls="ssh-password" aria-pressed="false" onclick="togglePasswordVisibility('ssh-password', this)"><i class="fa-solid fa-eye" aria-hidden="true"></i></button>
                                 </div>
                                 <div class="password-wrapper">
                                     <label for="ssh-password-confirm" data-password-label="ssh-password-confirm">Confirm password</label>
-                                    <input type="password" id="ssh-password-confirm" placeholder="Confirm Password">
+                                    <input type="password" id="ssh-password-confirm" placeholder="Confirm Password" data-ui-placeholder="ssh-password-confirm">
                                     <button type="button" class="password-toggle-icon" aria-label="Show confirm password" aria-controls="ssh-password-confirm" aria-pressed="false" onclick="togglePasswordVisibility('ssh-password-confirm', this)"><i class="fa-solid fa-eye" aria-hidden="true"></i></button>
                                 </div>
                             </div>
@@ -284,23 +284,23 @@
                             <!-- Step 8: WiFi Setup -->
                             <div class="form-group" style="margin-bottom: 0;">
                                 <div class="wifi-label-row">
-                                    <label for="wifi-ssid"><span class="brand-orange">STEP 8:</span> WI-FI NETWORK</label>
-                                    <label for="wifi-security-select" class="wifi-security-label">Security
+                                    <label for="wifi-ssid"><span class="brand-orange"><span data-ui-text="step8">STEP 8:</span></span> <span data-ui-text="wifiNetwork">WI-FI NETWORK</span></label>
+                                    <label for="wifi-security-select" class="wifi-security-label"><span data-ui-text="securityLabel">Security</span>
                                         <select id="wifi-security-select" onchange="toggleWifiSecurity()">
                                             <option value="wpa2" selected>WPA2/WPA3</option>
-                                            <option value="open">Open</option>
+                                            <option value="open" data-ui-text="openWifi">Open</option>
                                         </select>
                                     </label>
                                 </div>
-                                <input type="text" id="wifi-ssid" placeholder="Network Name / SSID" style="margin-bottom: 8px;">
+                                <input type="text" id="wifi-ssid" placeholder="Network Name / SSID" data-ui-placeholder="ssidPlaceholder" style="margin-bottom: 8px;">
                                 <div class="password-wrapper" id="wifi-password-wrapper" style="margin-bottom: 8px;">
                                     <label for="wifi-password" data-password-label="wifi-password">Wi-Fi password</label>
-                                    <input type="password" id="wifi-password" placeholder="WiFi Password">
+                                    <input type="password" id="wifi-password" placeholder="WiFi Password" data-ui-placeholder="wifi-password">
                                     <button type="button" class="password-toggle-icon" aria-label="Show wi-fi password" aria-controls="wifi-password" aria-pressed="false" onclick="togglePasswordVisibility('wifi-password', this)"><i class="fa-solid fa-eye" aria-hidden="true"></i></button>
                                 </div>
                                 <div class="password-wrapper" id="wifi-password-confirm-wrapper">
                                     <label for="wifi-password-confirm" data-password-label="wifi-password-confirm">Confirm Wi-Fi password</label>
-                                    <input type="password" id="wifi-password-confirm" placeholder="Confirm WiFi Password">
+                                    <input type="password" id="wifi-password-confirm" placeholder="Confirm WiFi Password" data-ui-placeholder="wifi-password-confirm">
                                     <button type="button" class="password-toggle-icon" aria-label="Show confirm wi-fi password" aria-controls="wifi-password-confirm" aria-pressed="false" onclick="togglePasswordVisibility('wifi-password-confirm', this)"><i class="fa-solid fa-eye" aria-hidden="true"></i></button>
                                 </div>
                             </div>
@@ -308,52 +308,52 @@
 
                         <!-- Step 9: System services -->
                         <div class="form-group" style="margin-top: 24px;">
-                            <label><span class="brand-orange">STEP 9:</span> SYSTEM SERVICES</label>
+                            <label><span class="brand-orange"><span data-ui-text="step9">STEP 9:</span></span> <span data-ui-text="systemServices">SYSTEM SERVICES</span></label>
                             <div class="service-options-grid">
                                 <div class="service-option">
                                     <label for="ssh-enable" class="service-option-label">
-                                        <input type="checkbox" id="ssh-enable"> Enable SSH
+                                        <input type="checkbox" id="ssh-enable"> <span data-ui-text="enableSsh">Enable SSH</span>
                                     </label>
                                     <button type="button" class="service-info" aria-label="About Enable SSH">
                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
-                                    <div class="service-tooltip" role="tooltip">Allows KACE Studio to connect to the Pi after it boots and opens the SSH Workspace.</div>
+                                    <div class="service-tooltip" role="tooltip"><span data-ui-text="sshHint">Allows KACE Studio to connect to the Pi after it boots and opens the SSH Workspace.</span></div>
                                 </div>
                                 <div class="service-option">
                                     <label for="crowsnest-enable" class="service-option-label">
-                                        <input type="checkbox" id="crowsnest-enable"> Install Crowsnest (Webcam Streamer)
+                                        <input type="checkbox" id="crowsnest-enable"> <span data-ui-text="installCrowsnest">Install Crowsnest (Webcam Streamer)</span>
                                     </label>
                                     <button type="button" class="service-info" aria-label="About Crowsnest">
                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
-                                    <div class="service-tooltip" role="tooltip">Installs the webcam streaming service. Leave it disabled when the printer has no camera.</div>
+                                    <div class="service-tooltip" role="tooltip"><span data-ui-text="crowsnestHint">Installs the webcam streaming service. Leave it disabled when the printer has no camera.</span></div>
                                 </div>
                                 <div class="service-option">
                                     <label for="ssh-password-auth" class="service-option-label">
-                                        <input type="checkbox" id="ssh-password-auth" checked> Enable Password Authentication
+                                        <input type="checkbox" id="ssh-password-auth" checked> <span data-ui-text="passwordAuth">Enable Password Authentication</span>
                                     </label>
                                     <button type="button" class="service-info" aria-label="About password authentication">
                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
-                                    <div class="service-tooltip" role="tooltip">Lets you sign in using the password above. Disable it only when SSH keys are already configured.</div>
+                                    <div class="service-tooltip" role="tooltip"><span data-ui-text="passwordAuthHint">Lets you sign in using the password above. Disable it only when SSH keys are already configured.</span></div>
                                 </div>
                                 <div class="service-option">
                                     <label for="power-relay-enable" class="service-option-label">
-                                        <input type="checkbox" id="power-relay-enable" onchange="togglePowerRelaySettings()"> Pi controls printer power through a GPIO relay
+                                        <input type="checkbox" id="power-relay-enable" onchange="togglePowerRelaySettings()"> <span data-ui-text="relayEnabled">Pi controls printer power through a GPIO relay</span>
                                     </label>
                                     <button type="button" class="service-info" aria-label="About GPIO relay power control">
                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
-                                    <div class="service-tooltip" role="tooltip">Use only when a relay wired to the Pi physically switches printer power. It enables Moonraker power control.</div>
+                                    <div class="service-tooltip" role="tooltip"><span data-ui-text="relayHint">Use only when a relay wired to the Pi physically switches printer power. It enables Moonraker power control.</span></div>
                                 </div>
                                 <div class="service-option">
                                     <label for="skip-write-verification" class="service-option-label">
-                                        <input type="checkbox" id="skip-write-verification"> Skip SD readback verification (faster)
+                                        <input type="checkbox" id="skip-write-verification"> <span data-ui-text="skipReadback">Skip SD readback verification (faster)</span>
                                     </label>
                                     <button type="button" class="service-info" aria-label="About SD readback verification">
                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
-                                    <div class="service-tooltip" role="tooltip">Not recommended. Verification reads the full image back from the SD card and detects write errors before the card is used.</div>
+                                    <div class="service-tooltip" role="tooltip"><span data-ui-text="readbackHint">Not recommended. Verification reads the full image back from the SD card and detects write errors before the card is used.</span></div>
                                 </div>
                             </div>
                         </div>
@@ -362,48 +362,48 @@
                              <summary><span class="brand-orange">GPIO RELAY:</span> POWER CONTROL</summary>
                              <div class="relay-fields">
                                  <div class="form-group" style="margin-bottom: 0;">
-                                     <label for="power-device-name" style="text-transform: none; font-size: 12px;">Device name</label>
+                                     <label for="power-device-name" style="text-transform: none; font-size: 12px;"><span data-ui-text="deviceName">Device name</span></label>
                                      <input type="text" id="power-device-name" value="printer" placeholder="printer">
                                  </div>
                                  <div class="form-group" style="margin-bottom: 0;">
-                                     <label for="power-gpio-number" style="text-transform: none; font-size: 12px;">GPIO number</label>
+                                     <label for="power-gpio-number" style="text-transform: none; font-size: 12px;"><span data-ui-text="gpioNumber">GPIO number</span></label>
                                      <input type="number" id="power-gpio-number" min="0" max="999" step="1" placeholder="20">
                                  </div>
                              </div>
                              <div class="relay-options-grid">
                                  <div class="service-option">
                                      <label for="power-active-low" class="service-option-label">
-                                         <input type="checkbox" id="power-active-low"> Signal is active low
+                                         <input type="checkbox" id="power-active-low"> <span data-ui-text="activeLow">Signal is active low</span>
                                      </label>
                                      <button type="button" class="service-info" aria-label="About active low relay signals">
                                          <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                      </button>
-                                     <div class="service-tooltip" role="tooltip">Enable this when the relay turns on when the GPIO signal is low. Check the relay board documentation first.</div>
+                                     <div class="service-tooltip" role="tooltip"><span data-ui-text="activeLowHint">Enable this when the relay turns on when the GPIO signal is low. Check the relay board documentation first.</span></div>
                                  </div>
                                  <div class="service-option">
                                      <label for="restart-klipper-when-powered" class="service-option-label">
-                                         <input type="checkbox" id="restart-klipper-when-powered" checked> Restart Klipper when power is enabled
+                                         <input type="checkbox" id="restart-klipper-when-powered" checked> <span data-ui-text="restartPowered">Restart Klipper when power is enabled</span>
                                      </label>
                                      <button type="button" class="service-info" aria-label="About restarting Klipper after power is enabled">
                                          <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                      </button>
-                                     <div class="service-tooltip" role="tooltip">Restarts Klipper after the printer powers on so it can reconnect to the controller.</div>
+                                     <div class="service-tooltip" role="tooltip"><span data-ui-text="restartHint">Restarts Klipper after the printer powers on so it can reconnect to the controller.</span></div>
                                  </div>
                              </div>
                          </details>
 
                          <!-- Step 10: Resume & Write Summary -->
                          <div class="form-group" style="margin-top: 24px;">
-                             <label><span class="brand-orange">STEP 10:</span> RESUME & WRITE</label>
+                             <label><span class="brand-orange"><span data-ui-text="step10">STEP 10:</span></span> <span data-ui-text="resumeWrite">RESUME & WRITE</span></label>
                              <div class="write-action-container" style="position: relative;">
                                  <button class="btn btn-primary btn-block progress-btn" onclick="openFormatModal()" id="flash-action-btn">
                                      <span class="btn-progress-fill" id="btn-progress-fill"></span>
-                                     <span class="btn-text" id="btn-text-content"><i class="fa-solid fa-fire"></i> Write</span>
+                                     <span class="btn-text" id="btn-text-content"><i class="fa-solid fa-fire"></i> <span data-ui-text="write">Write</span></span>
                                  </button>
                                  <div class="flash-status-container" id="flash-status-container" style="display: none; margin-top: 12px; align-items: center; justify-content: space-between; gap: 8px;">
                                      <span class="status-msg" id="flasher-status-msg" style="font-size: 13px; color: var(--text-secondary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap; flex-grow: 1;">Preparing disk write loops...</span>
                                      <button class="btn btn-danger" id="cancel-flash-btn" onclick="cancelFlashing()" title="Cancel flashing" style="padding: 6px 12px; font-size: 12px; flex-shrink: 0; line-height: 1.2;">
-                                         <i class="fa-solid fa-xmark"></i> Cancel
+                                         <i class="fa-solid fa-xmark"></i> <span data-ui-text="cancel">Cancel</span>
                                      </button>
                                  </div>
                              </div>
@@ -419,15 +419,15 @@
                  <div class="modal-card">
                      <div class="modal-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 16px;">
                          <i class="fa-solid fa-circle-check" style="font-size: 26px; color: var(--success-color); text-shadow: 0 0 10px rgba(16, 185, 129, 0.3);"></i>
-                         <h3 id="success-modal-title" style="font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0;">Flashing Completed!</h3>
+                         <h3 id="success-modal-title" style="font-size: 18px; font-weight: 700; color: var(--text-primary); margin: 0;"><span data-ui-text="flashingComplete">Flashing Completed!</span></h3>
                      </div>
                      <div class="modal-body" style="font-size: 14px; line-height: 1.6; margin-bottom: 24px;">
-                         <p style="font-weight: 700; font-size: 15px; color: var(--text-primary); margin-bottom: 10px;">SD Card successfully flashed and provisioned!</p>
-                         <p style="color: var(--text-secondary); margin: 0;">Please insert the card into your Pi, power it on, and switch to the <strong style="color: var(--primary-color);">Discovery</strong> tab.</p>
+                         <p style="font-weight: 700; font-size: 15px; color: var(--text-primary); margin-bottom: 10px;"><span data-ui-text="provisioned">SD Card successfully flashed and provisioned!</span></p>
+                         <p style="color: var(--text-secondary); margin: 0;">Please insert the card into your Pi, power it on, and switch to the <strong style="color: var(--primary-color);"><span data-ui-text="navDiscovery">Discovery</span></strong> tab.</p>
                      </div>
                      <div class="modal-footer" style="display: flex; gap: 12px; justify-content: flex-end;">
-                         <button class="btn btn-secondary" onclick="ejectFlashedDrive()" id="eject-btn" style="padding: 10px 16px; font-weight: 600;"><i class="fa-solid fa-eject"></i> Eject SD Card</button>
-                         <button class="btn btn-success" id="success-done-btn" autofocus onclick="closeSuccessModal()" style="font-weight: 600; padding: 10px 24px;">Done</button>
+                         <button class="btn btn-secondary" onclick="ejectFlashedDrive()" id="eject-btn" style="padding: 10px 16px; font-weight: 600;"><i class="fa-solid fa-eject"></i> <span data-ui-text="eject">Eject SD Card</span></button>
+                         <button class="btn btn-success" id="success-done-btn" autofocus onclick="closeSuccessModal()" style="font-weight: 600; padding: 10px 24px;"><span data-ui-text="done">Done</span></button>
                      </div>
                  </div>
              </dialog>
@@ -498,8 +498,8 @@
                         <div class="connection-info">
                             <i class="fa-solid fa-network-wired active-connection-icon"></i>
                             <div>
-                                <h3 id="connection-title">SSH Session: Disconnected</h3>
-                                <p id="connection-subtitle">No active session. Select a device in the Discovery tab to connect.</p>
+                                <h3 id="connection-title"><span data-ui-text="sshDisconnected">SSH Session: Disconnected</span></h3>
+                                <p id="connection-subtitle"><span data-ui-text="noSshSession">No active session. Select a device in the Discovery tab to connect.</span></p>
                             </div>
                         </div>
                         <div class="workspace-actions" style="display: flex; align-items: center; gap: 10px;">
@@ -522,13 +522,13 @@
                                 </div>
                             </div>
                             <button class="btn btn-primary" id="bootstrap-btn" onclick="startBootstrap()" disabled>
-                                <i class="fa-solid fa-rocket"></i> Bootstrap KACE
+                                <i class="fa-solid fa-rocket"></i> <span data-ui-text="bootstrapAction">Bootstrap KACE</span>
                             </button>
                             <button class="btn btn-secondary" id="authorize-moonraker-btn" onclick="authorizeMoonrakerAccess()" title="Allow this computer’s IP to access Moonraker and printer power. Requires SSH and confirmation; Moonraker may restart." disabled>
-                                Authorize this computer for Moonraker
+                                <span data-ui-text="authorizeComputer">Authorize this computer for Moonraker</span>
                             </button>
                             <button class="btn btn-danger" id="disconnect-btn" onclick="disconnectSSH()" style="display:none;">
-                                Disconnect
+                                <span data-ui-text="disconnect">Disconnect</span>
                             </button>
                         </div>
                     </div>
@@ -637,24 +637,24 @@
         <div class="modal-card">
             <div class="modal-header">
                 <i class="fa-solid fa-triangle-exclamation modal-warn-icon"></i>
-                <h3 id="format-modal-title">Confirm & Write</h3>
+                <h3 id="format-modal-title"><span data-ui-text="confirmWrite">Confirm & Write</span></h3>
             </div>
             <div class="modal-body">
-                <p><strong>Warning!</strong> This operation will completely format the selected storage device:</p>
+                <p><strong><span data-ui-text="warning">Warning!</span></strong> <span data-ui-text="formatWarning">This operation will completely format the selected storage device:</span></p>
                 <div class="target-drive-summary" id="modal-drive-name">Drive Selection: None</div>
-                <p>All existing partitions and data on this drive will be <strong>permanently destroyed</strong>. This action cannot be undone.</p>
+                <p><span data-ui-text="partitionsWarning">All existing partitions and data on this drive will be</span> <strong><span data-ui-text="destroyed">permanently destroyed</span></strong><span data-ui-text="cannotUndo">. This action cannot be undone.</span></p>
                 <div id="high-risk-drive-confirmation" style="display: none;">
-                    <p><strong>High-risk destination:</strong> this USB/1394 device appears to be an HDD or SSD.</p>
+                    <p><strong><span data-ui-text="highRisk">High-risk destination:</span></strong> <span data-ui-text="highRiskHint">this USB/1394 device appears to be an HDD or SSD.</span></p>
                     <label for="high-risk-confirm-input">
-                        Type <strong id="high-risk-confirm-phrase"></strong> to confirm:
+                        <span data-ui-text="typeConfirm">Type</span> <strong id="high-risk-confirm-phrase"></strong> <span data-ui-text="toConfirm">to confirm:</span>
                     </label>
                     <input id="high-risk-confirm-input" type="text" autocomplete="off"
                            oninput="updateHighRiskConfirmation()">
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-secondary" id="format-cancel-btn" autofocus onclick="closeFormatModal()">Cancel</button>
-                <button class="btn btn-danger" onclick="confirmAndFlash()" id="modal-agree-btn">Agree and Flash</button>
+                <button class="btn btn-secondary" id="format-cancel-btn" autofocus onclick="closeFormatModal()"><span data-ui-text="cancel">Cancel</span></button>
+                <button class="btn btn-danger" onclick="confirmAndFlash()" id="modal-agree-btn"><span data-ui-text="agreeFlash">Agree and Flash</span></button>
             </div>
         </div>
     </dialog>

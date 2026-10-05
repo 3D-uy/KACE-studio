@@ -35,10 +35,10 @@
   },
   "kace": {
     "repository": "https://github.com/3D-uy/KACE.git",
-    "candidate_ref": "561f9b9463b0d443e386f8b1ef468980538093eb",
-    "bootstrap_ref": "47fa845d924e81abb9537205f2b459f8eefdf082",
-    "bootstrap_sha256": "44ddfa7d2b6ad6c9b02564170817a214613afae7c223b6fedcccbfc51ac4cb69",
-    "installer_ref": "561f9b9463b0d443e386f8b1ef468980538093eb",
+    "candidate_ref": "042fcc9cba81e4f4a2d927480853584754fc9f62",
+    "bootstrap_ref": "bd5b3783365deb68e7255f83a480c9288aca96a4",
+    "bootstrap_sha256": "d4cecb47a32f1882863884d65659ac522d34dccfd425c45889e366ead3a91696",
+    "installer_ref": "042fcc9cba81e4f4a2d927480853584754fc9f62",
     "installer_sha256": "de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500",
     "runtime_status": "pinned",
     "required_runtime_files": {
@@ -61,7 +61,7 @@
       "core/configuration_review.py": "c91bbac219471f3d2d27edb5a3a8b9780394614dbb99b8b1eaee6f5f4bf3a98e",
       "core/custom_probe.py": "bfe9ce24c444ff87bea6ab69847bbd2c91d4b328f05a0a18079e255f85500f48",
       "core/dashboard.py": "e9d54055eba60565a06b9259c34a615fb51c7545e7248d7134e26e3f53eb7a40",
-      "core/deployer.py": "325706f2ed7582b5e1c3e082f615e67e68ea860c9c1ac023fb9583b4144080c5",
+      "core/deployer.py": "8f0afa8e43800355609aeedfe963c5050a9ee64b103eff8c256bb9e8b7803de7",
       "core/display_checker.py": "26aeee524f76cad94e2444983ea87a58ce5cd8047a4839f243348bb6d330d32f",
       "core/display_configuration.py": "e7a8a58f1f6792b33500b2bbc701818514d0edeff2a9391803f0c19015ce728b",
       "core/display_warning.py": "8e07e9c9971a2b147fc727562121863fddc0b92269829738a3689e8ef6841f6b",
@@ -82,7 +82,7 @@
       "core/managed_config.py": "69e79746d8215ac0453c8cd8031ee3969e7c798c0e1eb8351f04a5cec253f212",
       "core/mcu_monitor.py": "813e42fa00396b52877c7866ece9938adba75c552a0a563c212cd891af93de1e",
       "core/menu.py": "0d90ed460172c5635c6ad2c1c11cf93615ca91b492fb1f02612c546474c4faaa",
-      "core/moonraker.py": "bfb6c6ecf8868273695604da8c36a6b44bcb2a421191f8f79b411cb450a60d09",
+      "core/moonraker.py": "969b47f78d1fe3623d13bef5bbf386cd2213f541a21a1cf8ca3d05b4ddb0d227",
       "core/moonraker_deployer.py": "9994da64f6a4813a575f6799c902729d2507c6ba464c4eb973a6ebd522961be6",
       "core/motion_model.py": "728b97c8124f708f917422c41cfee8c6adf4ee4e1c420d70b313416a3750b59a",
       "core/outcome_renderer.py": "141d1cc446c85b264b62f2052480eaa00b467e5891cef45a422808310450d34d",
@@ -177,6 +177,8 @@
       "firmware/validator.py": "58b5f929f5add90da3426dee0fae79da57f28245d093aaaef2ff5056f39bd9cd",
       "install.sh": "de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500",
       "kace.py": "694b6a2aa0d1e7259da1006ab7fb0263e833cb8832bfaff3ac76712a641f213e",
+      "requirements-ssh.txt": "8674269c0a7246e85a5de05e078ed0c925bbf25b4574bc20f6ccb79c89759ca0",
+      "requirements.txt": "f1097cf785d07cc907fcc62d0fa2a52f14151bbd47b5dcb4cec4adfab3da551d",
       "templates/printer.cfg.j2": "d1cce169f9b63234c0de61b8c711cb2b82a9ad07886af53c28b3ee39f8e8e437"
     }
   },

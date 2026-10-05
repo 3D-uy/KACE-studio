@@ -120,3 +120,32 @@ removing an obsolete authorized address is currently a manual operation.
 The source-mode bootstrap preference and packaged bootstrap identity remain
 as documented above. GUI screenshots illustrate the interface; they do not
 establish successful storage writing, Pi first boot or printer qualification.
+
+## Remote network and provisioning contracts
+
+Moonraker requests reject HTTP redirects. Configure the final endpoint explicitly;
+power cannot be confirmed using a response from a redirected destination. Image
+downloads retain their separate HTTP policy.
+
+Prebaked WiFi provisioning uses the pinned MainsailOS headless_nm parser format,
+not TOML escaping. Delimiters are chosen without changing the credential value.
+Values that its echo/parser cannot preserve are rejected before disk writing and
+again during direct injection. The upstream GPLv3 parser fixture records its exact
+source revision and hash; Bash is required for its round-trip regression.
+
+SFTP listing failures raise explicit errors and use stable UI codes. Empty
+successful listings remain empty lists. Request/session generations still reject
+stale results and errors. Collecting backend tests never creates bootstrap.sh;
+missing real release inputs must fail rather than be replaced with a mock.
+
+Automatic discovery reads active IPv4 interface prefixes from Windows PowerShell
+or Linux ip JSON, with a five-second enumeration bound. It scans only a single
+unambiguous subnet and at most 1024 addresses. Missing/ambiguous interfaces,
+invalid prefixes or larger networks require manual connection; no /24 guess or
+silent truncation is allowed. Stop and rate-limit controls remain in effect.
+
+Critical Imager, Credentials and recovery messages share the existing EN/ES/PT
+catalogs. Python owns preflight validation and exposes field/code for presentation;
+JavaScript must not infer hardware success. Large Node harness fragments use stdin
+to avoid Windows command-line limits. Native/package/hardware checks remain
+separate from browser fixtures.

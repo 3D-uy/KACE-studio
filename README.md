@@ -131,3 +131,5 @@ KACE Studio is an independent project and is not officially affiliated with or e
 ## 📜 License
 
 KACE Studio is open source under the [GNU GPL v3](LICENSE).
+
+Source corrections: Moonraker redirects are rejected. See [development contracts](docs/DEVELOPMENT.md) for remote-operation and validation limits. The downloadable candidate is unchanged until a new release is prepared. Discovery requires a real, unambiguous subnet within the 1024-address limit; use manual connection otherwise. Prebaked WiFi values must survive the image parser unchanged; SFTP failures are shown as errors.

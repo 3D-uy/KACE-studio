@@ -9,43 +9,6 @@ from unittest.mock import patch
 # Include project root in PATH
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Ensure bootstrap.sh exists locally for testing (pull from sibling KACE repository or create dummy if missing)
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-bootstrap_dest = os.path.join(project_root, "bootstrap.sh")
-if not os.path.exists(bootstrap_dest):
-    sibling_bootstrap = os.path.abspath(os.path.join(project_root, "..", "KACE", "scripts", "bootstrap.sh"))
-    if os.path.exists(sibling_bootstrap):
-        import shutil
-        shutil.copy2(sibling_bootstrap, bootstrap_dest)
-    else:
-        # Create a mock bootstrap.sh that mimics the configuration print statements expected
-        # by the backend tests. This keeps the test suite completely self-contained for CI runners.
-        mock_content = (
-            "#!/bin/bash\n"
-            "DASHBOARD=\"mainsail\"\n"
-            "CROWSNEST=\"false\"\n"
-            "TIMEZONE=\"\"\n"
-            "\n"
-            "while [[ \"$#\" -gt 0 ]]; do\n"
-            "    case $1 in\n"
-            "        --dashboard) DASHBOARD=\"$2\"; shift ;;\n"
-            "        --crowsnest) CROWSNEST=\"$2\"; shift ;;\n"
-            "        --timezone)  TIMEZONE=\"$2\";  shift ;;\n"
-            "    esac\n"
-            "    shift\n"
-            "done\n"
-            "\n"
-            "echo \"--------------------------------------------------------\"\n"
-            "echo \"  Target Configuration\"\n"
-            "echo \"  Dashboard UI : $DASHBOARD\"\n"
-            "echo \"  Webcam Stream: $CROWSNEST\"\n"
-            "echo \"  Timezone     : ${TIMEZONE:-'(Keep system default)'}\"\n"
-            "echo \"--------------------------------------------------------\"\n"
-            "exit 0\n"
-        )
-        with open(bootstrap_dest, "w", encoding="utf-8", newline="\n") as f:
-            f.write(mock_content)
-
 from backend.sha512_crypt import SHA512_CRYPT_ROUNDS, hash_password
 from backend.discovery import get_local_subnet_ips, probe_ip_ports
 from backend.imager import (
@@ -155,13 +118,12 @@ class TestKaceBackend(unittest.TestCase):
         
     def test_subnet_ips_generation(self):
         """Generate the complete /24 from a known interface, without host networking."""
-        with patch("backend.discovery.socket.socket") as socket_factory:
-            connection = socket_factory.return_value
-            connection.getsockname.return_value = ("192.0.2.42", 12345)
+        with patch("backend.discovery.get_ipv4_interfaces", return_value=[
+            {"IPAddress": "192.0.2.42", "PrefixLength": 24}
+        ]):
             ips = get_local_subnet_ips()
 
         self.assertEqual(ips, [f"192.0.2.{host}" for host in range(1, 255) if host != 42])
-        connection.close.assert_called_once()
 
     def test_port_probe_timeout(self):
         """
@@ -1159,10 +1121,11 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
-    def test_sftp_list_directory_returns_empty_when_not_connected(self):
+    def test_sftp_list_directory_raises_when_not_connected(self):
         from backend.ssh_client import SSHSession
         session = SSHSession()
-        self.assertEqual(session.list_directory("/home/kace"), [])
+        with self.assertRaisesRegex(RuntimeError, "disconnected"):
+            session.list_directory("/home/kace")
 
     def test_sftp_download_file_returns_false_when_not_connected(self):
         from backend.ssh_client import SSHSession

@@ -25,5 +25,6 @@ def test_no_detected_interface_does_not_scan_arbitrary_subnet(monkeypatch):
 
     monkeypatch.setattr(socket, "socket", unavailable)
     monkeypatch.setattr(socket, "getaddrinfo", unavailable)
+    monkeypatch.setattr("backend.discovery.get_ipv4_interfaces", lambda: [])
 
     assert get_local_subnet_ips() == []

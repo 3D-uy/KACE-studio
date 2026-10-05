@@ -21,6 +21,14 @@ SSH_INPUT_TIMEOUT_SECONDS = 5.0
 _known_hosts_thread_lock = threading.RLock()
 
 
+class SftpListingError(RuntimeError):
+    """A listing failed; an empty directory is a separate successful result."""
+
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
+
 class SSHConnectionDeadlineExceeded(TimeoutError):
     """Raised when the complete SSH trust/connect/retry transaction expires."""
 
@@ -637,7 +645,9 @@ class SSHSession:
         """Returns list of dicts: {name, is_dir, size, modified}"""
         sftp = self.get_sftp()
         if not sftp:
-            return []
+            if not self.is_connected():
+                raise SftpListingError("sftpDisconnected", "SSH is disconnected. Reconnect to list files.")
+            raise SftpListingError("sftpUnavailable", "The SFTP channel could not be initialized.")
         try:
             import stat
             results = []
@@ -650,9 +660,12 @@ class SSHSession:
                     "modified": int(attr.st_mtime) if attr.st_mtime else 0
                 })
             return results
-        except Exception as e:
-            print(f"SFTP list_directory error on path '{path}': {e}")
-            return []
+        except PermissionError as exc:
+            raise SftpListingError("sftpPermissionDenied", "Permission denied while listing this directory.") from exc
+        except TimeoutError as exc:
+            raise SftpListingError("sftpTimedOut", "The directory listing timed out.") from exc
+        except Exception as exc:
+            raise SftpListingError("sftpListFailed", "The remote directory could not be read.") from exc
         finally:
             if sftp:
                 try:
