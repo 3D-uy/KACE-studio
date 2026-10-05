@@ -9,6 +9,23 @@ import urllib.request
 _HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,252}$")
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Keep credentials, methods and results bound to the configured endpoint."""
+
+    def http_error_302(self, request, response, code, message, headers):
+        response.close()
+        raise urllib.error.HTTPError(
+            request.full_url, code, "Moonraker redirects are not allowed", headers, None
+        )
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
+def _urlopen(request, timeout):
+    # A local opener leaves image downloads and other urllib consumers unchanged.
+    return urllib.request.build_opener(_RejectRedirects()).open(request, timeout=timeout)
+
+
 class MoonrakerHttpError(RuntimeError):
     """Raised when Moonraker cannot return a valid JSON response."""
 
@@ -46,7 +63,7 @@ class MoonrakerHttpClient:
             f"{self.base_url}{path}", data=data, headers=headers, method=method
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with _urlopen(request, timeout=self.timeout) as response:
                 body = json.loads(response.read().decode("utf-8", errors="replace"))
         except urllib.error.HTTPError as exc:
             try:

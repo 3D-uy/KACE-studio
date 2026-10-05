@@ -48,7 +48,17 @@ function response(path, name, generation) {return {ok:true,json:async()=>({path,
   requests[2].resolve(response('/delayed','wrong-host.cfg',3)); await tick();
   assert.deepEqual(rendered,[['new.cfg']]);
   assert.equal(sftpGeneration,null);
+  sshConnected=true;
+  loadSftpDirectory('/old-error'); loadSftpDirectory('/current');
+  requests[4].resolve(response('/current','current.cfg',4)); await tick();
+  requests[3].resolve({ok:false,json:async()=>({code:'sftpPermissionDenied'})}); await tick();
+  assert.deepEqual(rendered,[['new.cfg'],['current.cfg']]);
+  assert.equal(sftpCurrentPath,'/current');
+  loadSftpDirectory('/denied');
+  requests[5].resolve({ok:false,json:async()=>({code:'sftpPermissionDenied'})}); await tick();
+  assert.equal(sftpGeneration,null);
+  assert.match(document.getElementById('sftp-status').textContent,/Permission denied/);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
-    result = subprocess.run([node, "-e", harness + source + scenario], capture_output=True, text=True, timeout=10)
+    result = subprocess.run([node, "-"], input=harness + source + scenario, capture_output=True, text=True, encoding="utf-8", timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr

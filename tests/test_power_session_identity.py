@@ -48,6 +48,7 @@ def rig(monkeypatch):
         raise AssertionError("Real network/hardware access is forbidden")
 
     monkeypatch.setattr("urllib.request.urlopen", forbidden)
+    monkeypatch.setattr("backend.moonraker_client._urlopen", forbidden)
     monkeypatch.setattr("socket.socket.connect", forbidden)
     monkeypatch.setattr(main, "SSHSession", FakeSession)
     api = main.Api()

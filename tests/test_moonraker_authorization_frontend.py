@@ -54,6 +54,6 @@ term = {cols: 80, rows: 24, write() {}, clear() {}};
 })().then(() => console.log('completed')).catch(error => {console.error(error); process.exitCode = 1;});
 '''
     script = "const SCENARIO = " + repr(scenario) + ";\n" + script
-    result = subprocess.run([node, "-e", script], text=True, capture_output=True, timeout=10)
+    result = subprocess.run([node, "-"], input=script, text=True, encoding="utf-8", capture_output=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == "completed"

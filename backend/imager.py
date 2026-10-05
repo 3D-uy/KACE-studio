@@ -7,7 +7,7 @@ import tempfile
 import uuid
 import re
 from backend.sha512_crypt import hash_password
-from backend.provisioning import ImageType, WifiSecurity, validate_provisioning
+from backend.provisioning import ImageType, WifiSecurity, validate_provisioning, quote_headless_value
 from backend.resources import resolve_bootstrap_source as _resolve_bootstrap_resource
 
 # Set KACE_DEBUG=1 in the environment to enable verbose path/status logging.
@@ -983,8 +983,6 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
         clean_nm_ssid = wifi_ssid.replace('\n', '').replace('\r', '')
         clean_nm_password = wifi_password.replace('\n', '').replace('\r', '')
         
-        clean_toml_ssid = wifi_ssid.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '')
-        clean_toml_password = wifi_password.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '').replace('\r', '')
 
         # Resolve the mounted volume's physical owner immediately before the
         # first mutation. Use its GUID path so later drive-letter reuse cannot
@@ -1306,13 +1304,10 @@ password_authentication = {"true" if password_auth else "false"}
             # the file.  Without this file, MainsailOS never configures WiFi.
             if wifi_ssid:
                 headless_nm_path = os.path.join(boot_path, "headless_nm.txt")
-                # Escape double-quote characters in SSID/password for the
-                # key="value" format used by headless_nm.
-                esc_hl_ssid = clean_toml_ssid
-                esc_hl_password = clean_toml_password
+                # The consumer strips a delimiter but never decodes backslash escapes.
                 headless_content = (
-                    f'SSID="{esc_hl_ssid}"\n'
-                    f'PASSWORD="{esc_hl_password}"\n'
+                    f'SSID={quote_headless_value(wifi_ssid, "wifi_ssid")}\n'
+                    f'PASSWORD={quote_headless_value(wifi_password, "wifi_password")}\n'
                     f'HIDDEN="false"\n'
                     f'REGDOMAIN="{country_code}"\n'
                 )
@@ -1322,8 +1317,8 @@ password_authentication = {"true" if password_auth else "false"}
                         raise IOError(f"headless_nm.txt not found at: {headless_nm_path}")
                     with open(headless_nm_path, "r", encoding="utf-8") as f_check:
                         c = f_check.read()
-                    if esc_hl_ssid not in c:
-                        raise ValueError("headless_nm.txt verification failed (missing SSID).")
+                    if c != headless_content:
+                        raise ValueError("headless_nm.txt verification failed (content mismatch).")
                     _dbg(f"Successfully wrote headless_nm.txt at {headless_nm_path}")
                 except Exception as e:
                     print(f"[ERROR] Failed writing or verifying headless_nm.txt: {e}", file=sys.stderr)
