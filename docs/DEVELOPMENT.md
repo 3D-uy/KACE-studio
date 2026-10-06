@@ -97,7 +97,30 @@ checks to make a dirty or unpinned source tree look publishable.
 
 ## Contribution and documentation
 
-Start every commit subject, including merge commits, with a relevant icon: `🔧 fix`, `📚 docs`, `🧹 chore`, `📦 release`, or `🔀 merge`.
+### Commit subjects
+
+Every commit subject, including merge commits, must use `<emoji> <type>: <summary>` with exactly one of the mappings below. Choose the type for the main purpose of the change. Do not invent emojis, replace the assigned emoji or use an emoji from another type. `wip` commits must not reach `main`. Tags and release preparation use `🚀 release`; `📦` is not an allowed commit prefix.
+
+| Prefix | Main change |
+| --- | --- |
+| ✨ feat | New functionality |
+| 🔧 fix | Bug fix |
+| 🧹 chore | Maintenance, cleanup or internal tasks |
+| 🧪 test | Tests |
+| 📚 docs | Documentation |
+| ♻️ refactor | Refactoring without behavior changes |
+| ⚡ perf | Performance improvements |
+| 🎨 style | Formatting, style or lint without functional changes |
+| 🔒 security | Security |
+| 🔨 build | Build system, packaging or build dependencies |
+| 🤖 ci | CI/CD, workflows or GitHub Actions |
+| 🚀 release | Releases, tags or version preparation |
+| 🔀 merge | Branch merges |
+| ⏪ revert | Reverting changes |
+| 🗃️ data | Data, fixtures, catalogs or datasets |
+| 🧩 config | Configuration |
+| 🗑️ remove | Removing code, files or functionality |
+| 🚧 wip | Incomplete work; must not reach main |
 
 Keep changes scoped and add meaningful defect coverage before broader regression.
 Use a branch and pull request; preserve required CI checks and the protected-main
