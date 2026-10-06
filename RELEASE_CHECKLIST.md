@@ -171,6 +171,15 @@ Automated CI must never be pointed at physical disks or printer controllers.
 
 ## 7. Publication
 
+### Visual presentation
+
+Use [KACE Studio 0.5.0-rc.2 - Windows x64](https://github.com/3D-uy/KACE-studio/releases/tag/v0.5.0-rc.2) as the visual reference for future releases in both projects. Keep the title clear (product, version and platform where applicable), a prominent normal-download link, a short product summary and EN/ES/PT guide links. Organize the body with descriptive emoji headings, parallel bullets, numbered installation steps and a verification table. Adapt platform and installation sections to the actual project.
+
+Follow the reference's order: release heading, download link and summary; highlights; download and installation; requirements; KACE integration where relevant; limitations; verification; source/changes links; acknowledgments. The verification table and checksum blocks must identify the actual version, exact tag target/source commit, platform, build toolchain where relevant, signature status, verified reproduction and CI links. Link separately published checksums and show a suitable verification command. Describe the contents actually distributed and distinguish automated validation from pending physical qualification. Use current facts and hashes; never copy the reference candidate's claims or values into a new release.
+
+The exclusive emoji/type catalog applies to commit subjects (including tag annotation subjects). Release prose may follow the reference's presentation icons. Review both commit prefixes and release layout before publishing; visual formatting does not replace any release gate.
+
+
 - [ ] Publish KACE first and KACE Studio second.
 - [ ] Use immutable tags and record their resolved commits.
 - [ ] Publish checksums through a channel separate from the artifact download.
