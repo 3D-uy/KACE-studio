@@ -79,13 +79,15 @@ startFirmwareCheckpointWatch();
 
 
 def test_first_boot_discovery_is_bounded_stoppable_and_serial():
+    retry = APP[APP.index('let discoveryScanRetryAt'):APP.index('function triggerScan()')]
+    renderer = APP[APP.index('function populateDevices(devices)'):APP.index('function connectManually()')]
     discovery = APP[APP.index('let firstBootDiscovery'):APP.index('const STUDIO_INSTALLATION_TEXT')]
     run_js(HARNESS + r'''
 let now=100000, scans=0, discoveryScanInFlight=false;
 Date.now=()=>now;
 function triggerScan(){scans++;discoveryScanInFlight=true;}
 function stopDiscoveryScanTimer(){}
-''' + discovery + r'''
+''' + retry + renderer + discovery + r'''
 startFirstBootDiscovery();
 assert.equal(scans,1);
 now+=20000;timers[0]();assert.equal(scans,1);
@@ -93,6 +95,8 @@ discoveryScanInFlight=false;timers[0]();assert.equal(scans,2);
 now+=600000;timers[0]();assert.equal(firstBootDiscovery,null);
 startFirstBootDiscovery();stopFirstBootDiscovery();assert.equal(firstBootDiscovery,null);
 assert.equal(nodes.get('stop-first-boot-scan').hidden,true);
+assert.equal(discoveryScanRetryTimer,null);
+assert(nodes.get('discovered-device-list').children.some(child=>child.innerHTML.includes('discovery-radar')));
 ''')
 
 

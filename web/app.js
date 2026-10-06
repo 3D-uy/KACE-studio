@@ -1207,8 +1207,50 @@ function stopDiscoveryScanTimer() {
 }
 
 let discoveryScanInFlight = false;
+let discoveryScanRetryAt = 0;
+let discoveryScanRetryTimer = null;
+
+function clearDiscoveryScanRetry() {
+    if (discoveryScanRetryTimer !== null) window.clearInterval(discoveryScanRetryTimer);
+    discoveryScanRetryTimer = null;
+    discoveryScanRetryAt = 0;
+}
+
+function scheduleDiscoveryScanRetry(waitSeconds, scanEpoch) {
+    clearDiscoveryScanRetry();
+    discoveryScanRetryAt = Date.now() + waitSeconds * 1000;
+    document.getElementById('scanner-visual')?.classList.remove('is-scanning');
+    const title = document.getElementById('discovery-scan-title');
+    if (title) title.textContent = studioText('lookingTitle');
+    const elapsed = document.getElementById('discovery-scan-time');
+    if (elapsed) elapsed.hidden = true;
+
+    const updateWait = () => {
+        if (scanEpoch !== discoveryScanEpoch) return;
+        const seconds = Math.max(0, Math.ceil((discoveryScanRetryAt - Date.now()) / 1000));
+        if (seconds === 0) {
+            clearDiscoveryScanRetry();
+            updateDiscoveryControls(lastDiscoveryDevices.length > 0);
+            if (firstBootDiscovery) {
+                firstBootDiscovery.lastScan = -Infinity;
+                firstBootDiscovery.tick(); // Retains the session deadline and pause gate.
+            } else {
+                triggerScan();
+            }
+            return;
+        }
+        const message = studioText('scanWait').replace('{seconds}', seconds);
+        document.getElementById('scan-status-text').textContent = message;
+        const detail = document.getElementById('discovery-scan-detail');
+        if (detail) detail.textContent = message;
+    };
+    discoveryScanRetryTimer = window.setInterval(updateWait, 1000);
+    updateWait();
+    updateDiscoveryControls(lastDiscoveryDevices.length > 0);
+}
+
 function triggerScan() {
-    if (discoveryScanInFlight) return;
+    if (discoveryScanInFlight || discoveryScanRetryTimer !== null) return;
     if (firstBootDiscovery && firstBootDiscovery.paused) return;
     discoveryScanInFlight = true;
     const scanEpoch = discoveryScanEpoch;
@@ -1219,7 +1261,8 @@ function triggerScan() {
 
     if (visual) visual.classList.add('scanning');
     text.textContent = studioText('scanning');
-    list.innerHTML = `
+    if (lastDiscoveryDevices.length === 0) {
+        list.innerHTML = `
         <div class="discovery-waiting is-scanning" id="scanner-visual">
             <div class="discovery-radar" aria-hidden="true">
                 <span class="discovery-radar-ring ring-one"></span>
@@ -1228,10 +1271,10 @@ function triggerScan() {
             </div>
             <div class="discovery-waiting-copy">
                 <p class="discovery-eyebrow">${studioText('localScan')}</p>
-                <h4>${studioText('scanningTitle')}</h4>
-                <p>${studioText('scanningDetail')}</p>
+                <h4 id="discovery-scan-title">${studioText('scanningTitle')}</h4>
+                <p id="discovery-scan-detail">${studioText('scanningDetail')}</p>
             </div>
-            <div class="discovery-scan-time" aria-label="Scan elapsed time">
+            <div class="discovery-scan-time" id="discovery-scan-time" aria-label="Scan elapsed time">
                 <i class="fa-regular fa-clock" aria-hidden="true"></i>
                 <span>${studioText('elapsed')}</span>
                 <strong id="discovery-scan-elapsed">0s</strong>
@@ -1243,8 +1286,9 @@ function triggerScan() {
                 <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> ${studioText('useHostname')}</p>
             </div>
         </div>
-    `;
-    startDiscoveryScanTimer();
+        `;
+        startDiscoveryScanTimer();
+    }
 
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.scan_network().then(devices => {
@@ -1255,9 +1299,8 @@ function triggerScan() {
             if (visual) visual.classList.remove('scanning');
             // Handle rate-limit signal returned by the backend
             if (devices && !Array.isArray(devices) && devices.status === 'rate_limited') {
-                const wait = Math.ceil(devices.wait_seconds || 10);
-                text.textContent = studioText('scanWait').replace('{seconds}', wait);
-                list.innerHTML = '';
+                const wait = Number(devices.wait_seconds);
+                scheduleDiscoveryScanRetry(Number.isFinite(wait) && wait > 0 ? Math.ceil(wait) : 10, scanEpoch);
                 return;
             }
             if (devices && !Array.isArray(devices) && devices.status === 'unavailable') {
@@ -3170,23 +3213,25 @@ function updateDiscoveryControls(hasDevices = false) {
     for (const button of [scan, start]) {
         if (button) {
             button.hidden = !!firstBootDiscovery;
-            button.disabled = discoveryScanInFlight;
+            button.disabled = discoveryScanInFlight || discoveryScanRetryTimer !== null;
         }
     }
-    if (stop) stop.hidden = !firstBootDiscovery && !discoveryScanInFlight;
+    if (stop) stop.hidden = !firstBootDiscovery && !discoveryScanInFlight && discoveryScanRetryTimer === null;
     if (resume) {
         resume.hidden = !(firstBootDiscovery ? firstBootDiscovery.paused : hasDevices);
-        resume.disabled = discoveryScanInFlight;
+        resume.disabled = discoveryScanInFlight || discoveryScanRetryTimer !== null;
     }
 }
 function stopFirstBootDiscovery() {
+    const wasWaiting = discoveryScanRetryTimer !== null;
+    clearDiscoveryScanRetry();
     if (firstBootDiscovery) window.clearInterval(firstBootDiscovery.timer);
     firstBootDiscovery = null;
     // An outstanding backend scan can finish, but must not overwrite a stopped view.
     discoveryScanEpoch++;
     stopDiscoveryScanTimer();
-    if (discoveryScanInFlight) {
-        document.getElementById('discovered-device-list').innerHTML = '';
+    if ((discoveryScanInFlight || wasWaiting) && lastDiscoveryDevices.length === 0) {
+        populateDevices([]);
     }
     const progress = document.getElementById('first-boot-scan-progress');
     if (progress) progress.textContent = '';
@@ -3197,7 +3242,7 @@ function stopFirstBootDiscovery() {
     if (button) button.hidden = true;
 }
 function continueDiscovery() {
-    if (discoveryScanInFlight) return;
+    if (discoveryScanInFlight || discoveryScanRetryTimer !== null) return;
     if (!firstBootDiscovery) {
         startFirstBootDiscovery(lastDiscoveryDevices);
         return;
@@ -3210,7 +3255,7 @@ function continueDiscovery() {
     firstBootDiscovery.tick();
 }
 function startFirstBootDiscovery(previousDevices = []) {
-    if (discoveryScanInFlight) return;
+    if (discoveryScanInFlight || discoveryScanRetryTimer !== null) return;
     stopFirstBootDiscovery();
     firstBootDiscovery = { started: Date.now(), devices: new Map(previousDevices.map(device => [device.ip, device])), acknowledged: new Set(previousDevices.map(device => device.ip)), paused: false, lastScan: -Infinity, timer: null };
     function tick() {
@@ -3222,7 +3267,7 @@ function startFirstBootDiscovery(previousDevices = []) {
             if (status) status.textContent = studioText('searchDone');
             return;
         }
-        if (!discoveryScanInFlight && Date.now() - firstBootDiscovery.lastScan >= 15000) {
+        if (!discoveryScanInFlight && discoveryScanRetryTimer === null && Date.now() - firstBootDiscovery.lastScan >= 15000) {
             firstBootDiscovery.lastScan = Date.now();
             triggerScan();
         }
