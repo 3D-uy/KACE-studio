@@ -7,6 +7,7 @@
 *.js text eol=lf
 *.css text eol=lf
 *.html text eol=lf
+*.svg text eol=lf
 # Treat font binaries as binary (no diff / no line-ending conversion)
 *.ttf binary
 *.woff binary

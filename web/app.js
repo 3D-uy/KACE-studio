@@ -86,6 +86,7 @@ window.addEventListener('pywebviewready', () => {
         pywebview.api.get_preferences().then(prefs => {
             if (prefs) {
                 userPreferences = prefs;
+                studioPreferencesLoaded = true;
 
                 // Rule: prefs.json always overwrites localStorage
                 localStorage.setItem('theme', prefs.theme || 'dark');
@@ -94,6 +95,12 @@ window.addEventListener('pywebviewready', () => {
 
                 // Apply theme from python preferences
                 applyTheme(prefs.theme || 'dark');
+                if (!studioLanguageChanged && Object.hasOwn(STUDIO_LANGUAGES, prefs.language)) {
+                    setStudioLanguage(prefs.language, false);
+                } else if (studioLanguageChanged) {
+                    userPreferences.language = studioLanguage();
+                    saveStudioLanguagePreference();
+                }
 
                 // Sync form elements with python preferences
                 restoreFormState();
@@ -531,21 +538,8 @@ function initAccessibility() {
         document.getElementById(id).addEventListener('change', () => updateSelectDescription(id));
         updateSelectDescription(id);
     });
-    document.querySelectorAll('[data-ui-label]').forEach(el => {
-        const label = studioText(el.dataset.uiLabel);
-        el.setAttribute('aria-label', label);
-        el.title = label;
-    });
-    document.querySelectorAll('[data-ui-text]').forEach(el => {
-        el.textContent = studioText(el.dataset.uiText);
-    });
-    document.querySelectorAll('[data-ui-placeholder]').forEach(el => {
-        el.placeholder = studioText(el.dataset.uiPlaceholder);
-    });
+    applyStudioLanguage();
     initIllustratedSelects();
-    document.querySelectorAll('[data-password-label]').forEach(el => {
-        el.textContent = studioText(el.dataset.passwordLabel);
-    });
     document.querySelectorAll('.password-toggle-icon').forEach(button => {
         updatePasswordButton(document.getElementById(button.getAttribute('aria-controls')), button);
     });
@@ -571,6 +565,35 @@ function initAccessibility() {
             modalReturnFocus = null;
         });
     });
+}
+
+function applyStudioLanguage() {
+    document.documentElement.lang = STUDIO_LANGUAGES[studioLanguage()].code;
+    document.querySelectorAll('[data-ui-label]').forEach(el => {
+        const label = studioText(el.dataset.uiLabel);
+        el.setAttribute('aria-label', label);
+        el.title = label;
+    });
+    document.querySelectorAll('[data-ui-text]').forEach(el => {
+        el.textContent = studioText(el.dataset.uiText);
+    });
+    document.querySelectorAll('[data-ui-placeholder]').forEach(el => {
+        el.placeholder = studioText(el.dataset.uiPlaceholder);
+    });
+    document.querySelectorAll('[data-password-label]').forEach(el => {
+        el.textContent = studioText(el.dataset.passwordLabel);
+    });
+    document.querySelectorAll('.password-toggle-icon').forEach(button => {
+        updatePasswordButton(document.getElementById(button.getAttribute('aria-controls')), button);
+    });
+    document.querySelectorAll('#imager-tab select').forEach(select => {
+        select.dispatchEvent(new Event('presentationchange'));
+    });
+    const start = document.getElementById('start-first-boot-scan');
+    const stop = document.getElementById('stop-first-boot-scan');
+    if (start) start.textContent = studioText('search');
+    if (stop) stop.textContent = studioText('stop');
+    updateStudioLanguageButton();
 }
 
 function validateSshPasswords() {
@@ -1270,20 +1293,20 @@ function triggerScan() {
                 <i class="fa-solid fa-satellite-dish"></i>
             </div>
             <div class="discovery-waiting-copy">
-                <p class="discovery-eyebrow">${studioText('localScan')}</p>
-                <h4 id="discovery-scan-title">${studioText('scanningTitle')}</h4>
-                <p id="discovery-scan-detail">${studioText('scanningDetail')}</p>
+                <p class="discovery-eyebrow"><span data-ui-text="localScan">${studioText('localScan')}</span></p>
+                <h4 id="discovery-scan-title"><span data-ui-text="scanningTitle">${studioText('scanningTitle')}</span></h4>
+                <p id="discovery-scan-detail"><span data-ui-text="scanningDetail">${studioText('scanningDetail')}</span></p>
             </div>
             <div class="discovery-scan-time" id="discovery-scan-time" aria-label="Scan elapsed time">
                 <i class="fa-regular fa-clock" aria-hidden="true"></i>
-                <span>${studioText('elapsed')}</span>
+                <span><span data-ui-text="elapsed">${studioText('elapsed')}</span></span>
                 <strong id="discovery-scan-elapsed">0s</strong>
             </div>
             <div class="discovery-tips" aria-label="Connection tips">
-                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> ${studioText('waitBoot')}</p>
-                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> ${studioText('sameNetwork')}</p>
-                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> ${studioText('useManual')}</p>
-                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> ${studioText('useHostname')}</p>
+                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> <span data-ui-text="waitBoot">${studioText('waitBoot')}</span></p>
+                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> <span data-ui-text="sameNetwork">${studioText('sameNetwork')}</span></p>
+                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> <span data-ui-text="useManual">${studioText('useManual')}</span></p>
+                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> <span data-ui-text="useHostname">${studioText('useHostname')}</span></p>
             </div>
         </div>
         `;
@@ -1304,10 +1327,16 @@ function triggerScan() {
                 return;
             }
             if (devices && !Array.isArray(devices) && devices.status === 'unavailable') {
-                if (firstBootDiscovery) firstBootDiscovery.paused = true;
-                updateDiscoveryControls();
+                stopFirstBootDiscovery();
                 text.textContent = studioText(devices.code) || studioText('scanFailed');
-                list.innerHTML = '';
+                if (lastDiscoveryDevices.length === 0) {
+                    list.innerHTML = '';
+                    const emptyDiv = document.createElement('div');
+                    emptyDiv.className = 'list-empty';
+                    emptyDiv.dataset.uiText = STUDIO_INSTALLATION_TEXT[studioLanguage()][devices.code] ? devices.code : 'scanFailed';
+                    emptyDiv.textContent = text.textContent;
+                    list.appendChild(emptyDiv);
+                }
                 return;
             }
             text.textContent = studioText(firstBootDiscovery ? 'searchWaiting' : 'scanDone');
@@ -1323,6 +1352,7 @@ function triggerScan() {
             list.innerHTML = '';
             const emptyDiv = document.createElement('div');
             emptyDiv.className = 'list-empty';
+            emptyDiv.dataset.uiText = 'scanFailed';
             emptyDiv.textContent = studioText('scanFailed');
             list.appendChild(emptyDiv);
         });
@@ -1372,15 +1402,15 @@ function populateDevices(devices) {
                 <i class="fa-solid fa-magnifying-glass"></i>
             </div>
             <div class="discovery-waiting-copy">
-                <p class="discovery-eyebrow">${studioText('noResponse')}</p>
-                <h4>${studioText('bootingTitle')}</h4>
-                <p>${studioText('bootingDetail')}</p>
+                <p class="discovery-eyebrow"><span data-ui-text="noResponse">${studioText('noResponse')}</span></p>
+                <h4><span data-ui-text="bootingTitle">${studioText('bootingTitle')}</span></h4>
+                <p><span data-ui-text="bootingDetail">${studioText('bootingDetail')}</span></p>
             </div>
             <div class="discovery-tips" aria-label="Connection tips">
-                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> ${studioText('waitBoot')}</p>
-                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> ${studioText('sameNetwork')}</p>
-                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> ${studioText('useManual')}</p>
-                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> ${studioText('useHostname')}</p>
+                <p class="discovery-tip"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i> <span data-ui-text="waitBoot">${studioText('waitBoot')}</span></p>
+                <p class="discovery-tip"><i class="fa-solid fa-wifi" aria-hidden="true"></i> <span data-ui-text="sameNetwork">${studioText('sameNetwork')}</span></p>
+                <p class="discovery-tip"><i class="fa-solid fa-network-wired" aria-hidden="true"></i> <span data-ui-text="useManual">${studioText('useManual')}</span></p>
+                <p class="discovery-tip"><i class="fa-solid fa-terminal" aria-hidden="true"></i> <span data-ui-text="useHostname">${studioText('useHostname')}</span></p>
             </div>
         `;
         list.appendChild(emptyDiv);
@@ -1965,6 +1995,7 @@ function renderKaceWorkflow(view) {
     const detail = document.getElementById('kace-workflow-detail');
     const downloadButton = document.getElementById('kace-firmware-download');
     if (!tracker || !title || !status || !steps || !detail) return;
+    tracker.dataset.workflowId = view.workflowId;
 
     const isDone = view.state === 'DONE' || view.state === 'COMPLETE';
     const isActionRequired = view.kind === 'firmware_deployment' &&
@@ -2005,7 +2036,7 @@ function renderKaceWorkflow(view) {
         typeof view.data.staged_path === 'string' ? view.data.staged_path : '';
     if (downloadButton) {
         downloadButton.style.display = downloadablePath ? 'inline-flex' : 'none';
-        downloadButton.textContent = studioText('download', view.data && view.data.language);
+        downloadButton.textContent = studioText('download', selectedStudioLanguage || (view.data && view.data.language));
         downloadButton.dataset.remotePath = downloadablePath;
         downloadButton.dataset.generation = Number.isInteger(view.generation) ? String(view.generation) : '';
         downloadButton.disabled = !Number.isInteger(view.generation) || view.generation !== firmwareGeneration;
@@ -3181,7 +3212,7 @@ const WORKFLOW_TEXT = {
     },
 };
 function workflowText(key, view) {
-    const language = view.data && view.data.language;
+    const language = selectedStudioLanguage || (view.data && view.data.language);
     return (WORKFLOW_TEXT[language || studioLanguage()] || WORKFLOW_TEXT.English)[key];
 }
 function workflowStep(label, view) {
@@ -3189,7 +3220,7 @@ function workflowStep(label, view) {
         'Español': ['Hardware seleccionado', 'Firmware compilado', 'Firmware instalado', 'MCU verificada', 'Configuración generada', 'Preparación del despliegue', 'Verificación de la instalación', 'Instalación completada'],
         'Português': ['Hardware selecionado', 'Firmware compilado', 'Firmware instalado', 'MCU verificada', 'Configuração gerada', 'Preparação da instalação', 'Verificação da instalação', 'Instalação concluída'],
     };
-    const language = (view.data && view.data.language) || studioLanguage();
+    const language = selectedStudioLanguage || (view.data && view.data.language) || studioLanguage();
     const installationLabels = {
         'Español': ['Firmware entregado', 'Esperando al controlador', 'MCU desconectada', 'Esperando la MCU', 'Confirmando identidad de la MCU', 'MCU detectada', 'Moonraker conectado', 'Klipper listo', 'MCU registrada', 'Firmware verificado', 'Configuración instalada', 'Instalación completada'],
         'Português': ['Firmware entregue', 'Aguardando o controlador', 'MCU desconectada', 'Aguardando a MCU', 'Confirmando identidade da MCU', 'MCU detectada', 'Moonraker conectado', 'Klipper pronto', 'MCU registrada', 'Firmware verificado', 'Configuração instalada', 'Instalação concluída'],
@@ -3423,6 +3454,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "architecture": "Architecture",
         "refreshDrives": "Refresh drives",
         "theme": "Toggle Light/Dark Mode",
+        "changeLanguage": "Change language: {language}",
         "directory": "Remote directory",
         "up": "Go up a directory",
         "refreshDirectory": "Refresh directory",
@@ -3599,6 +3631,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "architecture": "Arquitectura",
         "refreshDrives": "Actualizar unidades",
         "theme": "Cambiar tema claro/oscuro",
+        "changeLanguage": "Cambiar idioma: {language}",
         "directory": "Directorio remoto",
         "up": "Subir un directorio",
         "refreshDirectory": "Actualizar directorio",
@@ -3775,6 +3808,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "architecture": "Arquitetura",
         "refreshDrives": "Atualizar unidades",
         "theme": "Alternar tema claro/escuro",
+        "changeLanguage": "Alterar idioma: {language}",
         "directory": "Diretório remoto",
         "up": "Subir um diretório",
         "refreshDirectory": "Atualizar diretório",
@@ -3811,19 +3845,82 @@ const STUDIO_INSTALLATION_TEXT = {
         "ssidPlaceholder": "Nome da rede / SSID"
     }
 };
+const STUDIO_LANGUAGES = {
+    'Español': {code: 'es', flag: 'flags/es.svg'},
+    'English': {code: 'en', flag: 'flags/en.svg'},
+    'Português': {code: 'pt', flag: 'flags/pt.svg'},
+};
+let selectedStudioLanguage = null;
+let studioLanguageChanged = false;
+let studioPreferencesLoaded = false;
+try {
+    if (typeof localStorage !== 'undefined') {
+        const saved = localStorage.getItem('kace_language');
+        if (Object.hasOwn(STUDIO_LANGUAGES, saved)) selectedStudioLanguage = saved;
+    }
+} catch (_) { /* Use the system locale when the startup cache is unavailable. */ }
+
 function studioLanguage() {
+    if (selectedStudioLanguage) return selectedStudioLanguage;
     const locale = typeof navigator === 'undefined' ? 'en' : navigator.language;
     return /^es/i.test(locale) ? 'Español' : /^pt/i.test(locale) ? 'Português' : 'English';
 }
 function studioText(key, language = studioLanguage()) {
     return (STUDIO_INSTALLATION_TEXT[language] || STUDIO_INSTALLATION_TEXT.English)[key] ?? STUDIO_INSTALLATION_TEXT.English[key];
 }
+function updateStudioLanguageButton() {
+    const language = studioLanguage();
+    const button = document.getElementById('language-toggle-btn');
+    const flag = document.getElementById('language-flag');
+    if (flag) flag.src = STUDIO_LANGUAGES[language].flag;
+    if (button) {
+        const label = studioText('changeLanguage').replace('{language}', language);
+        button.setAttribute('aria-label', label);
+        button.title = label;
+    }
+}
+function saveStudioLanguagePreference() {
+    // Never publish startup defaults over preferences that have not been read.
+    if (studioPreferencesLoaded && window.pywebview?.api?.set_preferences) {
+        window.pywebview.api.set_preferences(userPreferences).catch(error => {
+            console.warn('Could not save language preference:', error);
+        });
+    }
+}
+function setStudioLanguage(language, persist = true) {
+    if (!Object.hasOwn(STUDIO_LANGUAGES, language)) return false;
+    const previousLanguage = studioLanguage();
+    selectedStudioLanguage = language;
+    try { localStorage.setItem('kace_language', language); } catch (_) { /* Optional cache. */ }
+    if (typeof userPreferences !== 'undefined') userPreferences.language = language;
+    applyStudioLanguage();
+    ['scan-status-text', 'discovery-scan-title', 'discovery-scan-detail', 'printer-power-state'].forEach(id => {
+        const element = document.getElementById(id);
+        if (!element) return;
+        const key = Object.keys(STUDIO_INSTALLATION_TEXT[previousLanguage])
+            .find(key => STUDIO_INSTALLATION_TEXT[previousLanguage][key] === element.textContent);
+        if (key) element.textContent = studioText(key);
+    });
+    const tracker = document.getElementById('kace-workflow-tracker');
+    const view = typeof kaceWorkflowViews !== 'undefined' && kaceWorkflowViews.get(tracker?.dataset.workflowId);
+    if (view) renderKaceWorkflow(view);
+    if (persist) {
+        studioLanguageChanged = true;
+        saveStudioLanguagePreference();
+    }
+    return true;
+}
+function cycleStudioLanguage() {
+    const languages = Object.keys(STUDIO_LANGUAGES);
+    setStudioLanguage(languages[(languages.indexOf(studioLanguage()) + 1) % languages.length]);
+}
 document.addEventListener('DOMContentLoaded', () => {
-    document.documentElement.lang = /^es/i.test(navigator.language) ? 'es' : /^pt/i.test(navigator.language) ? 'pt' : 'en';
+    document.documentElement.lang = STUDIO_LANGUAGES[studioLanguage()].code;
     const start = document.getElementById('start-first-boot-scan');
     const stop = document.getElementById('stop-first-boot-scan');
     if (start) start.textContent = studioText('search');
     if (stop) stop.textContent = studioText('stop');
+    updateStudioLanguageButton();
 });
 
 window.showProvisioningError = function (field, code) {

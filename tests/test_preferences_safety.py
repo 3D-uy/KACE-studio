@@ -37,3 +37,17 @@ def test_failed_preferences_publish_removes_partial_file(tmp_path, monkeypatch):
 
     assert not api.set_preferences({"theme": "dark"})
     assert not (tmp_path / "prefs.json.part").exists()
+
+
+def test_language_preference_is_saved_without_sensitive_form_fields(tmp_path):
+    api = Api()
+    api._prefs_path = str(tmp_path / "prefs.json")
+    for language in ("Español", "English", "Português"):
+        assert api.set_preferences({"language": language, "form_state": {
+            "hostname-input": "printer-one", "ssh-password": "must-not-persist",
+        }})
+        stored = api.get_preferences()
+        assert stored["language"] == language
+        assert stored["form_state"] == {"hostname-input": "printer-one"}
+    assert api.set_preferences({"language": "unsupported"})
+    assert "language" not in api.get_preferences()

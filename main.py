@@ -1772,6 +1772,9 @@ class Api:
             "kace_auto_scan": auto_scan,
             "form_state": form_state,
         }
+        language = prefs.get("language")
+        if language in ("English", "Español", "Português"):
+            validated["language"] = language
         part_path = self._prefs_path + ".part"
         try:
             with self._prefs_lock:

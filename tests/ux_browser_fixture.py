@@ -1,6 +1,6 @@
 """Loopback F1 fixture: synthetic IO only; never imports the product backend.
 Run python tests/ux_browser_fixture.py and open http://127.0.0.1:8766/.
-Query flags: preview (clean interactive demo), invalid, risk, sftp, nodrives, discovery; lang=en/es/pt. Stop with Ctrl+C.
+Query flags: preview (clean interactive demo), startup (disconnected), invalid, risk, sftp, nodrives, discovery; lang=en/es/pt. Stop with Ctrl+C.
 """
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -46,7 +46,7 @@ window.addEventListener('load', () => {
  if(preview){Object.keys(fields).forEach(id=>fields[id]=document.getElementById(id).defaultValue ?? document.getElementById(id).value);}
  Object.entries(fields).forEach(([id,value])=>{const field=document.getElementById(id);field.value=value;if(field.tagName==='SELECT')field.dispatchEvent(new Event('presentationchange'));});toggleImageSource(fields['image-source-select']);
  if(params.has('nodrives')){drive.replaceChildren(new Option('No removable drives found.',''));driveIdentitySnapshots.clear();}
- if(preview||params.has('sftp')){sshConnected=true;refreshSftpBrowser();}
+ if((preview&&!params.has('startup'))||params.has('sftp')){sshConnected=true;refreshSftpBrowser();}
  if(params.has('sftp'))switchTab('terminal-tab');
 });
 </script>

@@ -76,6 +76,9 @@ Studio se ocupa de la imagen, el primer arranque y el acceso remoto. [KACE](http
 
 Inicia el bootstrap desde el espacio de trabajo SSH y continúa con el asistente de KACE en la Pi. Algunos pasos de firmware requieren intervención manual; completa la verificación de KACE antes de poner en marcha la impresora.
 
+En el código actual, el botón con bandera encima del botón de tema claro/oscuro
+alterna español, inglés y portugués y recuerda tu elección para la próxima apertura.
+
 <a id="platform-and-requirements"></a>
 
 ## 🖥️ Hardware y requisitos

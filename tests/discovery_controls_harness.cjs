@@ -110,6 +110,49 @@ vm.runInContext(`(async()=>{
     assert.equal(scans.length,14); assert.equal(status.textContent,studioText('searchDone'));
     triggerScan(); scans[14].reject(new Error('simulated')); await flush();
     assert.equal(document.getElementById('scan-status-text').textContent,studioText('scanFailed'));
+    const progress=document.getElementById('first-boot-scan-progress');
+    const resumeButton=document.getElementById('continue-discovery-btn');
+    const startButton=document.getElementById('start-first-boot-scan');
+    for (const code of ['discoveryAmbiguous','discoveryUnavailable']) {
+        populateDevices([]);
+        startFirstBootDiscovery();
+        scans.at(-1).resolve({status:'unavailable',code}); await flush();
+        assert.equal(firstBootDiscovery,null); // No paused session when a scan cannot start.
+        assert.equal(progress.textContent,'');
+        assert.equal(discoveryScanTimer,null);
+        assert.equal(intervals.size,0);
+        assert.equal(stopButton.hidden,true);
+        assert.equal(resumeButton.hidden,true);
+        assert.equal(scanButton.hidden,false); assert.equal(scanButton.disabled,false);
+        assert.equal(startButton.hidden,false); assert.equal(startButton.disabled,false);
+        assert.equal(status.textContent,studioText(code));
+        assert.equal(list.children.length,1);
+        assert.equal(list.children[0].textContent,studioText(code));
+        const scanCount=scans.length;
+        advance(600000); assert.equal(scans.length,scanCount);
+        assert.equal(status.textContent,studioText(code));
+        startFirstBootDiscovery(); // Network correction allows a fresh session.
+        assert.equal(scans.length,scanCount+1);
+        scans.at(-1).resolve([a,b]); await flush();
+        assert.equal(firstBootDiscovery.paused,true);
+        const foundCards=list.children;
+        continueDiscovery();
+        scans.at(-1).resolve({status:'unavailable',code}); await flush();
+        assert.equal(firstBootDiscovery,null);
+        assert.equal(list.children,foundCards); // Retain discovered devices on failure.
+        assert.equal(lastDiscoveryDevices.length,2);
+        assert.equal(progress.textContent,'');
+        assert.equal(stopButton.hidden,true); assert.equal(resumeButton.hidden,true);
+        triggerScan(); // Manual scan failure follows the same terminal path.
+        scans.at(-1).resolve({status:'unavailable',code}); await flush();
+        assert.equal(list.children,foundCards);
+        assert.equal(scanButton.disabled,false); assert.equal(resumeButton.hidden,true);
+        triggerScan(); stopFirstBootDiscovery();
+        const beforeLate=status.textContent;
+        scans.at(-1).resolve({status:'unavailable',code}); await flush();
+        assert.equal(status.textContent,beforeLate); // Cancelled replies remain discarded.
+        assert.equal(list.children,foundCards);
+    }
     const relay=document.getElementById('power-relay-enable');
     const settings=document.getElementById('power-relay-settings');
     relay.checked=true; togglePowerRelaySettings();

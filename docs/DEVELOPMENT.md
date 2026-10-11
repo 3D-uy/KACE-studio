@@ -72,6 +72,26 @@ credentials and disks are synthetic. Test both success and rejected/pending stat
 - Run `python main.py --smoke-test` on Windows for the native source renderer.
   Browser screenshots cannot replace this or the packaged renderer smoke gate.
 
+Use `?preview&startup&lang=es` to review the disconnected opening screen. Check
+1050x665 (the initial window's content area), 900x565 and 840x532 viewports in
+EN/ES/PT: above 950px Imager pairs model/hostname, dashboard/architecture and
+image/storage in equal-width columns, with timezone below on the left. At 950px
+and below these settings stack in the same DOM and keyboard order. Keep uniform
+32px gaps, Next visible in short windows and avoid
+horizontal scrolling. Verify the timezone dropdown
+above the sticky action row and keyboard access after vertical scrolling.
+
+The flag button above the theme button cycles Español → English → Português.
+Language selection uses the existing catalogs, updates accessible names and
+illustrated selectors in place, and persists through the safe preferences
+allowlist plus a local startup cache. It must preserve form values, the active tab
+and SSH/discovery state. Backend language writes wait until initial preferences
+have loaded, so an early click cannot replace saved settings with defaults.
+Flags are local SVG assets under `web/flags/` and fill
+the circular button, retaining a visible keyboard focus outline.
+Run `tests/test_language_switch.py`, `tests/test_preferences_safety.py` and the
+existing localization/frontend suites when changing this behavior.
+
 Discovery regression coverage lives in `tests/test_discovery_controls.py`: it
 executes production JavaScript with deferred scan replies, a controlled clock and
 EN/ES/PT catalogs. It covers pause on new addresses, continuation past reviewed
@@ -80,6 +100,14 @@ The browser fixture accepts `?preview&discovery&lang=es` for synthetic candidate
 Stopping prevents subsequent scans and ignores a pending scan's result; the
 backend probe can still finish before another scan starts. Reconnecting remains
 subject to the existing SSH identity and authentication checks.
+
+On Windows, discovery prefers the single subnet whose active interface has a
+default IPv4 route when several networks are present. This prevents WSL/Hyper-V
+networks without a default route from blocking the LAN scan. If no unique subnet
+can be selected, it requires a manual address. The actual interface prefix and
+1024-address scan limit still apply; discovery never falls back to scanning all
+interfaces or guessing a /24. Tests in `tests/test_discovery_prefixes.py` cover
+route selection and ambiguous/oversized networks without network probes.
 
 ## Bootstrap, source and packaged behavior
 
