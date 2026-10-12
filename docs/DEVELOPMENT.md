@@ -222,3 +222,10 @@ authority. Delayed replies from the lost session cannot mark completion or resto
 controls. `tests/test_bootstrap_frontend_session.py` exercises the actual app.js
 through disconnect, delayed replies and reconnect. Bootstrap supplies bounded
 persistent Linux diagnostics; source and packaged delivery retain the same contract.
+
+Connection readiness is published only after the remote-configuration probe
+returns with an active SSH transport. An SFTP channel-open timeout discards its
+pending transport and must fail login instead of returning success or starting
+a terminal on a closed client. An isolated SFTP failure may still leave SSH usable.
+Exhausted SSH retries preserve their final exception for the sanitized UI error.
+Coverage: `tests/test_sftp_timeouts.py` and `tests/test_ssh_deadline.py`.

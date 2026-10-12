@@ -89,6 +89,46 @@ def test_channel_open_timeout_discards_pending_transport(storage):
     assert channel.closed
 
 
+def test_login_fails_when_power_probe_discards_ssh_transport(storage, monkeypatch):
+    import main
+
+    session, _client, transport, _channel = storage
+    api = main.Api()
+    api.set_device_state = Mock()
+    monkeypatch.setattr(main, "SSHSession", lambda: session)
+    monkeypatch.setattr(session, "connect", lambda *_args: True)
+    session.run_command_stream = Mock()
+    transport.open_session.side_effect = socket.timeout("simulated channel open timeout")
+
+    result = api.connect_ssh("printer.local", "kace", "simulated")
+
+    assert result["status"] == "failed"
+    assert "SSH connection closed" in result["message"]
+    session.run_command_stream.assert_not_called()
+    assert api._power_context is None
+    assert api._power_session is None
+    assert not any(call.args[0] == "SSH_READY" for call in api.set_device_state.call_args_list)
+
+
+def test_login_keeps_live_ssh_when_only_sftp_is_unavailable(storage, monkeypatch):
+    import main
+
+    session, _client, _transport, _channel = storage
+    api = main.Api()
+    api.set_device_state = Mock()
+    monkeypatch.setattr(main, "SSHSession", lambda: session)
+    monkeypatch.setattr(session, "connect", lambda *_args: True)
+    monkeypatch.setattr(session, "get_sftp", lambda: None)
+    session.run_command_stream = Mock()
+
+    result = api.connect_ssh("printer.local", "kace", "simulated")
+
+    assert result["status"] == "success"
+    assert result["power_config"]["status"] == "error"
+    assert session.is_connected()
+    session.run_command_stream.assert_called_once()
+
+
 @pytest.mark.parametrize("phase", ["subsystem", "version"])
 def test_blocked_sftp_initialization_has_a_deadline_and_closes_channel(storage, monkeypatch, phase):
     session, _client, _transport, channel = storage

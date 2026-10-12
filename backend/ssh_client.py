@@ -486,7 +486,9 @@ class SSHSession:
                         ) from e
                     delay = min(delay * 2, max_delay)
                 else:
-                    return False
+                    # Preserve the final cause for the sanitized UI error; a
+                    # generic False hides authentication and transport failures.
+                    raise
 
     def run_command_stream(self, command: str, on_data_callback: Callable[[str], None], on_close_callback: Callable[[], None], cols: int = 80, rows: int = 24):
         """

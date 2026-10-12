@@ -1155,13 +1155,22 @@ class Api:
 
             # Reachability (including an open Moonraker port) is not evidence
             # that a KACE installation workflow completed successfully.
-            self.set_device_state("SSH_READY", 100, f"SSH session connected to {ip}.")
             remote_power = self._refresh_remote_power_authority(power_context)
             with self._ssh_lock:
                 current_attempt = attempt_gen == self._ssh_attempt_gen and current_gen == self._ssh_gen
+                session_active = self._ssh_session_is_active(candidate)
+                if current_attempt and not session_active:
+                    with self._power_lock:
+                        self._invalidate_power_locked()
             if not current_attempt:
                 candidate.close()
                 return {"status": "failed", "message": "Connection superseded by a newer selection."}
+            if not session_active:
+                candidate.close()
+                message = "SSH connection closed while checking remote configuration. Retry after the host finishes starting."
+                self.set_device_state("ERROR", 0, message)
+                return {"status": "failed", "message": message}
+            self.set_device_state("SSH_READY", 100, f"SSH session connected to {ip}.")
                 
             # Write-coalescing buffer: collect rapid-fire SSH data chunks and flush
             # them as a single evaluate_js call every 15ms. This prevents interactive

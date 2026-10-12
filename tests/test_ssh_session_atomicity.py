@@ -23,6 +23,9 @@ class FakeSession:
     def close(self):
         self.closed = True
 
+    def is_connected(self):
+        return not self.closed
+
     def run_command_stream(self, *_args, **_kwargs):
         self.stream_started = True
 

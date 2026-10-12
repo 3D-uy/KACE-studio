@@ -8,6 +8,7 @@ uncommitted changes or current CI, packaging or physical qualification.
 
 ## [0.5.0-rc.3] - 2026-10-03
 
+- Reject SSH login success if the configuration probe closed its transport, and preserve the final connection error after retries for diagnosis.
 - Mark recoverable SSH losses disconnected, invalidate stale file/power requests and preserve visible installation progress until a verified reconnect. Bundle bounded persistent Linux diagnostics for new bootstrap runs.
 - Pin the KACE runtime that offers automatic/minimum/maximum homing direction
   per axis and leaves `homing_positive_dir` commented in automatic mode.
