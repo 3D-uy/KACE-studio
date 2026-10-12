@@ -84,10 +84,13 @@ def get_ipv4_interfaces() -> list[dict]:
             script = (
                 "$connected = @(Get-NetIPInterface -AddressFamily IPv4 | "
                 "Where-Object ConnectionState -eq 'Connected'); "
+                "$defaultRoutes = @(Get-NetRoute -AddressFamily IPv4 -ErrorAction Stop | "
+                "Where-Object DestinationPrefix -eq '0.0.0.0/0'); "
                 "@(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { "
                 "$_.InterfaceIndex -in $connected.InterfaceIndex -and "
                 "$_.AddressState -eq 'Preferred' } | "
-                "Select-Object IPAddress,PrefixLength) | ConvertTo-Json -Compress"
+                "Select-Object IPAddress,PrefixLength,@{Name='HasDefaultRoute'; "
+                "Expression={$_.InterfaceIndex -in $defaultRoutes.InterfaceIndex}}) | ConvertTo-Json -Compress"
             )
             result = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -113,8 +116,9 @@ def get_ipv4_interfaces() -> list[dict]:
 
 
 def get_local_subnet_ips() -> List[str]:
-    """Use a single unambiguous active subnet; retain manual discovery otherwise."""
+    """Prefer the sole default-route subnet when several Windows networks are up."""
     networks = set()
+    default_networks = set()
     local_addresses = set()
     for record in get_ipv4_interfaces():
         try:
@@ -128,8 +132,12 @@ def get_local_subnet_ips() -> List[str]:
             continue
         local_addresses.add(address)
         networks.add(interface.network)
+        if record.get("HasDefaultRoute") is True:
+            default_networks.add(interface.network)
     if not networks:
         return []
+    if len(networks) > 1 and len(default_networks) == 1:
+        networks = default_networks
     if len(networks) != 1:
         raise DiscoveryError("discoveryAmbiguous", "Several local networks are active. Use a manual address.")
     network = next(iter(networks))

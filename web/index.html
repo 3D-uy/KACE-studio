@@ -110,6 +110,9 @@
             </div>
             
             <div class="progress-footer">
+                <button type="button" class="progress-circle-btn" onclick="cycleStudioLanguage()" id="language-toggle-btn" aria-label="Change language: English" title="Change language: English">
+                    <img id="language-flag" class="language-flag" src="flags/en.svg" alt="" aria-hidden="true">
+                </button>
                 <button class="progress-circle-btn" onclick="toggleTheme()" id="theme-toggle-btn" aria-label="Toggle Light/Dark Mode" data-ui-label="theme" title="Toggle Light/Dark Mode">
                     <i class="fa-solid fa-sun" id="theme-icon"></i>
                 </button>
@@ -132,7 +135,7 @@
                         
                         <!-- Step 1: Select Raspberry Pi -->
                         <div class="form-group">
-                            <label><span class="brand-orange"><span data-ui-text="step1">STEP 1:</span></span> <span data-ui-text="piModel">RASPBERRY PI MODEL</span></label>
+                            <label for="pi-model-select"><span class="brand-orange"><span data-ui-text="step1">STEP 1:</span></span> <span data-ui-text="piModel">RASPBERRY PI MODEL</span></label>
                             <div class="illustrated-select">
                                     <span class="select-logos" aria-hidden="true"><img src="pi_icon.png" alt=""></span>
                                     <select id="pi-model-select" aria-describedby="pi-model-select-description" aria-label="Raspberry Pi model">
@@ -146,29 +149,31 @@
                                 <p id="pi-model-select-description" class="select-description">Raspberry Pi 4 Model B, 400, and Compute Module 4 / 4S</p>
                         </div>
 
+                        <!-- Step 5: Hostname, paired with the Pi model -->
+                        <div class="form-group">
+                            <label for="hostname-input"><span class="brand-orange"><span data-ui-text="step5">STEP 5:</span></span> <span data-ui-text="hostnameLabel">HOSTNAME</span></label>
+                            <input type="text" id="hostname-input" value="kace.local" placeholder="e.g. kace.local">
+                        </div>
+
                         <!-- Step 2: Select OS / Dashboard -->
                         <div class="form-group">
-                            <label><span class="brand-orange"><span data-ui-text="step2">STEP 2:</span></span> <span data-ui-text="osDashboard">OS DASHBOARD</span></label>
-                            <div class="imager-dashboard-row">
-                                <div class="imager-dashboard">
-                                    <div class="illustrated-select">
-                                    <span class="select-logos" aria-hidden="true"><img class="mainsail-select-logo" src="mainsail_logo.png" alt=""><img class="fluidd-select-logo" src="fluidd_logo.png" alt=""></span>
-                                    <select id="bootstrap-ui-select-imager" aria-describedby="bootstrap-ui-select-imager-description" aria-label="OS dashboard">
+                            <label for="bootstrap-ui-select-imager"><span class="brand-orange"><span data-ui-text="step2">STEP 2:</span></span> <span data-ui-text="osDashboard">OS DASHBOARD</span></label>
+                            <div class="illustrated-select">
+                            <span class="select-logos" aria-hidden="true"><img class="mainsail-select-logo" src="mainsail_logo.png" alt=""><img class="fluidd-select-logo" src="fluidd_logo.png" alt=""></span>
+                            <select id="bootstrap-ui-select-imager" aria-describedby="bootstrap-ui-select-imager-description" aria-label="OS dashboard">
     <option value="mainsail" data-icons="mainsail_logo.png" title="Mainsail web dashboard control panel" selected>Mainsail OS</option>
     <option value="fluidd" data-icons="fluidd_logo.png" title="Fluidd web dashboard control panel">Fluidd</option>
     <option value="both" data-icons="mainsail_logo.png fluidd_logo.png" title="Install both control interfaces side-by-side">Both (Mainsail & Fluidd)</option>
 </select>
-                                </div>
-                                <p id="bootstrap-ui-select-imager-description" class="select-description">Mainsail web dashboard control panel</p>
-                                </div>
-                                <div class="imager-architecture">
-                                    <label for="os-arch-select" data-ui-text="architecture">Architecture</label>
-                                    <select id="os-arch-select">
-                                        <option value="64bit" title="Recommended" selected>64-bit</option>
-                                        <option value="32bit" title="Legacy / 3D Pi OS">32-bit</option>
-                                    </select>
-                                </div>
-                            </div>
+                        </div>
+                        <p id="bootstrap-ui-select-imager-description" class="select-description">Mainsail web dashboard control panel</p>
+                        </div>
+                        <div class="form-group">
+                            <label for="os-arch-select" data-ui-text="architecture">Architecture</label>
+                            <select id="os-arch-select">
+                                <option value="64bit" title="Recommended" selected>64-bit</option>
+                                <option value="32bit" title="Legacy / 3D Pi OS">32-bit</option>
+                            </select>
                         </div>
 
                         <!-- Step 3: OS Image Source -->
@@ -209,40 +214,31 @@
                             <span class="tip-text"><i class="fa-solid fa-circle-exclamation"></i> <span data-ui-text="removableHint">Only removable drives are listed to prevent data loss.</span></span>
                         </div>
 
-                        <!-- Steps 5 & 6: Hostname & Time Zone side-by-side -->
-                        <div class="imager-identity-row">
-                            <!-- Step 5: Hostname -->
-                            <div class="form-group" style="flex: 1; margin-bottom: 0;">
-                                <label for="hostname-input"><span class="brand-orange"><span data-ui-text="step5">STEP 5:</span></span> <span data-ui-text="hostnameLabel">HOSTNAME</span></label>
-                                <input type="text" id="hostname-input" value="kace.local" placeholder="e.g. kace.local">
-                            </div>
-
-                            <!-- Step 6: Time Zone -->
-                            <div class="form-group" style="flex: 1; margin-bottom: 0;">
-                                <label for="timezone-select"><span class="brand-orange"><span data-ui-text="step6">STEP 6:</span></span> <span data-ui-text="timezoneLabel">SYSTEM TIME ZONE</span></label>
-                                <select id="timezone-select">
-                                    <option value="America/Argentina/Buenos_Aires">America/Argentina/Buenos_Aires (GMT-3)</option>
-                                    <option value="America/Sao_Paulo" selected>America/Sao_Paulo (GMT-3)</option>
-                                    <option value="America/Santiago">America/Santiago (GMT-4/GMT-3)</option>
-                                    <option value="America/Bogota">America/Bogota (GMT-5)</option>
-                                    <option value="America/Lima">America/Lima (GMT-5)</option>
-                                    <option value="America/Mexico_City">America/Mexico_City (GMT-6)</option>
-                                    <option value="America/New_York">America/New_York (EST/EDT)</option>
-                                    <option value="America/Chicago">America/Chicago (CST/CDT)</option>
-                                    <option value="America/Denver">America/Denver (MST/MDT)</option>
-                                    <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
-                                    <option value="Europe/London">Europe/London (GMT/BST)</option>
-                                    <option value="Europe/Paris">Europe/Paris (CET/CEST)</option>
-                                    <option value="Europe/Berlin">Europe/Berlin (CET/CEST)</option>
-                                    <option value="Europe/Moscow">Europe/Moscow (MSK)</option>
-                                    <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
-                                    <option value="Asia/Shanghai">Asia/Shanghai (CST)</option>
-                                    <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
-                                    <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
-                                    <option value="Australia/Sydney">Australia/Sydney (AEST/AEDT)</option>
-                                    <option value="UTC">Coordinated Universal Time (UTC)</option>
-                                </select>
-                            </div>
+                        <!-- Step 6: Time Zone -->
+                        <div class="form-group">
+                            <label for="timezone-select"><span class="brand-orange"><span data-ui-text="step6">STEP 6:</span></span> <span data-ui-text="timezoneLabel">SYSTEM TIME ZONE</span></label>
+                            <select id="timezone-select">
+                                <option value="America/Argentina/Buenos_Aires">America/Argentina/Buenos_Aires (GMT-3)</option>
+                                <option value="America/Sao_Paulo" selected>America/Sao_Paulo (GMT-3)</option>
+                                <option value="America/Santiago">America/Santiago (GMT-4/GMT-3)</option>
+                                <option value="America/Bogota">America/Bogota (GMT-5)</option>
+                                <option value="America/Lima">America/Lima (GMT-5)</option>
+                                <option value="America/Mexico_City">America/Mexico_City (GMT-6)</option>
+                                <option value="America/New_York">America/New_York (EST/EDT)</option>
+                                <option value="America/Chicago">America/Chicago (CST/CDT)</option>
+                                <option value="America/Denver">America/Denver (MST/MDT)</option>
+                                <option value="America/Los_Angeles">America/Los_Angeles (PST/PDT)</option>
+                                <option value="Europe/London">Europe/London (GMT/BST)</option>
+                                <option value="Europe/Paris">Europe/Paris (CET/CEST)</option>
+                                <option value="Europe/Berlin">Europe/Berlin (CET/CEST)</option>
+                                <option value="Europe/Moscow">Europe/Moscow (MSK)</option>
+                                <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+                                <option value="Asia/Shanghai">Asia/Shanghai (CST)</option>
+                                <option value="Asia/Singapore">Asia/Singapore (SGT)</option>
+                                <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+                                <option value="Australia/Sydney">Australia/Sydney (AEST/AEDT)</option>
+                                <option value="UTC">Coordinated Universal Time (UTC)</option>
+                            </select>
                         </div>
                         <div class="imager-actions">
                             <button type="button" class="btn btn-primary" onclick="switchTab('credentials-tab')" style="padding: 8px 24px;">

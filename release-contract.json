@@ -35,10 +35,10 @@
   },
   "kace": {
     "repository": "https://github.com/3D-uy/KACE.git",
-    "candidate_ref": "042fcc9cba81e4f4a2d927480853584754fc9f62",
-    "bootstrap_ref": "bd5b3783365deb68e7255f83a480c9288aca96a4",
-    "bootstrap_sha256": "d4cecb47a32f1882863884d65659ac522d34dccfd425c45889e366ead3a91696",
-    "installer_ref": "042fcc9cba81e4f4a2d927480853584754fc9f62",
+    "candidate_ref": "ea6278df3a765d81f5423003dc91c0e5b339d68e",
+    "bootstrap_ref": "2b46d2249547448489f727de4f7ff3ebc8138678",
+    "bootstrap_sha256": "7c898e0f0e507cd18f128586395b09f6bc5cb97b11ed0d70912b3f7fcf79dbb8",
+    "installer_ref": "ea6278df3a765d81f5423003dc91c0e5b339d68e",
     "installer_sha256": "de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500",
     "runtime_status": "pinned",
     "required_runtime_files": {
@@ -112,7 +112,7 @@
       "core/translations/__init__.py": "fe772d28285a645f5c484988b9e378a9cbc0046057172bec291aac90c3eaa65f",
       "core/translations/_state.py": "0dae66e4b50d0b3149a43182d13e3e40dacd71a46f25d5db6d5b4f0eb5a82e31",
       "core/translations/_strings.py": "446402f249a72904e3bca9dbcc0115835c33b592ffc969c8d1d7961f5e15ddab",
-      "core/translations/_t.py": "2ca3134ed46363b148cca024afbfdfed95f2481c6c3b0add74d1ba8652c46f6e",
+      "core/translations/_t.py": "34ebedb0a4418fafe9451403a340da77ba4f21cbf02111e83f7e45b1c173d33c",
       "core/validators.py": "f826273ee0f5e69e442ead140ec8b261d687cd8dabe3039fc953913d8acecfff",
       "core/wizard/__init__.py": "462a4e41f5034297b6e19e4dcb00735bb3f03f9d3a1c08fd614b7a5061006b51",
       "core/wizard/runner.py": "e9167dbfa8f8c7fad2c4691c0792a7b61b4e4c4aca349dfea9b94b0cc2bacdc8",
@@ -179,7 +179,7 @@
       "kace.py": "694b6a2aa0d1e7259da1006ab7fb0263e833cb8832bfaff3ac76712a641f213e",
       "requirements-ssh.txt": "8674269c0a7246e85a5de05e078ed0c925bbf25b4574bc20f6ccb79c89759ca0",
       "requirements.txt": "f1097cf785d07cc907fcc62d0fa2a52f14151bbd47b5dcb4cec4adfab3da551d",
-      "templates/printer.cfg.j2": "d1cce169f9b63234c0de61b8c711cb2b82a9ad07886af53c28b3ee39f8e8e437"
+      "templates/printer.cfg.j2": "c3e5dea5387ad56efbbdaec9071d2c6f4074f1f52b95c5e1b365609539fb319e"
     }
   },
   "bundled_resources": [

@@ -76,6 +76,9 @@ Studio handles imaging, first-boot setup and remote access. [KACE](https://githu
 
 Start bootstrap from the SSH workspace, then follow KACE's guided setup on the Pi. Some firmware steps require manual action; complete KACE's verification before commissioning the printer.
 
+In the current source, the flag button above the light/dark theme button cycles
+Spanish, English and Portuguese, and remembers your choice for the next opening.
+
 <a id="platform-and-requirements"></a>
 
 ## 🖥️ Hardware and requirements
