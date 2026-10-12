@@ -8,6 +8,11 @@ uncommitted changes or current CI, packaging or physical qualification.
 
 ## [0.5.0-rc.3] - 2026-10-03
 
+- Pin the KACE runtime that offers automatic/minimum/maximum homing direction
+  per axis and leaves `homing_positive_dir` commented in automatic mode.
+- Deliver custom-probe selection based on the effective board sockets and
+  selected TMC drivers, with probe/Z input priority, advanced declared pins,
+  explicit signal options and preserved collision/firmware reservation checks.
 - Bundle a bootstrap that preserves verified relay settings on later launches
   after first-boot options were removed, rejecting inconsistent saved state.
 - Align Imager fields and spacing in paired columns, adapting to narrow windows;

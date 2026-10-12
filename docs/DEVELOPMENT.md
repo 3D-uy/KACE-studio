@@ -123,6 +123,17 @@ previous EXE or prove those identities match. Follow the complete release
 checklist for a separately authorized build/publication; never weaken release
 checks to make a dirty or unpinned source tree look publishable.
 
+Printer homing and custom-probe choices belong to the pinned KACE runtime.
+KACE offers automatic/minimum/maximum homing per axis and keeps the automatic
+`homing_positive_dir` example commented. Its custom-probe selector uses the
+effective board sockets and selected drivers, prioritizes declared probe or
+replaced Z inputs and preserves pin collisions and firmware reservations.
+Studio must not duplicate these decisions. Runtime changes require the
+bootstrap installer ref, `release-contract.json` runtime hashes and bundled
+bootstrap to be updated together, followed by a new packaged build; source-mode
+checks do not qualify a previous EXE. Keep the runtime commit separate from the
+subsequent bootstrap pin commit to avoid a self-referential source hash.
+
 ## Contribution and documentation
 
 ### Commit subjects
