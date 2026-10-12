@@ -1288,8 +1288,7 @@ class Api:
                         disconnect_message,
                     )
                 else:
-                    # Stale callbacks should not clear the status
-                    self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
+                    self.set_device_state("SSH_DISCONNECTED", 0, disconnect_message)
                 if not self._ssh_session_is_active(candidate):
                     threading.Thread(
                         target=self._recover_ssh,

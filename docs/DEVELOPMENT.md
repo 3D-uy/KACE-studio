@@ -229,3 +229,13 @@ pending transport and must fail login instead of returning success or starting
 a terminal on a closed client. An isolated SFTP failure may still leave SSH usable.
 Exhausted SSH retries preserve their final exception for the sanitized UI error.
 Coverage: `tests/test_sftp_timeouts.py` and `tests/test_ssh_deadline.py`.
+
+Terminal sessions probe an idle connection every ten seconds by opening and
+closing an SSH channel with a five-second response deadline. This executes no
+remote command. A refusal counts as a server reply; a timeout closes the lost
+transport and invokes the existing bounded reconnect worker. Terminal setup also
+has a five-second channel/PTY/command-response deadline. Post-bootstrap SSH loss
+uses the same disconnected controls and preserved workflow as bootstrap loss.
+Coverage: `tests/test_ssh_stream_liveness.py`, `tests/test_power_session_identity.py`
+and `tests/test_bootstrap_frontend_session.py`. These simulated failures do not
+establish the cause of a Raspberry Pi kernel lockup or qualify printer hardware.

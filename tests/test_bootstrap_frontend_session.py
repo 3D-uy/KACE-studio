@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
     "robin_final_download",
     "disconnect_diagnostic_is_not_host_diagnosis",
     "recoverable_disconnect_invalidates_session",
+    "post_bootstrap_disconnect_invalidates_session",
 ])
 def test_bootstrap_frontend_session(case):
     node = shutil.which("node")

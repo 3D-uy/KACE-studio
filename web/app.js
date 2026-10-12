@@ -1080,6 +1080,10 @@ window.updateDeviceState = function (state, progress, message) {
         case 'DISCOVERED':
             if (term) term.write(`\x1b[1;36m[Status] ${message}\x1b[0m\r\n`);
             break;
+        case 'SSH_DISCONNECTED':
+            window.updateSshDisconnected(message);
+            if (term) term.write(`\x1b[1;33m[Status] ${message}\x1b[0m\r\n`);
+            break;
         case 'SSH_READY':
             updateConnectionStatus(true);
             if (term) term.write(`\x1b[1;32m[Status] ${message}\x1b[0m\r\n`);
@@ -2288,7 +2292,7 @@ window.updateBootstrapInterrupted = function (workflowId, reason) {
     return true;
 };
 
-window.updateBootstrapDisconnected = function (workflowId, reason, expected) {
+window.updateSshDisconnected = function (reason, expected) {
     bootstrapActive = false;
     bootstrapFailureHandled = false;
     updateConnectionStatus(false, { preserveWorkflow: true });
@@ -2313,7 +2317,12 @@ window.updateBootstrapDisconnected = function (workflowId, reason, expected) {
         connSubtitle.textContent = message;
         connSubtitle.style.color = 'var(--warning-color)';
     }
-    window.updateDeviceState('BOOTSTRAP_RECOVERABLE', 0, message);
+    return true;
+};
+
+window.updateBootstrapDisconnected = function (workflowId, reason, expected) {
+    window.updateSshDisconnected(reason, expected);
+    window.updateDeviceState('BOOTSTRAP_RECOVERABLE', 0, reason);
     return true;
 };
 

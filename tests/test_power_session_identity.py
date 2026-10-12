@@ -122,6 +122,28 @@ def test_ssh_close_reports_observed_phase_without_attributing_host_cause(rig, mo
     assert posts == []
 
 
+def test_post_bootstrap_disconnect_marks_session_lost_and_starts_recovery(rig, monkeypatch):
+    from unittest.mock import Mock
+
+    api, connect, posts, _ = rig
+    _, session = connect("pi.local")
+    api._last_kace_workflow_state = "DEPLOYING"
+    api._window = Mock()
+    status = Mock()
+    worker = Mock()
+    monkeypatch.setattr(api, "set_device_state", status)
+    monkeypatch.setattr(main.threading, "Thread", worker)
+    session.close()
+    session.on_close()
+    state, progress, message = status.call_args.args
+    assert (state, progress) == ("SSH_DISCONNECTED", 0)
+    assert "DEPLOYING" in message and "host status is unknown" in message
+    assert api._remote_power_authority is None
+    assert worker.call_args.kwargs["target"] == api._recover_ssh
+    worker.return_value.start.assert_called_once()
+    assert posts == []
+
+
 def test_selection_invalidates_authority_controller_and_pending_context(rig):
     api, connect, posts, _ = rig
     context_a, _ = connect("A.local", "relay-from-A")

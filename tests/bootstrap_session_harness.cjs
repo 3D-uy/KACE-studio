@@ -20,7 +20,7 @@ function deferred(kind, args) {
     requests[kind].push({args, resolve});
     return promise;
 }
-const context = {console, assert, requests, timers, deferred,
+const context = {console, assert, requests, timers, deferred, scenarioName: process.argv[3],
     robinEvents: process.argv[4] ? JSON.parse(fs.readFileSync(process.argv[4], 'utf8')) : null,
     document: {addEventListener() {}, querySelectorAll() {return [];}, createElement: node,
         getElementById(id) {if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id);}},
@@ -70,7 +70,12 @@ const cases = {
         window.updateKaceWorkflowEvent(event(2, 'VERIFYING_CONFIG'), 7);
         const oldCheckpoint = requests.checkpoint.at(-1), oldSftp = requests.sftp.at(-1);
         const selection = powerSelection;
-        window.updateBootstrapDisconnected('boot', 'SSH lost; host status unknown', true);
+        if (scenarioName === 'post_bootstrap_disconnect_invalidates_session') {
+            bootstrapActive = false;
+            window.updateDeviceState('SSH_DISCONNECTED', 0, 'SSH lost; host status unknown');
+        } else {
+            window.updateBootstrapDisconnected('boot', 'SSH lost; host status unknown', true);
+        }
         assert.equal(sshConnected, false);
         assert.equal(document.getElementById('connection-title').textContent, 'SSH Session: Disconnected');
         assert.equal(document.getElementById('bootstrap-btn').disabled, true);
@@ -282,6 +287,7 @@ const cases = {
         await tick(); assert.equal(sftpGeneration, 7);
     `,
 };
+cases.post_bootstrap_disconnect_invalidates_session = cases.recoverable_disconnect_invalidates_session;
 const scenario = cases[process.argv[3]];
 assert.ok(scenario, 'Unknown scenario');
 vm.runInContext(setup + '\n(async () => {' + scenario + '})()', context)
