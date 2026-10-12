@@ -1822,13 +1822,13 @@ if [ -n "$TIMEZONE" ]; then
     fi
 fi
 
-# ── 2. System Packages ───────────────────────────────────────────────────────
 if ! ensure_persistent_journal; then
     log_err "Could not enable persistent system diagnostics."
     emit_bootstrap_terminal "workflow_failed" "SYSTEM_JOURNAL" 1
     exit 1
 fi
 
+# ── 2. System Packages ───────────────────────────────────────────────────────
 log_stage "PACKAGES" "Updating System Packages"
 if [ "$PREBAKED" = "true" ]; then
     # PREBAKED covers Klipper/Moonraker; Fluidd is installed on the verified
