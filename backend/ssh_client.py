@@ -18,6 +18,8 @@ DEFAULT_SSH_CONNECT_DEADLINE_SECONDS = 30.0
 SSH_CONNECT_DEADLINE_ENV = "KACE_STUDIO_SSH_CONNECT_DEADLINE_S"
 SFTP_TIMEOUT_SECONDS = 5.0
 SSH_INPUT_TIMEOUT_SECONDS = 5.0
+SSH_CHANNEL_TIMEOUT_SECONDS = 5.0
+SSH_HEARTBEAT_INTERVAL_SECONDS = 10.0
 _known_hosts_thread_lock = threading.RLock()
 
 
@@ -486,14 +488,18 @@ class SSHSession:
                         ) from e
                     delay = min(delay * 2, max_delay)
                 else:
-                    return False
+                    # Preserve the final cause for the sanitized UI error; a
+                    # generic False hides authentication and transport failures.
+                    raise
 
     def run_command_stream(self, command: str, on_data_callback: Callable[[str], None], on_close_callback: Callable[[], None], cols: int = 80, rows: int = 24):
         """
         Executes a command on the remote Pi, streaming the stdout/stderr
         back asynchronously via the data callback.
         """
-        if not self.client:
+        with self._state_lock:
+            client = self.client
+        if not client:
             on_data_callback("\r\n[SSH Connection Error]: Not connected.\r\n")
             on_close_callback()
             return
@@ -502,14 +508,40 @@ class SSHSession:
             self.running = True
             import codecs
             decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+            channel = None
+            setup_timer = None
             try:
-                transport = self.client.get_transport()
-                self.channel = transport.open_session()
+                transport = client.get_transport()
+                channel = transport.open_session(timeout=SSH_CHANNEL_TIMEOUT_SECONDS)
+                self.channel = channel
+                # Paramiko's PTY/exec acknowledgement waits ignore settimeout.
+                # Closing the pending channel wakes those waits on timeout.
+                setup_timer = threading.Timer(
+                    SSH_CHANNEL_TIMEOUT_SECONDS, self._close_transport_objects,
+                    args=(channel, None),
+                )
+                setup_timer.daemon = True
+                setup_timer.start()
                 # Request pty with actual frontend terminal dimensions and 256color support
                 self.channel.get_pty(term='xterm-256color', width=cols, height=rows)
                 self.channel.exec_command(command)
+                setup_timer.cancel()
+                last_response = time.monotonic()
                 
                 while self.running:
+                    if not transport.is_active():
+                        raise EOFError("SSH transport disconnected.")
+                    if time.monotonic() - last_response >= SSH_HEARTBEAT_INTERVAL_SECONDS:
+                        # Channel opening requires an acknowledged SSH reply,
+                        # unlike Paramiko's fire-and-forget keepalive. No remote
+                        # command or hardware action is executed by this probe.
+                        try:
+                            probe = transport.open_session(timeout=SSH_CHANNEL_TIMEOUT_SECONDS)
+                        except paramiko.ChannelException:
+                            pass  # A refusal is also an observed server reply.
+                        else:
+                            probe.close()
+                        last_response = time.monotonic()
                     # Use select() to block until data is available or timeout
                     # This prevents CPU-burning busy-wait and ensures escape
                     # sequences arrive as complete contiguous chunks
@@ -518,6 +550,7 @@ class SSHSession:
                         data = self.channel.recv(16384)
                         if not data:
                             break
+                        last_response = time.monotonic()
                         text = decoder.decode(data)
                         on_data_callback(text)
                     
@@ -526,12 +559,19 @@ class SSHSession:
                         break
                         
             except Exception as e:
+                self._discard_client(client)
                 on_data_callback(f"\r\n[SSH Stream Error]: {e}\r\n")
             finally:
                 self.running = False
-                if self.channel:
-                    self.channel.close()
-                on_close_callback()
+                if setup_timer is not None:
+                    setup_timer.cancel()
+                try:
+                    if channel:
+                        channel.close()
+                except Exception as close_err:
+                    print(f"Warning: SSH terminal channel close error: {close_err}")
+                finally:
+                    on_close_callback()
 
         thread = threading.Thread(target=run, daemon=True)
         thread.start()

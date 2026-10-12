@@ -81,6 +81,51 @@ log_err() {
     echo -e "${C_RED}✘  $1${C_RESET}" >&2
 }
 
+ensure_persistent_journal() {
+    local config_dir="${1:-/etc/systemd/journald.conf.d}"
+    local target="$config_dir/60-kace-diagnostics.conf"
+    local marker="# KACE managed: bounded persistent diagnostics"
+    local staging
+    local effective_storage
+    if [ -L "$target" ] || { [ -e "$target" ] && ! grep -qxF "$marker" "$target"; }; then
+        log_err "Refusing to replace unowned journal configuration: $target"
+        return 1
+    fi
+    staging=$(mktemp) || return 1
+    cat > "$staging" <<EOF
+$marker
+[Journal]
+Storage=persistent
+SystemMaxUse=64M
+SystemKeepFree=128M
+MaxRetentionSec=7day
+SyncIntervalSec=30s
+EOF
+    if ! cmp -s "$staging" "$target"; then
+        if ! $SUDO install -d -m 0755 "$config_dir" ||
+           ! $SUDO install -m 0644 "$staging" "$target"; then
+            rm -f "$staging"
+            return 1
+        fi
+    fi
+    rm -f "$staging"
+    effective_storage=$($SUDO systemd-analyze cat-config systemd/journald.conf | awk '
+        /^[[:space:]]*Storage[[:space:]]*=/ {
+            sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); value=$0
+        }
+        END { print value }
+    ')
+    if [ "$effective_storage" != "persistent" ]; then
+        log_err "Effective journal storage is not persistent; review administrator drop-ins."
+        return 1
+    fi
+    # Flushing also covers retries after an earlier activation failure. This
+    # restarts only the journal service, never Klipper, Moonraker or the relay.
+    $SUDO systemctl restart systemd-journald || return 1
+    $SUDO journalctl --flush && $SUDO journalctl --sync || return 1
+    log_ok "Persistent system journal configured (64 MiB, 7 days)."
+}
+
 # BEGIN KACE_DEPENDENCY_PINS
 # Update these values only through an explicit, reviewed dependency update.
 KLIPPER_REPOSITORY="https://github.com/Klipper3d/klipper.git"
@@ -105,7 +150,7 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="6b439b1e88f7ca69005394dd5be236b7ff1a4905"
+KACE_INSTALL_REF="d55efce4c34c75bc558bc03478cb3fe64bb3afa3"
 KACE_INSTALL_SHA256="de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
@@ -1775,6 +1820,12 @@ if [ -n "$TIMEZONE" ]; then
     else
         log_ok "Timezone set to $TIMEZONE."
     fi
+fi
+
+if ! ensure_persistent_journal; then
+    log_err "Could not enable persistent system diagnostics."
+    emit_bootstrap_terminal "workflow_failed" "SYSTEM_JOURNAL" 1
+    exit 1
 fi
 
 # ── 2. System Packages ───────────────────────────────────────────────────────

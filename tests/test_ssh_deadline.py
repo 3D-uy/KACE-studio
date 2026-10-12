@@ -96,3 +96,43 @@ def test_invalid_ssh_deadline_configuration_fails_before_network(monkeypatch, va
 
     with pytest.raises(ValueError, match="KACE_STUDIO_SSH_CONNECT_DEADLINE_S"):
         ssh_client.ssh_connect_deadline_seconds()
+
+
+def test_exhausted_retries_preserve_the_actual_connection_error(tmp_path, monkeypatch):
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text("", encoding="utf-8")
+    clients = []
+
+    class FailedClient:
+        def __init__(self):
+            self.closed = False
+            clients.append(self)
+
+        def load_host_keys(self, _path):
+            pass
+
+        def set_missing_host_key_policy(self, _policy):
+            pass
+
+        def connect(self, *_args, **_kwargs):
+            raise ssh_client.paramiko.SSHException("No authentication methods available")
+
+        def close(self):
+            self.closed = True
+
+    class NoDelayCancellation:
+        def is_set(self):
+            return False
+
+        def wait(self, _seconds):
+            return False
+
+    monkeypatch.setattr(ssh_client, "_get_known_hosts_path", lambda **_kwargs: str(known_hosts))
+    monkeypatch.setattr(ssh_client, "_known_hosts_lock", _unlocked)
+    monkeypatch.setattr(ssh_client.paramiko, "SSHClient", FailedClient)
+    session = ssh_client.SSHSession()
+    with pytest.raises(ssh_client.paramiko.SSHException, match="No authentication methods available"):
+        session._connect_until_deadline("printer.local", "kace", "simulated", time.monotonic() + 10, NoDelayCancellation())
+    assert len(clients) == 6
+    assert all(client.closed for client in clients)
+    assert session.client is None

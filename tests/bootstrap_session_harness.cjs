@@ -20,7 +20,7 @@ function deferred(kind, args) {
     requests[kind].push({args, resolve});
     return promise;
 }
-const context = {console, assert, requests, timers, deferred,
+const context = {console, assert, requests, timers, deferred, scenarioName: process.argv[3],
     robinEvents: process.argv[4] ? JSON.parse(fs.readFileSync(process.argv[4], 'utf8')) : null,
     document: {addEventListener() {}, querySelectorAll() {return [];}, createElement: node,
         getElementById(id) {if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id);}},
@@ -64,6 +64,51 @@ function begin() {
 }
 `;
 const cases = {
+    recoverable_disconnect_invalidates_session: `
+        await login(7); begin();
+        document.getElementById('bootstrap-progress-tracker').style.display = 'block';
+        window.updateKaceWorkflowEvent(event(2, 'VERIFYING_CONFIG'), 7);
+        const oldCheckpoint = requests.checkpoint.at(-1), oldSftp = requests.sftp.at(-1);
+        const selection = powerSelection;
+        if (scenarioName === 'post_bootstrap_disconnect_invalidates_session') {
+            bootstrapActive = false;
+            window.updateDeviceState('SSH_DISCONNECTED', 0, 'SSH lost; host status unknown');
+        } else {
+            window.updateBootstrapDisconnected('boot', 'SSH lost; host status unknown', true);
+        }
+        assert.equal(sshConnected, false);
+        assert.equal(document.getElementById('connection-title').textContent, 'SSH Session: Disconnected');
+        assert.equal(document.getElementById('bootstrap-btn').disabled, true);
+        assert.equal(document.getElementById('printer-power-btn').disabled, true);
+        assert.equal(document.getElementById('authorize-moonraker-btn').disabled, true);
+        assert.equal(document.getElementById('kace-firmware-download').disabled, true);
+        assert.equal(document.getElementById('sftp-browser-panel').style.display, 'none');
+        assert.equal(document.getElementById('bootstrap-progress-tracker').style.display, 'block');
+        assert.equal(kaceWorkflowViews.get('flow').state, 'VERIFYING_CONFIG');
+        assert.equal(firmwareGeneration, null);
+        assert.equal(sftpGeneration, null);
+        assert.equal(powerContext, null);
+        assert.equal(powerSelection, selection);
+        assert.equal(window.downloadKaceFirmwareArtifact(), false);
+        oldCheckpoint.resolve({generation: 7, event: event(99, 'COMPLETE')});
+        oldSftp.resolve({ok:true,json:async()=>({path:'/old',items:[],generation:7})});
+        await tick();
+        assert.equal(kaceWorkflowViews.get('flow').state, 'VERIFYING_CONFIG');
+        assert.equal(sftpGeneration, null);
+        assert.equal(window.updateKaceWorkflowEvent(event(100, 'COMPLETE'), 7), false);
+        // A failed automatic retry must retain the pending workflow too.
+        window.updateDeviceState('CONNECTING', 0, 'Retrying');
+        window.updateDeviceState('SSH_DISCONNECTED', 0, 'Host is still rebooting');
+        assert.equal(sshConnected, false);
+        assert.equal(kaceWorkflowViews.get('flow').state, 'VERIFYING_CONFIG');
+        window.restoreSshAfterReconnect(result(8), selection, {
+            generation: 8, event: event(3, 'DEPLOYING'), checkpoint: {state:'DEPLOYING'}
+        });
+        assert.equal(sshConnected, true);
+        assert.equal(firmwareGeneration, 8);
+        assert.equal(kaceWorkflowViews.get('flow').state, 'DEPLOYING');
+        assert.equal(window.updateKaceWorkflowEvent(event(101, 'COMPLETE'), 7), false);
+    `,
     sftp_persists_between_tabs: `
         await login(7);
         requests.sftp.at(-1).resolve({ok:true,json:async()=>({path:'/home/kace/configs',generation:7,items:[]})}); await tick();
@@ -247,6 +292,7 @@ const cases = {
         await tick(); assert.equal(sftpGeneration, 7);
     `,
 };
+cases.post_bootstrap_disconnect_invalidates_session = cases.recoverable_disconnect_invalidates_session;
 const scenario = cases[process.argv[3]];
 assert.ok(scenario, 'Unknown scenario');
 vm.runInContext(setup + '\n(async () => {' + scenario + '})()', context)

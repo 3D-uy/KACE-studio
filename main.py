@@ -1096,6 +1096,7 @@ class Api:
             self._ssh_attempt_gen += 1
             attempt_gen = self._ssh_attempt_gen
 
+        connection_error_state = "SSH_DISCONNECTED" if _reconnect_attempt is not None else "ERROR"
         self.set_device_state("CONNECTING", 50, f"Establishing SSH connection to {ip}...")
         
         import paramiko
@@ -1111,7 +1112,7 @@ class Api:
             if retained:
                 self.set_device_state("SSH_READY", 100, "New SSH host key was rejected; existing session retained.")
             else:
-                self.set_device_state("ERROR", 0, f"SSH Host Key Mismatch for {ip}.")
+                self.set_device_state(connection_error_state, 0, f"SSH Host Key Mismatch for {ip}.")
             return {"status": "host_key_mismatch", "message": str(host_key_err)}
         except Exception as conn_err:
             candidate.close()
@@ -1124,7 +1125,7 @@ class Api:
             if retained:
                 self.set_device_state("SSH_READY", 100, "New SSH connection failed; existing session retained.")
             else:
-                self.set_device_state("ERROR", 0, f"SSH connection failed: {sanitized_msg}")
+                self.set_device_state(connection_error_state, 0, f"SSH connection failed: {sanitized_msg}")
             return {"status": "failed", "message": sanitized_msg}
 
         if success:
@@ -1155,13 +1156,22 @@ class Api:
 
             # Reachability (including an open Moonraker port) is not evidence
             # that a KACE installation workflow completed successfully.
-            self.set_device_state("SSH_READY", 100, f"SSH session connected to {ip}.")
             remote_power = self._refresh_remote_power_authority(power_context)
             with self._ssh_lock:
                 current_attempt = attempt_gen == self._ssh_attempt_gen and current_gen == self._ssh_gen
+                session_active = self._ssh_session_is_active(candidate)
+                if current_attempt and not session_active:
+                    with self._power_lock:
+                        self._invalidate_power_locked()
             if not current_attempt:
                 candidate.close()
                 return {"status": "failed", "message": "Connection superseded by a newer selection."}
+            if not session_active:
+                candidate.close()
+                message = "SSH connection closed while checking remote configuration. Retry after the host finishes starting."
+                self.set_device_state(connection_error_state, 0, message)
+                return {"status": "failed", "message": message}
+            self.set_device_state("SSH_READY", 100, f"SSH session connected to {ip}.")
                 
             # Write-coalescing buffer: collect rapid-fire SSH data chunks and flush
             # them as a single evaluate_js call every 15ms. This prevents interactive
@@ -1279,8 +1289,7 @@ class Api:
                         disconnect_message,
                     )
                 else:
-                    # Stale callbacks should not clear the status
-                    self.set_device_state("DISCOVERED", 0, "SSH connection disconnected.")
+                    self.set_device_state("SSH_DISCONNECTED", 0, disconnect_message)
                 if not self._ssh_session_is_active(candidate):
                     threading.Thread(
                         target=self._recover_ssh,
@@ -1300,7 +1309,7 @@ class Api:
             if retained:
                 self.set_device_state("SSH_READY", 100, "New SSH connection failed; existing session retained.")
             else:
-                self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
+                self.set_device_state(connection_error_state, 0, f"SSH connection failed to {ip}. Verify user password or network path.")
             return {"status": "failed", "message": "Verify user password or network path."}
 
     def _moonraker_access(self, power_context, approved_ip=None):

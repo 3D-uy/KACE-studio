@@ -33,8 +33,8 @@ LOCAL_PATH_PATTERNS = (
         re.compile(r"(?i)[/\\.](?:desktop|documents)[/\\.]"),
     ),
     (
-        "Codex attachment path",
-        re.compile(r"(?i)\.codex[\\/]+attachments"),
+        "local attachment cache",
+        re.compile(r"(?i)\.[a-z0-9_-]+[\\/]+attachments"),
     ),
     (
         "developer workspace path",
