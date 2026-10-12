@@ -18,6 +18,8 @@ def test_rejects_developer_profiles_and_workspaces():
         "/" + "home/user.name/repo",
         "/" + "Desktop/fixture.txt",
         "." + "Documents.fixture.txt",
+        "." + "tool-cache/attachments/fixture.png",
+        "." + "tool-cache" + separator + "attachments" + separator + "fixture.png",
     )
     for sample in samples:
         assert scan_text(sample)
