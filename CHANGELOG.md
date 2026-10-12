@@ -8,6 +8,8 @@ uncommitted changes or current CI, packaging or physical qualification.
 
 ## [0.5.0-rc.3] - 2026-10-03
 
+- Bundle a bootstrap that preserves verified relay settings on later launches
+  after first-boot options were removed, rejecting inconsistent saved state.
 - Align Imager fields and spacing in paired columns, adapting to narrow windows;
   expand GPIO relay configuration immediately when enabled.
 - Pause first-boot discovery when new devices respond. Offer explicit Connect,

@@ -74,6 +74,14 @@ and MCU before persisting state. Keep backups from the failed attempt; do not
 restore the old configuration over a working relay or fabricate `power.json`.
 The normal KACE wizard still handles the initial printer/MCU configuration.
 
+Once a successful installation removes the boot options, later launches recover
+the complete versioned relay settings from `~/.config/kace/power.json` rather than
+interpreting an omitted relay choice as disabled. The active managed block must
+match those settings before any configuration changes; a verified block stays in
+place. Missing, legacy, partial or inconsistent state requires manual recovery.
+This guard does not restore a previously deleted block. Explicit boot options
+still own changes to the relay, including `POWER_RELAY=false`.
+
 A locally edited bootstrap does not change an already distributed EXE. Its
 release commit/hash and bundled resource must be updated together through the
 release workflow before packaging; source tests cannot qualify that EXE.
