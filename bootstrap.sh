@@ -105,7 +105,7 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="ea6278df3a765d81f5423003dc91c0e5b339d68e"
+KACE_INSTALL_REF="6b439b1e88f7ca69005394dd5be236b7ff1a4905"
 KACE_INSTALL_SHA256="de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
@@ -375,6 +375,104 @@ validate_power_relay_settings() {
     fi
 }
 
+resolve_power_relay_settings() {
+    local state_path="$1" config_path="$2" saved
+    POWER_RELAY_RESTORED=0
+    # An explicit boot choice still owns enable/disable. Omission on a later
+    # launch must not silently disable an already configured printer.
+    if [ -n "$POWER_RELAY" ]; then
+        validate_power_relay_settings
+        return $?
+    fi
+    if [ -n "$POWER_DEVICE$POWER_GPIO$POWER_ACTIVE_LOW$POWER_RESTART_KLIPPER$POWER_INITIAL_STATE$POWER_OFF_WHEN_SHUTDOWN" ]; then
+        log_err "Partial GPIO relay settings require an explicit POWER_RELAY choice."
+        return 1
+    fi
+    if ! saved=$(python3 - "$state_path" "$config_path" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+state_path, config_path = map(Path, sys.argv[1:])
+if not state_path.exists():
+    content = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    if re.search(r"^\s*\[\s*power\s+", content, re.MULTILINE | re.IGNORECASE) or any(
+        line.strip() in ("# BEGIN KACE MANAGED: power", "# END KACE MANAGED: power")
+        for line in content.splitlines()
+    ):
+        raise RuntimeError("existing Moonraker power configuration has no saved relay settings; manual recovery required")
+    sys.stdout.buffer.write(b"new\n")
+    raise SystemExit(0)
+
+state = json.loads(state_path.read_text(encoding="utf-8"))
+required = {
+    "schema", "revision", "enabled", "device", "pin", "active_low",
+    "restart_klipper_when_powered", "initial_state", "off_when_shutdown",
+}
+if not isinstance(state, dict) or not required.issubset(state) or state["schema"] != "kace-power/v1":
+    raise RuntimeError("saved relay settings require a complete kace-power/v1 state; manual recovery required")
+revision = state["revision"]
+if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+    raise RuntimeError("invalid saved relay revision")
+for key in ("enabled", "active_low", "restart_klipper_when_powered", "off_when_shutdown"):
+    if not isinstance(state[key], bool):
+        raise RuntimeError(f"invalid saved relay {key}")
+if state["initial_state"] not in ("on", "off"):
+    raise RuntimeError("invalid saved relay initial_state")
+if state["enabled"]:
+    if not isinstance(state["device"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", state["device"]):
+        raise RuntimeError("invalid saved relay device")
+    pin = re.fullmatch(r"gpiochip0/gpio([0-9]{1,3})", state["pin"]) if isinstance(state["pin"], str) else None
+    if not pin:
+        raise RuntimeError("saved relay pin must use gpiochip0")
+    values = ("true", state["device"], pin.group(1))
+else:
+    if state["device"] is not None or state["pin"] is not None:
+        raise RuntimeError("disabled saved relay must not name a device or pin")
+    values = ("false", "", "")
+values = ("saved", *values, str(state["active_low"]).lower(), str(state["restart_klipper_when_powered"]).lower(),
+          state["initial_state"], str(state["off_when_shutdown"]).lower())
+
+# Validate ownership before any backup or mutation, not just the option values.
+content = config_path.read_text(encoding="utf-8")
+lines = content.splitlines()
+begin = [i for i, line in enumerate(lines) if line.strip() == "# BEGIN KACE MANAGED: power"]
+end = [i for i, line in enumerate(lines) if line.strip() == "# END KACE MANAGED: power"]
+if state["enabled"]:
+    if len(begin) != 1 or len(end) != 1 or begin[0] >= end[0]:
+        raise RuntimeError("saved relay requires one intact managed block; manual recovery required")
+    headers = [match.group(1).strip().casefold() for line in lines[begin[0] + 1:end[0]]
+               if (match := re.match(r"^\s*\[\s*([^\]]+?)\s*\]", line))]
+    if headers != ["power " + state["device"].casefold()]:
+        raise RuntimeError("saved relay ownership does not match Moonraker; manual recovery required")
+elif begin or end:
+    raise RuntimeError("disabled saved relay conflicts with managed Moonraker power; manual recovery required")
+sys.stdout.buffer.write(("\n".join(values) + "\n").encode("utf-8"))
+PY
+    ); then
+        log_err "Cannot recover GPIO relay settings safely; live configuration preserved."
+        return 1
+    fi
+    if [ "$saved" = "new" ]; then
+        POWER_RELAY=false
+        return 0
+    fi
+    local -a fields
+    mapfile -t fields <<< "$saved"
+    POWER_RELAY="${fields[1]}"
+    POWER_DEVICE="${fields[2]}"
+    POWER_GPIO="${fields[3]}"
+    POWER_ACTIVE_LOW="${fields[4]}"
+    POWER_RESTART_KLIPPER="${fields[5]}"
+    POWER_INITIAL_STATE="${fields[6]}"
+    POWER_OFF_WHEN_SHUTDOWN="${fields[7]}"
+    validate_power_relay_settings || return 1
+    verify_requested_power_relay "$config_path" || return 1
+    POWER_RELAY_RESTORED=1
+    log_ok "Preserving verified GPIO relay settings from power.json."
+}
+
 begin_power_reconciliation() {
     local config_path="$1"
     local state_path="${2:-${POWER_CONFIG_PATH:-${PRINTER_HOME:+$PRINTER_HOME/.config/kace/power.json}}}"
@@ -448,6 +546,9 @@ commit_power_reconciliation() {
 }
 
 persist_power_controller_config() {
+    # A verified relaunch has no new desired state to publish. Preserve the
+    # existing revision, formatting and any additional saved metadata.
+    [ "${POWER_RELAY_RESTORED:-0}" != "1" ] || return 0
     local config_path="$PRINTER_HOME/.config/kace/power.json"
     python3 - "$config_path" "$POWER_RELAY" "$POWER_DEVICE" "$POWER_GPIO" \
         "$POWER_ACTIVE_LOW" "$POWER_RESTART_KLIPPER" "$POWER_INITIAL_STATE" \
@@ -826,7 +927,9 @@ EOF
     ensure_config_entry "$config_path" "file_manager" "enable_object_processing" "True" || return 1
     # Power is reconciled last so generic INI insertion cannot split the
     # ownership marker from its immediately adjacent [power ...] section.
-    reconcile_power_relay_section "$config_path" || return 1
+    if [ "${POWER_RELAY_RESTORED:-0}" != "1" ]; then
+        reconcile_power_relay_section "$config_path" || return 1
+    fi
     verify_requested_power_relay "$config_path" || return 1
 }
 
@@ -1604,25 +1707,6 @@ else
     PREBAKED="false"
 fi
 
-if ! validate_power_relay_settings; then
-    echo "=== KACE_BOOTSTRAP_ERROR: GPIO_RELAY_CONFIG ==="
-    log_err "GPIO relay configuration is incomplete or invalid; bootstrap aborted."
-    exit 1
-fi
-
-echo -e "${C_BOLD}"
-echo "--------------------------------------------------------"
-echo "  Target Configuration"
-echo "  Dashboard UI : $DASHBOARD"
-echo "  Webcam Stream: $CROWSNEST"
-echo "  Timezone     : ${TIMEZONE:-'(Keep system default)'}"
-echo "  Pre-baked OS : $PREBAKED"
-if [ "$POWER_RELAY" = "true" ]; then
-    echo "  GPIO relay   : ${POWER_DEVICE} on GPIO${POWER_GPIO}"
-fi
-echo "--------------------------------------------------------"
-echo -e "${C_RESET}"
-
 # ── Resolve Printer User Home Directory ─────────────────────────────────────
 # By first boot, firstrun.sh has already renamed the pre-existing printer user
 # (pi/mainsail/fluidd) to the target username and moved their home directory.
@@ -1648,6 +1732,27 @@ else
     fi
 fi
 echo "Resolved printer home directory: $PRINTER_HOME"
+
+if ! resolve_power_relay_settings \
+    "$PRINTER_HOME/.config/kace/power.json" \
+    "$PRINTER_HOME/printer_data/config/moonraker.conf"; then
+    echo "=== KACE_BOOTSTRAP_ERROR: GPIO_RELAY_CONFIG ==="
+    log_err "GPIO relay configuration is incomplete or inconsistent; bootstrap aborted before changes."
+    exit 1
+fi
+
+echo -e "${C_BOLD}"
+echo "--------------------------------------------------------"
+echo "  Target Configuration"
+echo "  Dashboard UI : $DASHBOARD"
+echo "  Webcam Stream: $CROWSNEST"
+echo "  Timezone     : ${TIMEZONE:-'(Keep system default)'}"
+echo "  Pre-baked OS : $PREBAKED"
+if [ "$POWER_RELAY" = "true" ]; then
+    echo "  GPIO relay   : ${POWER_DEVICE} on GPIO${POWER_GPIO}"
+fi
+echo "--------------------------------------------------------"
+echo -e "${C_RESET}"
 
 # Get the owner and group of the printer user home directory
 PRINTER_USER=$(stat -c '%U' "$PRINTER_HOME" 2>/dev/null || echo "$USER")

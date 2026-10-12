@@ -35,10 +35,10 @@
   },
   "kace": {
     "repository": "https://github.com/3D-uy/KACE.git",
-    "candidate_ref": "ea6278df3a765d81f5423003dc91c0e5b339d68e",
-    "bootstrap_ref": "2b46d2249547448489f727de4f7ff3ebc8138678",
-    "bootstrap_sha256": "7c898e0f0e507cd18f128586395b09f6bc5cb97b11ed0d70912b3f7fcf79dbb8",
-    "installer_ref": "ea6278df3a765d81f5423003dc91c0e5b339d68e",
+    "candidate_ref": "6b439b1e88f7ca69005394dd5be236b7ff1a4905",
+    "bootstrap_ref": "c093f0ee864af04eb67262076f7d218961af9da4",
+    "bootstrap_sha256": "674f40f65268872928c2a643a955178b377bb6cc0b45b598fb831c0743cdd984",
+    "installer_ref": "6b439b1e88f7ca69005394dd5be236b7ff1a4905",
     "installer_sha256": "de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500",
     "runtime_status": "pinned",
     "required_runtime_files": {
@@ -94,7 +94,7 @@
       "core/probe_configuration.py": "2abe2856dcf41ff35a2506befb9bb8b4a3c6a4d3fde812b1e34c3fdc185ab406",
       "core/probe_offset_visualizer.py": "42b317b5ea090d4cd22bd677d3ae1f806286f796d25c81d52407f8dd6524af6c",
       "core/probe_sampling.py": "8926a63f81fce232b479b52199cc9d5ee6a0135e014ccec7e90018e3ca3129a5",
-      "core/profile_values.py": "b262bad83227a6e246b8a2e2fca34880a53e85e26917bb9ab70d15f93af969de",
+      "core/profile_values.py": "cb4d0b4c186951cdde5e7f800d52c0ea9042cb4289393363e006b47dd1b53a19",
       "core/reconciler.py": "1ae661bc28337ff2ab0501b0958e515684083e8ada8b4c00a34aba1e8da9e605",
       "core/reviewed_source.py": "125783b9cd6b8630d589d9c2dc9b4d647969c2e44669f3fbc57fb320e4044f80",
       "core/scraper.py": "60d41dc23ea05f17e676bf21ac85d66ac3cc30845641ee11463237a1f51a8a08",
@@ -111,14 +111,14 @@
       "core/tmc_uart.py": "c22a7a63904eeadef17cc4ed34a72276298d4a77d4b7e4fdf5cdc176a0c261e9",
       "core/translations/__init__.py": "fe772d28285a645f5c484988b9e378a9cbc0046057172bec291aac90c3eaa65f",
       "core/translations/_state.py": "0dae66e4b50d0b3149a43182d13e3e40dacd71a46f25d5db6d5b4f0eb5a82e31",
-      "core/translations/_strings.py": "446402f249a72904e3bca9dbcc0115835c33b592ffc969c8d1d7961f5e15ddab",
-      "core/translations/_t.py": "34ebedb0a4418fafe9451403a340da77ba4f21cbf02111e83f7e45b1c173d33c",
+      "core/translations/_strings.py": "bcf9b26d8808cf97b1a642233abd42c68b1b8903ec5a80414e8b2b62bc7d16db",
+      "core/translations/_t.py": "c131b04097441455b09ad038e56d0d0c5030357f7390a9f8a3bb7d587905cc23",
       "core/validators.py": "f826273ee0f5e69e442ead140ec8b261d687cd8dabe3039fc953913d8acecfff",
       "core/wizard/__init__.py": "462a4e41f5034297b6e19e4dcb00735bb3f03f9d3a1c08fd614b7a5061006b51",
       "core/wizard/runner.py": "e9167dbfa8f8c7fad2c4691c0792a7b61b4e4c4aca349dfea9b94b0cc2bacdc8",
-      "core/wizard/steps/hardware.py": "683cbfb859dac4b169bd7c252c1348ad6c27f47ec4c130734da3f078dade1a05",
-      "core/wizard/steps/motion.py": "2a75793a595e6b831e494d31658504c89573f05211fb055aa693ba9120b9852f",
-      "core/wizard/steps/sensors.py": "d4efd420645d84a3895da6bc9958e46b74100b40a9ee46926ca6281228516b0b",
+      "core/wizard/steps/hardware.py": "718eb76de9d470b298fb8db1d6481795dd1edaf240bd846707a57e61f9261170",
+      "core/wizard/steps/motion.py": "fe12961c832f3ccd7c14425a76f0bdcf40567a4c02313a03538c292f71a7e4af",
+      "core/wizard/steps/sensors.py": "31468eaf4ecec5e42234004aaab198332bc3553adeb9dfc84095b8132a61b216",
       "core/wizard/steps/software.py": "00aeb29f2e08467da2b8694603820b8f57bb4cfd749133ef429dbda750950279",
       "core/wizard/steps/thermal.py": "7bc5fde142ec2a6edb5f4ed8dad10cecca619e0c304882637899297285dafb0d",
       "core/wizard/ui.py": "949e9f8210d797b2902a91e5edbb09be6bdbb85bb89dcb80da2e91466e1bb808",
@@ -179,7 +179,7 @@
       "kace.py": "694b6a2aa0d1e7259da1006ab7fb0263e833cb8832bfaff3ac76712a641f213e",
       "requirements-ssh.txt": "8674269c0a7246e85a5de05e078ed0c925bbf25b4574bc20f6ccb79c89759ca0",
       "requirements.txt": "f1097cf785d07cc907fcc62d0fa2a52f14151bbd47b5dcb4cec4adfab3da551d",
-      "templates/printer.cfg.j2": "c3e5dea5387ad56efbbdaec9071d2c6f4074f1f52b95c5e1b365609539fb319e"
+      "templates/printer.cfg.j2": "0ccb7ee15da9f2c4b953702dff390facb26df964c042acedf11691106cc06cbb"
     }
   },
   "bundled_resources": [
