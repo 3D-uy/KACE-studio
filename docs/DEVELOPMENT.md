@@ -211,3 +211,14 @@ catalogs. Python owns preflight validation and exposes field/code for presentati
 JavaScript must not infer hardware success. Large Node harness fragments use stdin
 to avoid Windows command-line limits. Native/package/hardware checks remain
 separate from browser fixtures.
+
+## Recoverable SSH loss
+
+A recoverable disconnect invalidates SSH/SFTP and power request identities while
+retaining the displayed workflow as historical progress. It disables installation,
+downloads and power controls and displays Disconnected. The existing reconnect
+selection remains valid, but the new session must supply its own checkpoint and
+authority. Delayed replies from the lost session cannot mark completion or restore
+controls. `tests/test_bootstrap_frontend_session.py` exercises the actual app.js
+through disconnect, delayed replies and reconnect. Bootstrap supplies bounded
+persistent Linux diagnostics; source and packaged delivery retain the same contract.

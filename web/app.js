@@ -2291,9 +2291,21 @@ window.updateBootstrapInterrupted = function (workflowId, reason) {
 window.updateBootstrapDisconnected = function (workflowId, reason, expected) {
     bootstrapActive = false;
     bootstrapFailureHandled = false;
+    updateConnectionStatus(false, { preserveWorkflow: true });
+    stopPowerPolling();
+    powerRequestSequence++;
+    powerStatusRequest = null;
+    powerAuthorityRequest++;
+    powerContext = null;
+    remotePowerAuthority = null;
     const message = reason || (expected
         ? 'SSH disconnected while restart verification was pending. Host status is unknown; reconnect to continue.'
         : 'SSH was lost unexpectedly. Host status is unknown; reconnect to resume the saved checkpoint.');
+    renderPrinterPower({ available: false, status: 'error', detail: message });
+    const accessButton = document.getElementById('authorize-moonraker-btn');
+    if (accessButton) accessButton.disabled = true;
+    const firmwareDownload = document.getElementById('kace-firmware-download');
+    if (firmwareDownload) firmwareDownload.disabled = true;
     const label = document.getElementById('bootstrap-stage-label');
     if (label) label.textContent = `⚠ ${message}`;
     const connSubtitle = document.getElementById('connection-subtitle');
@@ -2343,13 +2355,13 @@ window.writeTerminalData = function (data, context) {
     parseBootstrapProgress(data, context);
 };
 
-function updateConnectionStatus(connected, { newSession = false } = {}) {
+function updateConnectionStatus(connected, { newSession = false, preserveWorkflow = false } = {}) {
     // Status notifications (SSH_READY / BOOTSTRAPPING) describe the current
     // session. Only a connection boundary invalidates its events and files.
     const sessionChanged = !connected || !sshConnected || newSession;
     if (sessionChanged) {
         firmwareGeneration = null;
-        kaceWorkflowViews.clear();
+        if (!preserveWorkflow) kaceWorkflowViews.clear();
         sftpRequestSequence++;
         sftpGeneration = null;
         clearSftpSelection();
@@ -2373,7 +2385,7 @@ function updateConnectionStatus(connected, { newSession = false } = {}) {
 
         // Hide the progress tracker and resize terminal
         const tracker = document.getElementById('bootstrap-progress-tracker');
-        if (tracker && tracker.style.display !== 'none') {
+        if (!preserveWorkflow && tracker && tracker.style.display !== 'none') {
             tracker.style.display = 'none';
             setTimeout(() => {
                 if (fitAddon) fitAddon.fit();

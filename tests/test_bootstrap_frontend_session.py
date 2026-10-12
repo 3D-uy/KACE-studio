@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
     "sftp_pending_list_survives_status",
     "robin_final_download",
     "disconnect_diagnostic_is_not_host_diagnosis",
+    "recoverable_disconnect_invalidates_session",
 ])
 def test_bootstrap_frontend_session(case):
     node = shutil.which("node")

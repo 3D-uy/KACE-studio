@@ -136,3 +136,9 @@ KACE Studio es un proyecto independiente y no está oficialmente afiliado ni res
 KACE Studio es software open source bajo la [GNU GPL v3](../../LICENSE).
 
 Correcciones en fuente: se rechazan redirecciones de Moonraker. Consultá los [contratos de desarrollo](../DEVELOPMENT.md) para operaciones remotas y límites de validación. El candidato descargable no cambia hasta preparar una nueva release. El descubrimiento requiere una subred real, inequívoca y dentro del límite de 1024 direcciones; en otros casos usá conexión manual. Los valores WiFi deben conservarse al pasar por el parser de la imagen; los fallos SFTP se muestran como errores.
+
+## Diagnóstico de reinicios
+
+Las nuevas ejecuciones de bootstrap configuran un diario persistente de Linux con un presupuesto de 64 MiB, retención de siete días y sincronización cada 30 segundos. Tras un arranque interrumpido, usa `journalctl -b -1`; los registros no sincronizados antes de un bloqueo o corte pueden perderse. Esto no diagnostica ni corrige la causa de un bloqueo del host.
+
+Ante una pérdida recuperable de SSH, Studio muestra la desconexión, deshabilita los controles de sesión y conserva visible el último progreso. Al reconectar consulta el checkpoint remoto; la reconexión no demuestra que la instalación terminó. Usa el ejecutable nuevo y su bootstrap correspondiente para E2E; abrir Studio no actualiza una instalación anterior de la Pi.
