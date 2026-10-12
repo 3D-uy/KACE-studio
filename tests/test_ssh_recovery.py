@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import main
 
 
 def worker_api():
@@ -50,6 +51,25 @@ def test_manual_disconnect_or_new_selection_cancels_recovery():
     worker(api, "pi", "kace", "secret", 80, 24, 1, 3)
     api.connect_ssh.assert_not_called()
     api._window.evaluate_js.assert_not_called()
+
+
+@pytest.mark.parametrize("cause", ["exception", "false", "probe_closed"])
+@pytest.mark.parametrize("automatic", [False, True])
+def test_failed_retry_retains_disconnected_workflow_instead_of_generic_error(monkeypatch, cause, automatic):
+    api = main.Api()
+    api.set_device_state = Mock()
+    candidate = Mock()
+    candidate.is_connected.return_value = False
+    candidate.connect.return_value = cause != "false"
+    if cause == "exception":
+        candidate.connect.side_effect = TimeoutError("Host is still rebooting")
+    monkeypatch.setattr(main, "SSHSession", lambda: candidate)
+    monkeypatch.setattr(api, "_refresh_remote_power_authority", lambda _: None)
+    result = api.connect_ssh("pi.local", "kace", "simulated", _reconnect_attempt=0 if automatic else None)
+    assert result["status"] == "failed"
+    state, progress, _ = api.set_device_state.call_args.args
+    assert (state, progress) == ("SSH_DISCONNECTED" if automatic else "ERROR", 0)
+    candidate.run_command_stream.assert_not_called()
 
 
 def test_reconnected_terminal_never_calls_pending_installation_complete():

@@ -236,6 +236,8 @@ remote command. A refusal counts as a server reply; a timeout closes the lost
 transport and invokes the existing bounded reconnect worker. Terminal setup also
 has a five-second channel/PTY/command-response deadline. Post-bootstrap SSH loss
 uses the same disconnected controls and preserved workflow as bootstrap loss.
+Failed automatic retries preserve this pending view instead of clearing it through
+the generic login-error path. Manual login failures retain their existing error UI.
 Coverage: `tests/test_ssh_stream_liveness.py`, `tests/test_power_session_identity.py`
 and `tests/test_bootstrap_frontend_session.py`. These simulated failures do not
 establish the cause of a Raspberry Pi kernel lockup or qualify printer hardware.

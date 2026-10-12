@@ -96,6 +96,11 @@ const cases = {
         assert.equal(kaceWorkflowViews.get('flow').state, 'VERIFYING_CONFIG');
         assert.equal(sftpGeneration, null);
         assert.equal(window.updateKaceWorkflowEvent(event(100, 'COMPLETE'), 7), false);
+        // A failed automatic retry must retain the pending workflow too.
+        window.updateDeviceState('CONNECTING', 0, 'Retrying');
+        window.updateDeviceState('SSH_DISCONNECTED', 0, 'Host is still rebooting');
+        assert.equal(sshConnected, false);
+        assert.equal(kaceWorkflowViews.get('flow').state, 'VERIFYING_CONFIG');
         window.restoreSshAfterReconnect(result(8), selection, {
             generation: 8, event: event(3, 'DEPLOYING'), checkpoint: {state:'DEPLOYING'}
         });

@@ -1096,6 +1096,7 @@ class Api:
             self._ssh_attempt_gen += 1
             attempt_gen = self._ssh_attempt_gen
 
+        connection_error_state = "SSH_DISCONNECTED" if _reconnect_attempt is not None else "ERROR"
         self.set_device_state("CONNECTING", 50, f"Establishing SSH connection to {ip}...")
         
         import paramiko
@@ -1111,7 +1112,7 @@ class Api:
             if retained:
                 self.set_device_state("SSH_READY", 100, "New SSH host key was rejected; existing session retained.")
             else:
-                self.set_device_state("ERROR", 0, f"SSH Host Key Mismatch for {ip}.")
+                self.set_device_state(connection_error_state, 0, f"SSH Host Key Mismatch for {ip}.")
             return {"status": "host_key_mismatch", "message": str(host_key_err)}
         except Exception as conn_err:
             candidate.close()
@@ -1124,7 +1125,7 @@ class Api:
             if retained:
                 self.set_device_state("SSH_READY", 100, "New SSH connection failed; existing session retained.")
             else:
-                self.set_device_state("ERROR", 0, f"SSH connection failed: {sanitized_msg}")
+                self.set_device_state(connection_error_state, 0, f"SSH connection failed: {sanitized_msg}")
             return {"status": "failed", "message": sanitized_msg}
 
         if success:
@@ -1168,7 +1169,7 @@ class Api:
             if not session_active:
                 candidate.close()
                 message = "SSH connection closed while checking remote configuration. Retry after the host finishes starting."
-                self.set_device_state("ERROR", 0, message)
+                self.set_device_state(connection_error_state, 0, message)
                 return {"status": "failed", "message": message}
             self.set_device_state("SSH_READY", 100, f"SSH session connected to {ip}.")
                 
@@ -1308,7 +1309,7 @@ class Api:
             if retained:
                 self.set_device_state("SSH_READY", 100, "New SSH connection failed; existing session retained.")
             else:
-                self.set_device_state("ERROR", 0, f"SSH connection failed to {ip}. Verify user password or network path.")
+                self.set_device_state(connection_error_state, 0, f"SSH connection failed to {ip}. Verify user password or network path.")
             return {"status": "failed", "message": "Verify user password or network path."}
 
     def _moonraker_access(self, power_context, approved_ip=None):
