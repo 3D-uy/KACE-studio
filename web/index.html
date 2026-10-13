@@ -241,7 +241,7 @@
                             </select>
                         </div>
                         <div class="imager-actions">
-                            <button type="button" class="btn btn-primary" onclick="switchTab('credentials-tab')" style="padding: 8px 24px;">
+                            <button type="button" class="btn btn-primary" onclick="switchTab('credentials-tab', {focusContent: true})" style="padding: 8px 24px;">
                                 <span data-ui-text="next">Next</span> <i class="fa-solid fa-arrow-right" style="margin-left: 6px;"></i>
                             </button>
                         </div>
@@ -310,7 +310,7 @@
                                     <label for="ssh-enable" class="service-option-label">
                                         <input type="checkbox" id="ssh-enable"> <span data-ui-text="enableSsh">Enable SSH</span>
                                     </label>
-                                    <button type="button" class="service-info" aria-label="About Enable SSH">
+                                    <button type="button" class="service-info" aria-label="About Enable SSH" data-ui-label="aboutSsh">
                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
                                     <div class="service-tooltip" role="tooltip"><span data-ui-text="sshHint">Allows KACE Studio to connect to the Pi after it boots and opens the SSH Workspace.</span></div>
@@ -319,7 +319,7 @@
                                     <label for="crowsnest-enable" class="service-option-label">
                                         <input type="checkbox" id="crowsnest-enable"> <span data-ui-text="installCrowsnest">Install Crowsnest (Webcam Streamer)</span>
                                     </label>
-                                    <button type="button" class="service-info" aria-label="About Crowsnest">
+                                    <button type="button" class="service-info" aria-label="About Crowsnest" data-ui-label="aboutCrowsnest">
                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
                                     <div class="service-tooltip" role="tooltip"><span data-ui-text="crowsnestHint">Installs the webcam streaming service. Leave it disabled when the printer has no camera.</span></div>
@@ -328,7 +328,7 @@
                                     <label for="ssh-password-auth" class="service-option-label">
                                         <input type="checkbox" id="ssh-password-auth" checked> <span data-ui-text="passwordAuth">Enable Password Authentication</span>
                                     </label>
-                                    <button type="button" class="service-info" aria-label="About password authentication">
+                                    <button type="button" class="service-info" aria-label="About password authentication" data-ui-label="aboutPasswordAuth">
                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
                                     <div class="service-tooltip" role="tooltip"><span data-ui-text="passwordAuthHint">Lets you sign in using the password above. Disable it only when SSH keys are already configured.</span></div>
@@ -337,7 +337,7 @@
                                     <label for="power-relay-enable" class="service-option-label">
                                         <input type="checkbox" id="power-relay-enable" onchange="togglePowerRelaySettings()"> <span data-ui-text="relayEnabled">Pi controls printer power through a GPIO relay</span>
                                     </label>
-                                    <button type="button" class="service-info" aria-label="About GPIO relay power control">
+                                    <button type="button" class="service-info" aria-label="About GPIO relay power control" data-ui-label="aboutRelay">
                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
                                     <div class="service-tooltip" role="tooltip"><span data-ui-text="relayHint">Use only when a relay wired to the Pi physically switches printer power. It enables Moonraker power control.</span></div>
@@ -346,7 +346,7 @@
                                     <label for="skip-write-verification" class="service-option-label">
                                         <input type="checkbox" id="skip-write-verification"> <span data-ui-text="skipReadback">Skip SD readback verification (faster)</span>
                                     </label>
-                                    <button type="button" class="service-info" aria-label="About SD readback verification">
+                                    <button type="button" class="service-info" aria-label="About SD readback verification" data-ui-label="aboutReadback">
                                         <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                     </button>
                                     <div class="service-tooltip" role="tooltip"><span data-ui-text="readbackHint">Not recommended. Verification reads the full image back from the SD card and detects write errors before the card is used.</span></div>
@@ -371,7 +371,7 @@
                                      <label for="power-active-low" class="service-option-label">
                                          <input type="checkbox" id="power-active-low"> <span data-ui-text="activeLow">Signal is active low</span>
                                      </label>
-                                     <button type="button" class="service-info" aria-label="About active low relay signals">
+                                     <button type="button" class="service-info" aria-label="About active low relay signals" data-ui-label="aboutActiveLow">
                                          <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                      </button>
                                      <div class="service-tooltip" role="tooltip"><span data-ui-text="activeLowHint">Enable this when the relay turns on when the GPIO signal is low. Check the relay board documentation first.</span></div>
@@ -380,7 +380,7 @@
                                      <label for="restart-klipper-when-powered" class="service-option-label">
                                          <input type="checkbox" id="restart-klipper-when-powered" checked> <span data-ui-text="restartPowered">Restart Klipper when power is enabled</span>
                                      </label>
-                                     <button type="button" class="service-info" aria-label="About restarting Klipper after power is enabled">
+                                     <button type="button" class="service-info" aria-label="About restarting Klipper after power is enabled" data-ui-label="aboutRestart">
                                          <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
                                      </button>
                                      <div class="service-tooltip" role="tooltip"><span data-ui-text="restartHint">Restarts Klipper after the printer powers on so it can reconnect to the controller.</span></div>
@@ -419,7 +419,9 @@
                      </div>
                      <div class="modal-body" style="font-size: 14px; line-height: 1.6; margin-bottom: 24px;">
                          <p style="font-weight: 700; font-size: 15px; color: var(--text-primary); margin-bottom: 10px;"><span data-ui-text="provisioned">SD Card successfully flashed and provisioned!</span></p>
-                         <p style="color: var(--text-secondary); margin: 0;">Please insert the card into your Pi, power it on, and switch to the <strong style="color: var(--primary-color);"><span data-ui-text="navDiscovery">Discovery</span></strong> tab.</p>
+                         <p id="flash-readback-result" style="font-weight: 700; margin-bottom: 8px;" role="status"></p>
+                         <p id="flash-readback-scope" data-ui-text="readbackScope" style="color: var(--text-secondary); margin-bottom: 12px;">Readback checks the written OS image before boot configuration is added. It does not verify subsequent configuration or KACE installation.</p>
+                         <p id="flash-next-steps" data-ui-text="flashNextSteps" style="color: var(--text-secondary); margin: 0;">Safely eject the card, insert it into your Pi, power it on, and open Discovery.</p>
                      </div>
                      <div class="modal-footer" style="display: flex; gap: 12px; justify-content: flex-end;">
                          <button class="btn btn-secondary" onclick="ejectFlashedDrive()" id="eject-btn" style="padding: 10px 16px; font-weight: 600;"><i class="fa-solid fa-eject"></i> <span data-ui-text="eject">Eject SD Card</span></button>

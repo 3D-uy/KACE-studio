@@ -652,10 +652,34 @@ try {{
         
     return None
 
-def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive_identity=None, verify_write: bool = True, *, expected_image_sha256=None, expected_image_size=None) -> tuple:
+def validate_readback_evidence(evidence, *, operation_id, drive_identity,
+                               image_sha256, image_size, verify_write):
+    """Accept only the observed writer result for this approved operation."""
+    if not isinstance(evidence, dict) or evidence.get("schema") != "kace-studio-readback/v1":
+        raise ValueError("Missing or invalid writer readback evidence.")
+    if (not isinstance(operation_id, str) or not re.fullmatch(r"[0-9a-f]{32}", operation_id)
+            or evidence.get("operation_id") != operation_id
+            or type(image_size) is not int or image_size <= 0
+            or not isinstance(image_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", image_sha256)
+            or type(evidence.get("image_size")) is not int
+            or evidence["image_size"] != image_size
+            or evidence.get("image_sha256") != image_sha256
+            or type(verify_write) is not bool
+            or evidence.get("status") != ("verified" if verify_write else "skipped")):
+        raise ValueError("Writer readback evidence does not match the approved operation.")
+    identity = _normalize_disk_identity(drive_identity)
+    if _normalize_disk_identity(evidence.get("disk_identity")) != identity:
+        raise ValueError("Writer readback evidence belongs to another disk.")
+    return {"schema": evidence["schema"], "operation_id": operation_id,
+            "disk_identity": identity, "image_sha256": image_sha256,
+            "image_size": image_size, "status": evidence["status"]}
+
+
+def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive_identity=None, verify_write: bool = True, *, expected_image_sha256=None, expected_image_size=None, operation_id=None) -> tuple[bool, dict | str]:
     """
     Flashes the image block-by-block onto the target drive by spawning
     the elevated helper process kace_writer.py.
+    Returns (True, validated readback evidence), or (False, error message).
     """
     # SEC FIX: Runtime guard replacing assert (assert is disabled with -O).
     if not isinstance(disk_number, int):
@@ -685,7 +709,9 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
         return False, "Missing or changed approved image identity."
     if _sha256_file(image_path) != expected_image_sha256:
         return False, "Image changed after approval; refusing to flash."
-    operation_id = uuid.uuid4().hex
+    operation_id = uuid.uuid4().hex if operation_id is None else operation_id
+    if not isinstance(operation_id, str) or not re.fullmatch(r"[0-9a-f]{32}", operation_id):
+        return False, "Invalid flash operation identity."
     image_contract = {
         "operation_id": operation_id,
         "disk_identity": identity,
@@ -813,6 +839,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
         return False, "Failed to get process handle for the elevated helper."
         
     error_msg = ""
+    readback = None
     success = False
     try:
         kernel32 = ctypes.windll.kernel32
@@ -858,15 +885,25 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
             try:
                 with open(status_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError("Invalid writer completion status.")
                 if (data.get("status") == "success" and data.get("operation_id") == operation_id
                         and process_exited and exit_code.value == 0):
+                    readback = validate_readback_evidence(
+                        data.get("readback"), operation_id=operation_id, drive_identity=identity,
+                        image_sha256=expected_image_sha256, image_size=image_size,
+                        verify_write=verify_write,
+                    )
                     success = True
                 else:
                     success = False
                     error_msg = f"Helper failed or completion identity mismatched (exit code: {exit_code.value}). " + data.get("message", "")
                 # Clean up status file
                 os.remove(status_file)
-            except Exception:
+            except (ValueError, TypeError) as evidence_error:
+                success = False
+                error_msg = str(evidence_error)
+            except OSError:
                 pass
                 
         if not success and not error_msg:
@@ -879,7 +916,7 @@ def flash_drive(disk_number: int, image_path: str, progress_callback=None, drive
                 f"This may indicate a crash or missing dependency in the writer process."
             )
             
-        return success, error_msg
+        return success, readback if success else error_msg
         
     finally:
         ctypes.windll.kernel32.CloseHandle(hProcess)
@@ -1343,67 +1380,104 @@ SSH_ENABLED='{ssh_enabled_str}'
 
 {hostname_reconciliation}
 
-# ── 1. Detect the pre-existing printer user ──────────────────────────────────
-# On pre-baked images (MainsailOS / FluiddPi) Klipper lives under the default
-# user (pi, mainsail, or fluidd). Find that user before deciding what to do.
+# ── 1. Preserve the original identity before changing accounts ───────────────
+# Separate from attempt/status updates: failures must retain the original home
+# so a retry can repair legacy venv paths even after the login has been renamed.
+IDENTITY_FILE="$BOOT_MNT/kace-firstrun-user.state"
+TARGET_HOME="/home/$TARGET_USER"
+user_recovery() {{
+    echo "Printer user migration requires manual recovery: $*; inspect the identity record and accounts/homes before retrying." >&2
+    exit 1
+}}
+identity_text() {{
+    printf '%s\\n' 'schema=kace-first-run-user/v1' \\
+        "source_user=$SOURCE_USER" "source_uid=$SOURCE_UID" \\
+        "source_home=$SOURCE_HOME" "target_user=$TARGET_USER" "target_home=$TARGET_HOME"
+}}
+validate_original_identity() {{
+    [[ "$SOURCE_USER" =~ ^[a-z_][a-z0-9_-]{{0,31}}$ ]] || user_recovery "invalid original user"
+    [[ "$SOURCE_UID" =~ ^[0-9]+$ ]] && [ "$SOURCE_UID" -ne 0 ] || user_recovery "invalid original UID"
+    [ "$SOURCE_HOME" = "/home/$SOURCE_USER" ] || user_recovery "unexpected original home"
+}}
 SOURCE_USER=""
-for candidate in pi mainsail fluidd; do
-    if id "$candidate" &>/dev/null && [ -d "/home/$candidate/klipper" ]; then
-        SOURCE_USER="$candidate"
-        break
-    fi
-done
-# Fallback: glob any home dir that contains klipper/
-if [ -z "$SOURCE_USER" ]; then
-    for udir in /home/*/klipper; do
-        [ -d "$udir" ] || continue
-        candidate=$(echo "$udir" | cut -d/ -f3)
-        if id "$candidate" &>/dev/null; then
+if [ -L "$IDENTITY_FILE" ]; then
+    user_recovery "identity record is a symlink"
+elif [ -e "$IDENTITY_FILE" ]; then
+    [ -f "$IDENTITY_FILE" ] || user_recovery "identity record is not a file"
+    # Never source this record. Strict round-trip rejects extra/duplicate fields,
+    # malformed records and a changed requested destination.
+    SOURCE_USER=$(sed -n 's/^source_user=//p' "$IDENTITY_FILE")
+    SOURCE_UID=$(sed -n 's/^source_uid=//p' "$IDENTITY_FILE")
+    SOURCE_HOME=$(sed -n 's/^source_home=//p' "$IDENTITY_FILE")
+    validate_original_identity
+    [ "$(cat "$IDENTITY_FILE")" = "$(identity_text)" ] || user_recovery "inconsistent identity record"
+else
+    for candidate in pi mainsail fluidd; do
+        if id "$candidate" &>/dev/null && [ -d "/home/$candidate/klipper" ]; then
             SOURCE_USER="$candidate"
             break
         fi
     done
+    if [ -z "$SOURCE_USER" ]; then
+        for udir in /home/*/klipper; do
+            [ -d "$udir" ] || continue
+            candidate=$(basename "$(dirname "$udir")")
+            if id "$candidate" &>/dev/null; then
+                SOURCE_USER="$candidate"
+                break
+            fi
+        done
+    fi
+    [ -n "$SOURCE_USER" ] || user_recovery "original printer user is unknown"
+    if [ "$SOURCE_USER" = "$TARGET_USER" ] && [ "$ATTEMPTS" -gt 1 ]; then
+        user_recovery "previous migration has no trustworthy original identity record"
+    fi
+    source_record=$(getent passwd "$SOURCE_USER") || user_recovery "original account is unavailable"
+    IFS=: read -r account _ SOURCE_UID _ _ SOURCE_HOME _ <<< "$source_record"
+    [ "$account" = "$SOURCE_USER" ] || user_recovery "original account is inconsistent"
+    validate_original_identity
+    temporary=$(mktemp "${{IDENTITY_FILE}}.tmp.XXXXXX") || user_recovery "identity record could not be created"
+    identity_text > "$temporary" || user_recovery "identity record could not be written"
+    # These flushes are mandatory. A failure stops before groupmod/usermod.
+    sync "$temporary" || user_recovery "identity record could not be flushed"
+    mv -T -- "$temporary" "$IDENTITY_FILE" || user_recovery "identity record could not be published"
 fi
+sync "$IDENTITY_FILE" || user_recovery "published identity record could not be flushed"
+sync "$BOOT_MNT" || user_recovery "identity directory could not be flushed"
 
-# ── 2. User setup ─────────────────────────────────────────────────────────────
-if [ -z "$SOURCE_USER" ]; then
-    if ! id "$TARGET_USER" &>/dev/null; then
-        echo "No existing printer user was found and target user '$TARGET_USER' does not exist." >&2
-        exit 1
-    fi
-    EFFECTIVE_USER="$TARGET_USER"
-    echo "$EFFECTIVE_USER:$HASHED_PW" | chpasswd -e
-elif [ "$TARGET_USER" = "$SOURCE_USER" ]; then
-    # No rename needed — just update the password for the existing/target user.
-    EFFECTIVE_USER="${{SOURCE_USER:-$TARGET_USER}}"
-    echo "$EFFECTIVE_USER:$HASHED_PW" | chpasswd -e
-else
-    # Rename SOURCE_USER → TARGET_USER (mirroring Raspberry Pi Imager behavior).
-
-    # a. Rename the login name and primary group.
-    if id "$TARGET_USER" &>/dev/null; then
-        echo "Refusing to merge existing target user '$TARGET_USER' with '$SOURCE_USER'." >&2
-        exit 1
-    fi
-
+# ── 2. Reconcile the account and required compatibility alias ────────────────
+source_record=$(getent passwd "$SOURCE_USER" || true)
+target_record=$(getent passwd "$TARGET_USER" || true)
+if [ "$SOURCE_USER" != "$TARGET_USER" ] && [ -n "$source_record" ]; then
+    [ -z "$target_record" ] || user_recovery "Refusing to merge existing target user '$TARGET_USER' with '$SOURCE_USER'"
+    IFS=: read -r account _ account_uid _ _ account_home _ <<< "$source_record"
+    [ "$account" = "$SOURCE_USER" ] && [ "$account_uid" = "$SOURCE_UID" ] && \\
+        [ "$account_home" = "$SOURCE_HOME" ] || user_recovery "original account changed"
+    [ -d "$SOURCE_HOME" ] && [ ! -L "$SOURCE_HOME" ] || user_recovery "original home changed"
+    [ ! -e "$TARGET_HOME" ] && [ ! -L "$TARGET_HOME" ] || user_recovery "target home already exists"
     groupmod -n "$TARGET_USER" "$SOURCE_USER" 2>/dev/null || true
-    usermod -l "$TARGET_USER" -d "/home/$TARGET_USER" -m "$SOURCE_USER"
-
-    # b. Backward-compatibility symlink: Python venv shebangs like
-    #    #!/home/pi/klippy-env/bin/python are baked into pre-compiled binaries.
-    #    The symlink lets them keep resolving without rewriting every file.
-    if [ ! -e "/home/$SOURCE_USER" ]; then
-        ln -s "/home/$TARGET_USER" "/home/$SOURCE_USER"
-    fi
-
-    # c. Set the target user's password.
-    echo "$TARGET_USER:$HASHED_PW" | chpasswd -e
-
-    # d. Systemd services (User=/Group= paths) will be patched during the bootstrap
-    #    phase by bootstrap.sh (owned by KACE), keeping the OS imager decoupled from
-    #    Klipper domain logic.
-    echo "Renamed printer user '$SOURCE_USER' -> '$TARGET_USER', home /home/$TARGET_USER"
+    usermod -l "$TARGET_USER" -d "$TARGET_HOME" -m "$SOURCE_USER"
+    target_record=$(getent passwd "$TARGET_USER" || true)
 fi
+[ -n "$target_record" ] || user_recovery "target account is unavailable"
+IFS=: read -r account _ account_uid _ _ account_home _ <<< "$target_record"
+[ "$account" = "$TARGET_USER" ] && [ "$account_uid" = "$SOURCE_UID" ] && \\
+    [ "$account_home" = "$TARGET_HOME" ] || user_recovery "target account does not match saved identity"
+[ -d "$TARGET_HOME" ] && [ ! -L "$TARGET_HOME" ] || user_recovery "target home is incomplete"
+if [ "$SOURCE_USER" != "$TARGET_USER" ]; then
+    if [ -L "$SOURCE_HOME" ]; then
+        [ "$(readlink -f -- "$SOURCE_HOME")" = "$TARGET_HOME" ] || user_recovery "legacy home points elsewhere"
+    elif [ -e "$SOURCE_HOME" ]; then
+        user_recovery "legacy home conflicts with the required alias"
+    else
+        ln -sT -- "$TARGET_HOME" "$SOURCE_HOME"
+    fi
+    [ -L "$SOURCE_HOME" ] && [ "$(readlink -f -- "$SOURCE_HOME")" = "$TARGET_HOME" ] || \\
+        user_recovery "legacy home alias could not be verified"
+fi
+echo "$TARGET_USER:$HASHED_PW" | chpasswd -e
+# bootstrap.sh still owns systemd User=/Group= reconciliation.
+echo "Printer user '$TARGET_USER' and legacy home paths verified."
 
 # ── 3. Configure SSH Password Authentication ──────────────────────────────────
 if [ "$SSH_ENABLED" = "true" ]; then

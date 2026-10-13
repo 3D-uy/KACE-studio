@@ -297,12 +297,15 @@ def test_custom_prebaked_family_reaches_injection_without_vanilla_inference(
         dashboard_ui="mainsail",
     )
     captured = {}
+    from tests.test_drive_identity import snapshot
+    from tests.test_readback_outcome import evidence
+    identity = snapshot(number=99)
     monkeypatch.setattr(api, "_resolve_custom_image", lambda path: ResolvedImage(path, "a" * 64, 512))
     monkeypatch.setattr(api, "_validate_raw_image", lambda _path: 1024)
     monkeypatch.setattr(api, "_preflight_prebaked_image", lambda *_args: None)
     def fake_flash(*args, **image_contract):
         captured["verify_write"] = args[4]
-        return True, ""
+        return True, evidence(image_contract["operation_id"], identity, "a" * 64, 512)
 
     monkeypatch.setattr(main, "flash_drive", fake_flash)
 
@@ -311,7 +314,7 @@ def test_custom_prebaked_family_reaches_injection_without_vanilla_inference(
         return True
 
     monkeypatch.setattr(main, "inject_config", fake_inject)
-    api._flash_worker(99, provisioning, {"number": 99})
+    api._flash_worker(99, provisioning, identity)
     assert captured["image_type"] is ImageType.CUSTOM_PREBAKED
     assert captured["verify_write"] is True
 

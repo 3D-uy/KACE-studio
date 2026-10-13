@@ -6,6 +6,21 @@ uncommitted changes or current CI, packaging or physical qualification.
 
 [README](README.md) covers current usage; [ROADMAP](ROADMAP.md) covers pending work.
 
+## Unreleased
+
+- Stage new SSH host keys in memory and publish trust through the locked atomic
+  writer, preserving previous keys on temporary-write or replacement failure.
+- Persist original pre-baked account identity before rename and repair its legacy
+  home alias on retry; preserve conflicts for explicit manual recovery.
+- Show operation-bound image readback as verified or skipped after successful
+  provisioning; reject missing/stale evidence and keep SSH errors independent.
+- Validate durable checkpoint structure against producer-generated fixtures and
+  require saved MCU verification evidence before displaying completion.
+- Localize critical reconnect, readback, eject and accessible help in EN/ES/PT;
+  preserve live state on language changes and discard obsolete eject replies.
+- Move keyboard focus into Credentials after Imager Next while preserving
+  sidebar, validation and terminal focus behavior.
+
 ## [0.5.0-rc.3] - 2026-10-03
 
 - Detect silent SSH transport loss with acknowledged, bounded idle channel probes; retain installation progress and disconnect controls after bootstrap as well as during it.

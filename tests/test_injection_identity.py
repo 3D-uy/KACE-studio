@@ -200,7 +200,9 @@ def test_worker_transports_authorized_identity_to_both_stages(monkeypatch):
     )
     monkeypatch.setattr(api, "_resolve_default_image", lambda _arch: ResolvedImage("fake.img", "a" * 64, 512))
     monkeypatch.setattr(api, "_validate_raw_image", lambda _path: 1024)
-    flash = Mock(return_value=(True, ""))
+    from tests.test_readback_outcome import evidence
+    flash = Mock(side_effect=lambda *_args, **kwargs: (True, evidence(
+        kwargs["operation_id"], IDENTITY, "a" * 64, 512)))
     injection = Mock(return_value=True)
     monkeypatch.setattr(main, "flash_drive", flash)
     monkeypatch.setattr(main, "inject_config", injection)

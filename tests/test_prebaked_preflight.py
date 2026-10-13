@@ -177,10 +177,16 @@ def test_prebaked_preflight_runs_before_any_block_write(tmp_path, monkeypatch, i
         lambda *_args: order.append("preflight"),
         raising=False,
     )
-    monkeypatch.setattr(main, "flash_drive", lambda *_args, **_kwargs: (order.append("flash") or True, ""))
+    from tests.test_drive_identity import snapshot
+    from tests.test_readback_outcome import evidence
+    identity = snapshot(number=8)
+    def flash(*_args, **kwargs):
+        order.append("flash")
+        return True, evidence(kwargs["operation_id"], identity, "a" * 64, image.stat().st_size)
+    monkeypatch.setattr(main, "flash_drive", flash)
     monkeypatch.setattr(main, "inject_config", lambda *_args, **_kwargs: order.append("inject") or True)
 
-    api._flash_worker(8, _provisioning(image_type), {"number": 8})
+    api._flash_worker(8, _provisioning(image_type), identity)
 
     assert order == ["preflight", "flash", "inject"]
 

@@ -1,0 +1,903 @@
+{
+  "provenance": {
+    "producer_commit": "b78526d47ecdcc5ba55dcd41379a92ea644ac36a",
+    "producer_source_sha256": "ecfb60a81ee24d24b5a63aa8d91ec72a5aa89cf3f99c91246ba29ba41d2f345c",
+    "historical_commit": "243d020457942dac9335c411a1b860cbeee6d099",
+    "historical_source_sha256": "8f9d32c8ece1db9126d83a793545d3c88df558876c1ba89f5fd461e05f14b25b",
+    "generation": "create_checkpoint -> transition_checkpoint -> write_checkpoint; validated by current validate_checkpoint(verify_artifact=False)",
+    "limits": "Simulated firmware only. Paths are Pi wire data, not local resources or physical evidence. MCU alias decisions remain in KACE.",
+    "legacy_optional_fields": [
+      "hardware.baseline_identity",
+      "artifact.expected_vid_pids",
+      "artifact.bootloader_vid_pids",
+      "artifact.build.firmware_identity"
+    ],
+    "robin_fixture_source_sha256": "f6844759938beb3b125fc112319467828e58565cc82deb889ebe919c60772eef"
+  },
+  "cases": [
+    {
+      "case": "current-HARDWARE_SELECTED",
+      "checkpoint": {
+        "artifact": null,
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 0,
+          "mcu": "lpc1769",
+          "verified_serial_path": ""
+        },
+        "integrity_sha256": "817fdec36901157e14aafe50e99adb5d1649ca3990db6d75d3e429b7cbd6c231",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 1,
+        "state": "HARDWARE_SELECTED",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "current-COMPILE_REQUIRED",
+      "checkpoint": {
+        "artifact": null,
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 0,
+          "mcu": "lpc1769",
+          "verified_serial_path": ""
+        },
+        "integrity_sha256": "efe3b826a191d83527f4bb56b84e536fef79f879f7673b08d531d954c5fa43b6",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 2,
+        "state": "COMPILE_REQUIRED",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "current-ARTIFACT_READY",
+      "checkpoint": {
+        "artifact": {
+          "bootloader_vid_pids": [],
+          "build": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "fixture-build",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-22222222222222222222222222222222",
+            "firmware_identity": {
+              "artifact_build_id": "8ce381d28c401e63e2aab1579a14a01ce80a6962cd3dee9f4f06767d661de6b4",
+              "artifact_format": "BIN",
+              "artifact_sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+              "artifact_size": 47,
+              "build_id": "22222222222222222222222222222222",
+              "build_options": {},
+              "canonical_config": "CONFIG_MACH_LPC176X=y\nCONFIG_MCU=\"lpc1769\"\n",
+              "config_sha256": "3771b792eab3b64868551d70269591430cfea291d20711a3225bc7cb60746de8",
+              "input_sha256": "89f90c4079d66c30de759d0fd29919ea756e860b674569107cf2bf4ca91dae67",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-22222222222222222222222222222222",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "fixture",
+                "compiler_version": "fixture",
+                "make_command": "fixture",
+                "make_version": "fixture"
+              }
+            },
+            "flashable": false,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "lpc1769",
+            "native_filename": "firmware.bin",
+            "path": "/home/kace/kace/firmware.bin",
+            "provenance": "MOCK",
+            "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+            "size_bytes": 47
+          },
+          "expected_vid_pids": [],
+          "final_filename": "firmware.bin",
+          "instructions": [],
+          "method": "",
+          "path": "/home/kace/kace/firmware.bin",
+          "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+          "size_bytes": 47,
+          "strategy": ""
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 0,
+          "mcu": "lpc1769",
+          "verified_serial_path": ""
+        },
+        "integrity_sha256": "12ed61a73941ccb1f478d8fcffc5b0f9a8e55095db0ab91e2f0c42e80afbe2aa",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 3,
+        "state": "ARTIFACT_READY",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "current-AWAITING_FLASH",
+      "checkpoint": {
+        "artifact": {
+          "bootloader_vid_pids": [],
+          "build": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "fixture-build",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-22222222222222222222222222222222",
+            "firmware_identity": {
+              "artifact_build_id": "8ce381d28c401e63e2aab1579a14a01ce80a6962cd3dee9f4f06767d661de6b4",
+              "artifact_format": "BIN",
+              "artifact_sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+              "artifact_size": 47,
+              "build_id": "22222222222222222222222222222222",
+              "build_options": {},
+              "canonical_config": "CONFIG_MACH_LPC176X=y\nCONFIG_MCU=\"lpc1769\"\n",
+              "config_sha256": "3771b792eab3b64868551d70269591430cfea291d20711a3225bc7cb60746de8",
+              "input_sha256": "89f90c4079d66c30de759d0fd29919ea756e860b674569107cf2bf4ca91dae67",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-22222222222222222222222222222222",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "fixture",
+                "compiler_version": "fixture",
+                "make_command": "fixture",
+                "make_version": "fixture"
+              }
+            },
+            "flashable": false,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "lpc1769",
+            "native_filename": "firmware.bin",
+            "path": "/home/kace/kace/firmware.bin",
+            "provenance": "MOCK",
+            "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+            "size_bytes": 47
+          },
+          "expected_vid_pids": [],
+          "final_filename": "firmware.bin",
+          "instructions": [],
+          "method": "",
+          "path": "/home/kace/kace/firmware.bin",
+          "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+          "size_bytes": 47,
+          "strategy": ""
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 0,
+          "mcu": "lpc1769",
+          "verified_serial_path": ""
+        },
+        "integrity_sha256": "b9522dc934670ce5ffa75cc28b3bf5e36d880f190769ddc3b097d396732bab8c",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 4,
+        "state": "AWAITING_FLASH",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "current-VERIFYING_MCU",
+      "checkpoint": {
+        "artifact": {
+          "bootloader_vid_pids": [],
+          "build": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "fixture-build",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-22222222222222222222222222222222",
+            "firmware_identity": {
+              "artifact_build_id": "8ce381d28c401e63e2aab1579a14a01ce80a6962cd3dee9f4f06767d661de6b4",
+              "artifact_format": "BIN",
+              "artifact_sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+              "artifact_size": 47,
+              "build_id": "22222222222222222222222222222222",
+              "build_options": {},
+              "canonical_config": "CONFIG_MACH_LPC176X=y\nCONFIG_MCU=\"lpc1769\"\n",
+              "config_sha256": "3771b792eab3b64868551d70269591430cfea291d20711a3225bc7cb60746de8",
+              "input_sha256": "89f90c4079d66c30de759d0fd29919ea756e860b674569107cf2bf4ca91dae67",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-22222222222222222222222222222222",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "fixture",
+                "compiler_version": "fixture",
+                "make_command": "fixture",
+                "make_version": "fixture"
+              }
+            },
+            "flashable": false,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "lpc1769",
+            "native_filename": "firmware.bin",
+            "path": "/home/kace/kace/firmware.bin",
+            "provenance": "MOCK",
+            "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+            "size_bytes": 47
+          },
+          "expected_vid_pids": [],
+          "final_filename": "firmware.bin",
+          "instructions": [],
+          "method": "",
+          "path": "/home/kace/kace/firmware.bin",
+          "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+          "size_bytes": 47,
+          "strategy": ""
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 0,
+          "mcu": "lpc1769",
+          "verified_serial_path": ""
+        },
+        "integrity_sha256": "7ce0d7b21b48efd868dde0baff27cc7a13abf3ba4ba054c921c9bf32ead6bc2e",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 5,
+        "state": "VERIFYING_MCU",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "current-MCU_VERIFIED",
+      "checkpoint": {
+        "artifact": {
+          "bootloader_vid_pids": [],
+          "build": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "fixture-build",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-22222222222222222222222222222222",
+            "firmware_identity": {
+              "artifact_build_id": "8ce381d28c401e63e2aab1579a14a01ce80a6962cd3dee9f4f06767d661de6b4",
+              "artifact_format": "BIN",
+              "artifact_sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+              "artifact_size": 47,
+              "build_id": "22222222222222222222222222222222",
+              "build_options": {},
+              "canonical_config": "CONFIG_MACH_LPC176X=y\nCONFIG_MCU=\"lpc1769\"\n",
+              "config_sha256": "3771b792eab3b64868551d70269591430cfea291d20711a3225bc7cb60746de8",
+              "input_sha256": "89f90c4079d66c30de759d0fd29919ea756e860b674569107cf2bf4ca91dae67",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-22222222222222222222222222222222",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "fixture",
+                "compiler_version": "fixture",
+                "make_command": "fixture",
+                "make_version": "fixture"
+              }
+            },
+            "flashable": false,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "lpc1769",
+            "native_filename": "firmware.bin",
+            "path": "/home/kace/kace/firmware.bin",
+            "provenance": "MOCK",
+            "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+            "size_bytes": 47
+          },
+          "expected_vid_pids": [],
+          "final_filename": "firmware.bin",
+          "instructions": [],
+          "method": "",
+          "path": "/home/kace/kace/firmware.bin",
+          "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+          "size_bytes": 47,
+          "strategy": ""
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 1700000000,
+          "mcu": "lpc1769",
+          "verified_serial_path": "/dev/serial/by-id/fixture-verified"
+        },
+        "integrity_sha256": "a3132566580442c8b4f63e136f868f1e2e95e906b61f2c65a5201680db62476f",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 6,
+        "state": "MCU_VERIFIED",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "current-CONFIG_GENERATED",
+      "checkpoint": {
+        "artifact": {
+          "bootloader_vid_pids": [],
+          "build": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "fixture-build",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-22222222222222222222222222222222",
+            "firmware_identity": {
+              "artifact_build_id": "8ce381d28c401e63e2aab1579a14a01ce80a6962cd3dee9f4f06767d661de6b4",
+              "artifact_format": "BIN",
+              "artifact_sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+              "artifact_size": 47,
+              "build_id": "22222222222222222222222222222222",
+              "build_options": {},
+              "canonical_config": "CONFIG_MACH_LPC176X=y\nCONFIG_MCU=\"lpc1769\"\n",
+              "config_sha256": "3771b792eab3b64868551d70269591430cfea291d20711a3225bc7cb60746de8",
+              "input_sha256": "89f90c4079d66c30de759d0fd29919ea756e860b674569107cf2bf4ca91dae67",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-22222222222222222222222222222222",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "fixture",
+                "compiler_version": "fixture",
+                "make_command": "fixture",
+                "make_version": "fixture"
+              }
+            },
+            "flashable": false,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "lpc1769",
+            "native_filename": "firmware.bin",
+            "path": "/home/kace/kace/firmware.bin",
+            "provenance": "MOCK",
+            "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+            "size_bytes": 47
+          },
+          "expected_vid_pids": [],
+          "final_filename": "firmware.bin",
+          "instructions": [],
+          "method": "",
+          "path": "/home/kace/kace/firmware.bin",
+          "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+          "size_bytes": 47,
+          "strategy": ""
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 1700000000,
+          "mcu": "lpc1769",
+          "verified_serial_path": "/dev/serial/by-id/fixture-verified"
+        },
+        "integrity_sha256": "646aa0d02687a4259a367d29d9327bfe3b0e3848eaa34b2193a9e0a87940ad31",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 7,
+        "state": "CONFIG_GENERATED",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "current-READY_TO_DEPLOY",
+      "checkpoint": {
+        "artifact": {
+          "bootloader_vid_pids": [],
+          "build": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "fixture-build",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-22222222222222222222222222222222",
+            "firmware_identity": {
+              "artifact_build_id": "8ce381d28c401e63e2aab1579a14a01ce80a6962cd3dee9f4f06767d661de6b4",
+              "artifact_format": "BIN",
+              "artifact_sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+              "artifact_size": 47,
+              "build_id": "22222222222222222222222222222222",
+              "build_options": {},
+              "canonical_config": "CONFIG_MACH_LPC176X=y\nCONFIG_MCU=\"lpc1769\"\n",
+              "config_sha256": "3771b792eab3b64868551d70269591430cfea291d20711a3225bc7cb60746de8",
+              "input_sha256": "89f90c4079d66c30de759d0fd29919ea756e860b674569107cf2bf4ca91dae67",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-22222222222222222222222222222222",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "fixture",
+                "compiler_version": "fixture",
+                "make_command": "fixture",
+                "make_version": "fixture"
+              }
+            },
+            "flashable": false,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "lpc1769",
+            "native_filename": "firmware.bin",
+            "path": "/home/kace/kace/firmware.bin",
+            "provenance": "MOCK",
+            "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+            "size_bytes": 47
+          },
+          "expected_vid_pids": [],
+          "final_filename": "firmware.bin",
+          "instructions": [],
+          "method": "",
+          "path": "/home/kace/kace/firmware.bin",
+          "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+          "size_bytes": 47,
+          "strategy": ""
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 1700000000,
+          "mcu": "lpc1769",
+          "verified_serial_path": "/dev/serial/by-id/fixture-verified"
+        },
+        "integrity_sha256": "44fe3547a3ca8f9d7bc418d2b7435af83115d22c3858e124c88b703de93df750",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 8,
+        "state": "READY_TO_DEPLOY",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "current-DEPLOYING",
+      "checkpoint": {
+        "artifact": {
+          "bootloader_vid_pids": [],
+          "build": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "fixture-build",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-22222222222222222222222222222222",
+            "firmware_identity": {
+              "artifact_build_id": "8ce381d28c401e63e2aab1579a14a01ce80a6962cd3dee9f4f06767d661de6b4",
+              "artifact_format": "BIN",
+              "artifact_sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+              "artifact_size": 47,
+              "build_id": "22222222222222222222222222222222",
+              "build_options": {},
+              "canonical_config": "CONFIG_MACH_LPC176X=y\nCONFIG_MCU=\"lpc1769\"\n",
+              "config_sha256": "3771b792eab3b64868551d70269591430cfea291d20711a3225bc7cb60746de8",
+              "input_sha256": "89f90c4079d66c30de759d0fd29919ea756e860b674569107cf2bf4ca91dae67",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-22222222222222222222222222222222",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "fixture",
+                "compiler_version": "fixture",
+                "make_command": "fixture",
+                "make_version": "fixture"
+              }
+            },
+            "flashable": false,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "lpc1769",
+            "native_filename": "firmware.bin",
+            "path": "/home/kace/kace/firmware.bin",
+            "provenance": "MOCK",
+            "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+            "size_bytes": 47
+          },
+          "expected_vid_pids": [],
+          "final_filename": "firmware.bin",
+          "instructions": [],
+          "method": "",
+          "path": "/home/kace/kace/firmware.bin",
+          "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+          "size_bytes": 47,
+          "strategy": ""
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 1700000000,
+          "mcu": "lpc1769",
+          "verified_serial_path": "/dev/serial/by-id/fixture-verified"
+        },
+        "integrity_sha256": "18616480f0966363b55273b286a44af831e9e8d422045e4ff9632dbbd03d0450",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 9,
+        "state": "DEPLOYING",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "current-COMPLETE",
+      "checkpoint": {
+        "artifact": {
+          "bootloader_vid_pids": [],
+          "build": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "fixture-build",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-22222222222222222222222222222222",
+            "firmware_identity": {
+              "artifact_build_id": "8ce381d28c401e63e2aab1579a14a01ce80a6962cd3dee9f4f06767d661de6b4",
+              "artifact_format": "BIN",
+              "artifact_sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+              "artifact_size": 47,
+              "build_id": "22222222222222222222222222222222",
+              "build_options": {},
+              "canonical_config": "CONFIG_MACH_LPC176X=y\nCONFIG_MCU=\"lpc1769\"\n",
+              "config_sha256": "3771b792eab3b64868551d70269591430cfea291d20711a3225bc7cb60746de8",
+              "input_sha256": "89f90c4079d66c30de759d0fd29919ea756e860b674569107cf2bf4ca91dae67",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-22222222222222222222222222222222",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "fixture",
+                "compiler_version": "fixture",
+                "make_command": "fixture",
+                "make_version": "fixture"
+              }
+            },
+            "flashable": false,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "lpc1769",
+            "native_filename": "firmware.bin",
+            "path": "/home/kace/kace/firmware.bin",
+            "provenance": "MOCK",
+            "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+            "size_bytes": 47
+          },
+          "expected_vid_pids": [],
+          "final_filename": "firmware.bin",
+          "instructions": [],
+          "method": "",
+          "path": "/home/kace/kace/firmware.bin",
+          "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+          "size_bytes": 47,
+          "strategy": ""
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 1700000000,
+          "mcu": "lpc1769",
+          "verified_serial_path": "/dev/serial/by-id/fixture-verified"
+        },
+        "integrity_sha256": "b27fc389f6af2f2db97de1b5ea1b30e0941174af3bdb68b0895604d36feeff3d",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 10,
+        "state": "COMPLETE",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "historical-v1-COMPLETE",
+      "checkpoint": {
+        "artifact": {
+          "build": {
+            "mcu": "lpc1769",
+            "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+            "size_bytes": 47
+          },
+          "final_filename": "firmware.bin",
+          "instructions": [],
+          "method": "",
+          "path": "/home/kace/kace/historical/firmware.bin",
+          "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+          "size_bytes": 47,
+          "strategy": ""
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "flash_evidence_recorded_at": 1700000000,
+          "mcu": "lpc1769",
+          "verified_serial_path": "/dev/serial/by-id/fixture-verified"
+        },
+        "integrity_sha256": "712d6cb1bc5fd7c312f9ab088f6914ae1c6559a5bfbe100f22b8ff1610c0efb1",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 10,
+        "state": "COMPLETE",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-skr-v1.4.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "lpc1769"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "producer-mcu-alias-COMPLETE",
+      "checkpoint": {
+        "artifact": {
+          "bootloader_vid_pids": [],
+          "build": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "fixture-build",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-22222222222222222222222222222222",
+            "firmware_identity": {
+              "artifact_build_id": "8ce381d28c401e63e2aab1579a14a01ce80a6962cd3dee9f4f06767d661de6b4",
+              "artifact_format": "BIN",
+              "artifact_sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+              "artifact_size": 47,
+              "build_id": "22222222222222222222222222222222",
+              "build_options": {},
+              "canonical_config": "CONFIG_MACH_LPC176X=y\nCONFIG_MCU=\"lpc1769\"\n",
+              "config_sha256": "3771b792eab3b64868551d70269591430cfea291d20711a3225bc7cb60746de8",
+              "input_sha256": "89f90c4079d66c30de759d0fd29919ea756e860b674569107cf2bf4ca91dae67",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-22222222222222222222222222222222",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "fixture",
+                "compiler_version": "fixture",
+                "make_command": "fixture",
+                "make_version": "fixture"
+              }
+            },
+            "flashable": false,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "stm32f446xx",
+            "native_filename": "firmware.bin",
+            "path": "/home/kace/kace/firmware.bin",
+            "provenance": "MOCK",
+            "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+            "size_bytes": 47
+          },
+          "expected_vid_pids": [],
+          "final_filename": "firmware.bin",
+          "instructions": [],
+          "method": "",
+          "path": "/home/kace/kace/firmware.bin",
+          "sha256": "65508d531bcb762eb974e4cf62ddb2e4a2e6b3731e4c8d9280aa7a738d869dc6",
+          "size_bytes": 47,
+          "strategy": ""
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "/dev/serial/by-id/fixture-original",
+          "board": "generic-bigtreetech-octopus-v1.1.cfg",
+          "flash_evidence_recorded_at": 1700000000,
+          "mcu": "stm32f446",
+          "verified_serial_path": "/dev/serial/by-id/fixture-verified"
+        },
+        "integrity_sha256": "8bc330c30addda53d81281fa9211d07dfebfe5221470c7556b9e7a009386c904",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 10,
+        "state": "COMPLETE",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "generic-bigtreetech-octopus-v1.1.cfg",
+          "language": "Espa\u00f1ol",
+          "mcu_path": "/dev/serial/by-id/fixture-original",
+          "mcu_type": "stm32f446"
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    },
+    {
+      "case": "producer-robin-transformation-COMPLETE",
+      "checkpoint": {
+        "artifact": {
+          "bootloader_vid_pids": [],
+          "build": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "33333333-3333-3333-3333-333333333333",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "firmware_identity": {
+              "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+              "artifact_format": "BIN",
+              "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+              "artifact_size": 32118,
+              "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "build_options": {},
+              "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+              "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+              "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "gcc",
+                "compiler_version": "test",
+                "make_command": "make",
+                "make_version": "test"
+              }
+            },
+            "flashable": true,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "expected_vid_pids": [],
+          "final_filename": "Robin_nano.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "path": "/home/kace/kace/deploy/Robin_nano.bin",
+          "sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+          "size_bytes": 32118,
+          "strategy": "PREPARE_ONLY",
+          "transformation": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "final_filename": "Robin_nano.bin",
+            "final_path": "/home/kace/kace/deploy/Robin_nano.bin",
+            "final_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+            "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+            "lcd_removed": null,
+            "native_path": "/home/kace/kace/native/klipper.bin",
+            "native_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "schema": "kace-robin-delivery/v1",
+            "script_sha256": "3a31d672edc333b79345be753906e88f069b782504a18310632b73d690c57811",
+            "serial_port": "USART3",
+            "size_bytes": 32118
+          }
+        },
+        "created_at": 1700000000,
+        "hardware": {
+          "baseline_identity": null,
+          "baseline_serial_path": "",
+          "board": "printer-kingroon-kp3s-2020.cfg",
+          "flash_evidence_recorded_at": 1700000000,
+          "mcu": "stm32f103",
+          "verified_serial_path": "/dev/serial/by-id/fixture-verified"
+        },
+        "integrity_sha256": "52b7a35b043f23012d00dc63406594ae43bfb37f700c1a654c07220117413490",
+        "last_error": "",
+        "schema": "kace-firmware-workflow/v1",
+        "sequence": 10,
+        "state": "COMPLETE",
+        "updated_at": 1700000000,
+        "wizard_data": {
+          "board": "printer-kingroon-kp3s-2020.cfg",
+          "firmware_path": "/home/kace/kace/deploy/Robin_nano.bin",
+          "firmware_serial_port": "USART3",
+          "mcu_type": "stm32f103",
+          "robin_lcd_removed": null
+        },
+        "workflow_id": "firmware-11111111111111111111111111111111"
+      }
+    }
+  ]
+}

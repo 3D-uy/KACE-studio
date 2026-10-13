@@ -78,25 +78,28 @@ def test_reconnected_terminal_never_calls_pending_installation_complete():
         pytest.skip("Node is required for frontend execution")
     app = (Path(__file__).parents[1] / "web/app.js").read_text(encoding="utf-8")
     handler = app[app.index("window.restoreSshAfterReconnect ="):app.index("function performSshLogin")]
+    catalog = app[app.index("const STUDIO_INSTALLATION_TEXT ="):app.index("function updateStudioLanguageButton()")]
     script = """
 const assert = require('node:assert/strict');
 const window = {updateKaceWorkflowEvent(){}};
+const navigator = {language:'es'};
+const localStorage = {getItem(){return null;}};
 let powerSelection=1, firmwareGeneration=null, loginState='', output='';
 const term={write(text){output+=text}};
 function updateConnectionStatus(){}
 function applyRemotePowerConfig(){}
 function startFirmwareCheckpointWatch(){}
-""" + handler + """
+""" + catalog + handler + """
 const result={status:'success',generation:4};
 const pending={generation:4,event:{},checkpoint:{state:'DEPLOYING'}};
 window.restoreSshAfterReconnect(result,2,pending);
 assert.equal(output,'');
 window.restoreSshAfterReconnect(result,1,pending);
-assert.ok(output.includes('falta confirmar'));
-assert.ok(!output.includes('instalados y verificados'));
+assert.ok(output.includes(studioText('recoveryPending')));
+assert.ok(!output.includes(studioText('recoveryComplete')));
 output=''; pending.checkpoint.state='COMPLETE';
 window.restoreSshAfterReconnect(result,1,pending);
-assert.ok(output.includes('instalados y verificados'));
+assert.ok(output.includes(studioText('recoveryComplete')));
 """
     completed = subprocess.run([node, "-"], input=script, text=True, encoding="utf-8", capture_output=True, timeout=15)
     assert completed.returncode == 0, completed.stderr

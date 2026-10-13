@@ -31,6 +31,8 @@ KACE Studio te guía para elegir una imagen de Raspberry Pi, configurar el prime
 
 Imager alinea los ajustes por pares y abre las opciones del relé GPIO al activarlo. La búsqueda se pausa cuando responden equipos nuevos. Elegí Conectar, Seguir buscando (las direcciones ya revisadas no vuelven a pausarla) o Detener búsqueda. Cada período de búsqueda dura hasta diez minutos; encontrar un equipo no verifica una instalación de KACE.
 
+La lectura posterior está habilitada por defecto. El diálogo final indica explícitamente si se verificó la lectura de la imagen o se omitió. Esa comprobación cubre la imagen escrita antes de inyectar la configuración de primer arranque; la instalación de KACE sigue requiriendo su propia verificación en la Pi.
+
 <a id="quick-start"></a>
 <a id="download-and-install"></a>
 

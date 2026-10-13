@@ -23,6 +23,13 @@ SSH_HEARTBEAT_INTERVAL_SECONDS = 10.0
 _known_hosts_thread_lock = threading.RLock()
 
 
+class _InMemoryTOFUPolicy(paramiko.MissingHostKeyPolicy):
+    """Stage new host keys until the locked trust transaction publishes them."""
+
+    def missing_host_key(self, client, hostname, key):
+        client.get_host_keys().add(hostname, key.get_name(), key)
+
+
 class SftpListingError(RuntimeError):
     """A listing failed; an empty directory is a separate successful result."""
 
@@ -380,7 +387,7 @@ class SSHSession:
           ~/.kace/known_hosts.
         - On subsequent connections, the server key is validated against the stored key.
           If it has changed (potential MITM), the connection is rejected with a clear error.
-        - AutoAddPolicy is only applied to *missing* entries; existing entries are always
+        - TOFU is only applied to *missing* entries; existing entries are always
           validated by paramiko regardless of policy, so key changes are always detected.
         """
         retries = 5
@@ -424,11 +431,12 @@ class SSHSession:
                     except FileNotFoundError:
                         pass  # Defensive: the path is normally created above.
 
-                    # AutoAddPolicy handles *new* hosts only.
+                    # Stage *new* host keys in memory; only the atomic publisher
+                    # below may save them after connection and authentication.
                     # For known hosts, paramiko always validates the key against
                     # load_host_keys() entries regardless of policy, so a key change
                     # (MITM indicator) raises BadHostKeyException unconditionally.
-                    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    client.set_missing_host_key_policy(_InMemoryTOFUPolicy())
 
                     phase_timeout = min(5.0, remaining)
                     client.connect(

@@ -41,6 +41,14 @@ qualify the printer configuration or firmware.
 
 ## Validation boundary
 
+Readback is enabled by default. The final provisioned-card dialog reports the
+writer's operation-bound result explicitly: image readback verified or readback
+skipped. A verification discrepancy, missing/incompatible evidence, cancelled or
+superseded operation, or subsequent boot-injection failure cannot open the success
+dialog. Readback checks the image bytes at the writing stage, before first-boot
+configuration injection; it does not verify those later edits or KACE installation.
+Eject remains a separate operation with its own confirmed result.
+
 Automated tests exercise profile selection, manifest/attestation rejection,
 shared cache reuse, boot injection, frontend bridge arguments and shell
 provisioning with sandboxed downloads/services. They do not prove a physical
@@ -57,6 +65,24 @@ removal still requires confirmed native removal or the existing identity,
 offline and unmounted checks. PowerShell results use UTF-8 for localized errors.
 
 ## First-boot readiness and retry
+
+Before renaming a pre-baked image's printer account, `firstrun.sh` persists
+`kace-firstrun-user.state` on the boot partition. This versioned record retains
+the original username, UID and home plus the requested destination independently
+of `kace-firstrun.state` attempt/status updates. Its write, atomic replacement
+and flushes must succeed before account changes begin.
+
+A retry verifies the saved identity against the current account and home, then
+repairs a missing legacy-home symlink even if the login was already renamed.
+A correct alias is retained; conflicting directories, wrong symlinks, changed
+identity or an incomplete home move require manual recovery without deleting or
+merging content. A prior migration with no trustworthy original identity also
+requires recovery. Inspect both state files, the first-run log and the actual
+accounts/homes before retrying; do not fabricate identity to bypass the guard.
+After a rename, completion requires the alias to resolve to the target home, preserving legacy
+virtual-environment paths consumed by KACE's bootstrap. The existing three-attempt
+bound remains in effect. Linux shell regressions in `test_firstrun_retry.py` use
+simulated accounts and real symlinks; they do not qualify a physical Pi boot.
 
 Moonraker API, relay readiness/ON and MCU discovery deadlines use Python's
 monotonic clock. NTP corrections to the image's initial wall clock do not shorten

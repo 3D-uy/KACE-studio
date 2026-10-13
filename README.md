@@ -31,6 +31,8 @@ KACE Studio guides you through choosing a Raspberry Pi image, setting up first b
 
 Imager keeps paired settings aligned and opens GPIO relay options when enabled. Discovery pauses when new devices respond. Choose Connect, Keep searching (already reviewed addresses do not pause it again), or Stop search. Each search period is bounded to ten minutes; finding a device does not verify a KACE installation.
 
+Readback is enabled by default. The final dialog explicitly reports verified or skipped image readback. That check covers the written image before first-boot configuration injection; KACE installation still requires its own verification on the Pi.
+
 <a id="quick-start"></a>
 <a id="download-and-install"></a>
 

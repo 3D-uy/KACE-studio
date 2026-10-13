@@ -2,6 +2,7 @@
 
 let activeTab = 'imager-tab';
 let lastFlashedDriveId = null;
+let ejectRequestGeneration = 0;
 const driveIdentitySnapshots = new Map();
 let term = null;
 let fitAddon = null;
@@ -127,7 +128,7 @@ window.addEventListener('pywebviewready', () => {
 });
 
 // Tab Switching Routing
-function switchTab(tabId) {
+function switchTab(tabId, { focusContent = false } = {}) {
     document.querySelectorAll('.tab-content').forEach(tab => {
         tab.classList.remove('active');
     });
@@ -156,6 +157,24 @@ function switchTab(tabId) {
 
     // Refresh SFTP Panel status
     refreshSftpBrowser();
+
+    // Next leaves its control in the hidden panel. Move focus only for this
+    // explicit advance; sidebar, validation and background updates own theirs.
+    if (focusContent) {
+        const panel = document.getElementById(tabId);
+        const target = [...panel.querySelectorAll('input, select, textarea, button, [tabindex="0"]')]
+            .find(control => !control.matches(':disabled') && control.getClientRects().length
+                && getComputedStyle(control).visibility !== 'hidden');
+        if (target) {
+            target.focus();
+        } else {
+            const heading = panel.querySelector('h2');
+            if (heading) {
+                heading.tabIndex = -1;
+                heading.focus();
+            }
+        }
+    }
 }
 
 // Drive Management (Stage A)
@@ -804,49 +823,51 @@ function closeSuccessModal() {
     closeStudioModal('success-modal');
 }
 
+function renderEjectState(state) {
+    const button = document.getElementById('eject-btn');
+    if (!button) return;
+    const pending = state === 'pending';
+    const safe = state === 'safe';
+    const key = pending ? 'ejecting' : safe ? 'ejectSafe' : 'eject';
+    const icon = pending ? 'spinner fa-spin' : safe ? 'check' : 'eject';
+    button.disabled = pending || safe;
+    button.className = safe ? 'btn btn-success' : 'btn btn-secondary';
+    button.dataset.uiLabel = safe ? 'ejectSafeHint' : key;
+    button.title = studioText(button.dataset.uiLabel);
+    button.setAttribute('aria-label', button.title);
+    button.innerHTML = `<i class="fa-solid fa-${icon}" aria-hidden="true"></i> <span data-ui-text="${key}">${studioText(key)}</span>`;
+}
+
 function ejectFlashedDrive() {
     if (lastFlashedDriveId === null) {
-        alert("No drive selection available to eject.");
+        alert(studioText('ejectNoDrive'));
         return;
     }
-    const ejectBtn = document.getElementById('eject-btn');
-    if (ejectBtn) {
-        ejectBtn.disabled = true;
-        ejectBtn.removeAttribute('title');
-        ejectBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Ejecting...';
-    }
+    renderEjectState('pending');
+    const generation = ++ejectRequestGeneration;
+    const driveId = lastFlashedDriveId;
+    const current = () => generation === ejectRequestGeneration && driveId === lastFlashedDriveId;
 
     if (window.pywebview && pywebview.api && pywebview.api.eject_drive) {
-        pywebview.api.eject_drive(parseInt(lastFlashedDriveId))
+        pywebview.api.eject_drive(parseInt(driveId))
             .then(res => {
+                if (!current()) return;
                 if (res && res.success) {
-                    if (ejectBtn) {
-                        ejectBtn.className = "btn btn-success";
-                        ejectBtn.innerHTML = '<i class="fa-solid fa-check"></i> Safe to Remove';
-                        ejectBtn.title = res.message || "The SD card is safe to remove.";
-                    }
+                    renderEjectState('safe');
                     refreshDrives();
                 } else {
-                    alert("Error ejecting drive: " + (res.error || "Unknown error"));
-                    if (ejectBtn) {
-                        ejectBtn.disabled = false;
-                        ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
-                    }
+                    alert(studioText('ejectFailed'));
+                    renderEjectState('idle');
                 }
             })
-            .catch(err => {
-                alert("Failed to eject drive: " + err);
-                if (ejectBtn) {
-                    ejectBtn.disabled = false;
-                    ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
-                }
+            .catch(() => {
+                if (!current()) return;
+                alert(studioText('ejectFailed'));
+                renderEjectState('idle');
             });
     } else {
-        alert("Eject is only supported on Windows Desktop mode.");
-        if (ejectBtn) {
-            ejectBtn.disabled = false;
-            ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
-        }
+        alert(studioText('ejectDesktopOnly'));
+        renderEjectState('idle');
     }
 }
 
@@ -882,6 +903,7 @@ function startFlashing() {
         highRiskInput.dataset.expectedPhrase &&
         highRiskInput.value.trim() === highRiskInput.dataset.expectedPhrase
     );
+    ejectRequestGeneration++;
     lastFlashedDriveId = driveId;
 
     // Hardware, OS & Arch
@@ -939,6 +961,11 @@ function startFlashing() {
         imageType = 'raspios_vanilla';
     }
 
+    // Correlation belongs to this request, before asynchronous backend replies.
+    const flashOperationId = crypto.randomUUID().replaceAll('-', '');
+    const flashRequest = {operation_id: flashOperationId, disk_identity: {...driveIdentity}};
+    window.activeFlashOperation = flashRequest;
+
     // Show progress elements
     const flashBtn = document.getElementById('flash-action-btn');
     const cancelBtn = document.getElementById('cancel-flash-btn');
@@ -979,13 +1006,16 @@ function startFlashing() {
             restartKlipperWhenPowered,
             imageType,
             wifiSecurity,
-            verifyWrite
+            verifyWrite,
+            flashOperationId
         ).then(res => {
+            if (window.activeFlashOperation?.operation_id !== flashOperationId) return;
             if (!res) {
-                window.updateDeviceState("ERROR", 0, "Flashing aborted or failed.");
+                window.updateDeviceState("ERROR", 0, "Flashing aborted or failed.", flashRequest);
             }
         }).catch(err => {
-            window.updateDeviceState("ERROR", 0, "Error triggering flash process: " + err);
+            if (window.activeFlashOperation?.operation_id !== flashOperationId) return;
+            window.updateDeviceState("ERROR", 0, "Error triggering flash process: " + err, flashRequest);
         });
     } else {
         // Mock progress in browser UI (Debug/Dev Mode)
@@ -997,7 +1027,7 @@ function startFlashing() {
                 clearInterval(interval);
                 window.updateDeviceState("FLASHING", 95, "Injecting system configuration files...");
                 setTimeout(() => {
-                    window.updateDeviceState("FLASHED", 100, "SD Card successfully flashed and provisioned!");
+                    window.updateDeviceState("ERROR", 0, studioText('readbackEvidenceMissing'), flashRequest);
                 }, 1000);
             }
         }, 300);
@@ -1020,7 +1050,57 @@ function cancelFlashing() {
 // Global functions exposed to Python flasher thread and state machine
 let currentDeviceState = "UNKNOWN";
 
-window.updateDeviceState = function (state, progress, message) {
+function flashResultMatchesRequest(result) {
+    const request = window.activeFlashOperation;
+    if (!request || !result || result.operation_id !== request.operation_id) return false;
+    const selected = document.getElementById('drive-select');
+    if (String(selected?.value) !== String(request.disk_identity.number)) return false;
+    const currentDisk = driveIdentitySnapshots.get(String(selected.value));
+    return ['number', 'serial_number', 'path', 'size_bytes', 'unique_id'].every(field =>
+        result.disk_identity?.[field] === request.disk_identity[field]
+        && currentDisk?.[field] === request.disk_identity[field]);
+}
+
+function renderFlashReadback(result) {
+    const labels = {
+        'flash-readback-result': result.status === 'verified' ? 'readbackVerified' : 'readbackSkipped',
+        'flash-readback-scope': 'readbackScope',
+        'flash-next-steps': 'flashNextSteps',
+    };
+    for (const [id, key] of Object.entries(labels)) {
+        const element = document.getElementById(id);
+        element.dataset.uiText = key;
+        element.textContent = studioText(key);
+    }
+}
+
+window.updateDeviceState = function (state, progress, message, flashContext = null) {
+    if (flashContext && !flashResultMatchesRequest(flashContext)) return;
+    if (state === 'FLASHED') {
+        if (!flashContext) {
+            state = 'ERROR';
+            message = studioText('readbackEvidenceMissing');
+            flashContext = window.activeFlashOperation;
+        } else if (flashContext.schema !== 'kace-studio-readback/v1'
+            || !['verified', 'skipped'].includes(flashContext.status)) {
+            state = 'ERROR';
+            message = studioText('readbackEvidenceMissing');
+        }
+    }
+    if (state === 'ERROR' && !flashContext && window.activeFlashOperation) {
+        // SSH and other independent operations still use the generic error
+        // event. They cannot cancel an in-flight image operation or its UI.
+        if (term) term.write(`\x1b[1;31m[Error] ${message}\x1b[0m\r\n`);
+        if (activeTab === 'terminal-tab') {
+            updateConnectionStatus(false);
+            showTroubleshootingPrompt(message);
+        }
+        return;
+    }
+    if (state === 'ERROR') {
+        window.activeFlashOperation = null;
+        document.getElementById('success-modal')?.close();
+    }
     console.log(`State Transition: ${currentDeviceState} -> ${state} (${progress}%) - ${message}`);
     currentDeviceState = state;
 
@@ -1045,6 +1125,7 @@ window.updateDeviceState = function (state, progress, message) {
             }
             break;
         case 'FLASHED':
+            renderFlashReadback(flashContext);
             startFirstBootDiscovery();
             flashBtn.disabled = false;
             updateProgress(100, message);
@@ -1055,13 +1136,7 @@ window.updateDeviceState = function (state, progress, message) {
             const progressFillDone = document.getElementById('btn-progress-fill');
             if (progressFillDone) progressFillDone.style.width = '0%';
 
-            const ejectBtn = document.getElementById('eject-btn');
-            if (ejectBtn) {
-                ejectBtn.disabled = false;
-                ejectBtn.removeAttribute('title');
-                ejectBtn.className = "btn btn-secondary";
-                ejectBtn.innerHTML = '<i class="fa-solid fa-eject"></i> Eject SD Card';
-            }
+            renderEjectState('idle');
             showStudioModal('success-modal', 'success-done-btn');
 
             // Hide cancel button
@@ -1609,15 +1684,13 @@ window.restoreSshAfterReconnect = function (result, selection, checkpoint) {
     firmwareGeneration = result.generation;
     applyRemotePowerConfig(result.power_config, selection);
     loginState = 'DISCONNECTED';
-    term.write('\r\n\x1b[97mConexión con la Pi recuperada.\x1b[0m\r\n');
+    term.write(`\r\n\x1b[97m${studioText('recoveryConnected')}\x1b[0m\r\n`);
     if (checkpoint && checkpoint.generation === firmwareGeneration && checkpoint.event) {
         window.updateKaceWorkflowEvent(checkpoint.event, firmwareGeneration);
-        const complete = checkpoint.checkpoint.state === 'COMPLETE';
-        term.write(complete
-            ? '\r\n✅  printer.cfg y los archivos necesarios quedaron instalados y verificados en la Pi.\r\n'
-            : '\r\nLa instalación conserva su progreso, pero falta confirmar el cierre. Ejecutá kace y elegí continuar para completar la verificación.\r\n');
+        const complete = checkpoint.checkpoint?.state === 'COMPLETE';
+        term.write(`\r\n${studioText(complete ? 'recoveryComplete' : 'recoveryPending')}\r\n`);
     } else {
-        term.write('\r\nNo se pudo verificar el estado de la instalación. Ejecutá kace para revisar el progreso.\r\n');
+        term.write(`\r\n${studioText('recoveryUnavailable')}\r\n`);
     }
     startFirmwareCheckpointWatch();
 };
@@ -3386,7 +3459,29 @@ const STUDIO_INSTALLATION_TEXT = {
         "cancel": "Cancel",
         "flashingComplete": "Flashing Completed!",
         "provisioned": "SD Card successfully flashed and provisioned!",
+        "readbackVerified": "SD readback verified: the written OS image matched its SHA-256 checksum.",
+        "readbackSkipped": "SD readback was skipped. The written OS image was not checked by reading it back.",
+        "readbackScope": "Readback checks the written OS image before boot configuration is added. It does not verify subsequent configuration or KACE installation.",
+        "flashNextSteps": "Safely eject the card, insert it into your Pi, power it on, and open Discovery.",
+        "readbackEvidenceMissing": "There is no valid writer result for this operation. SD preparation cannot be confirmed.",
         "eject": "Eject SD Card",
+        "ejecting": "Ejecting…",
+        "ejectSafe": "Safe to remove",
+        "ejectSafeHint": "The SD card is safe to remove.",
+        "ejectNoDrive": "No completed drive operation is available to eject.",
+        "ejectFailed": "The SD card could not be ejected. Keep it inserted and retry.",
+        "ejectDesktopOnly": "Eject is available only in the Windows desktop application.",
+        "recoveryConnected": "Connection to the Pi restored.",
+        "recoveryComplete": "printer.cfg and the required files were installed and verified on the Pi.",
+        "recoveryPending": "Installation progress is preserved, but completion still needs verification. Run kace and choose to continue the pending installation.",
+        "recoveryUnavailable": "The installation state could not be verified. Run kace to review the progress and recovery instructions.",
+        "aboutSsh": "About enabling SSH",
+        "aboutCrowsnest": "About Crowsnest",
+        "aboutPasswordAuth": "About password authentication",
+        "aboutRelay": "About GPIO relay power control",
+        "aboutReadback": "About SD readback verification",
+        "aboutActiveLow": "About active low relay signals",
+        "aboutRestart": "About restarting Klipper after power is enabled",
         "done": "Done",
         "sshDisconnected": "SSH Session: Disconnected",
         "noSshSession": "No active session. Select a device in the Discovery tab to connect.",
@@ -3563,7 +3658,29 @@ const STUDIO_INSTALLATION_TEXT = {
         "cancel": "Cancelar",
         "flashingComplete": "¡Grabación completada!",
         "provisioned": "¡Tarjeta SD grabada y configurada!",
+        "readbackVerified": "Lectura de la SD verificada: la imagen del sistema grabada coincide con su checksum SHA-256.",
+        "readbackSkipped": "Se omitió la lectura de verificación de la SD. No se comprobó la imagen grabada volviendo a leerla.",
+        "readbackScope": "La lectura comprueba la imagen del sistema antes de añadir la configuración de arranque. No verifica la configuración posterior ni la instalación de KACE.",
+        "flashNextSteps": "Expulsá la tarjeta de forma segura, insertala en la Pi, encendela y abrí Descubrimiento.",
+        "readbackEvidenceMissing": "No hay un resultado válido del grabador para esta operación. No se puede confirmar la preparación de la SD.",
         "eject": "Expulsar tarjeta SD",
+        "ejecting": "Expulsando…",
+        "ejectSafe": "Se puede retirar",
+        "ejectSafeHint": "La tarjeta SD se puede retirar de forma segura.",
+        "ejectNoDrive": "No hay una operación de escritura completada para expulsar la tarjeta.",
+        "ejectFailed": "No se pudo expulsar la tarjeta SD. Mantenela insertada y volvé a intentarlo.",
+        "ejectDesktopOnly": "La expulsión solo está disponible en la aplicación de escritorio de Windows.",
+        "recoveryConnected": "Conexión con la Pi recuperada.",
+        "recoveryComplete": "printer.cfg y los archivos necesarios quedaron instalados y verificados en la Pi.",
+        "recoveryPending": "La instalación conserva su progreso, pero falta verificar el cierre. Ejecutá kace y elegí continuar la instalación pendiente.",
+        "recoveryUnavailable": "No se pudo verificar el estado de la instalación. Ejecutá kace para revisar el progreso y las instrucciones de recuperación.",
+        "aboutSsh": "Acerca de habilitar SSH",
+        "aboutCrowsnest": "Acerca de Crowsnest",
+        "aboutPasswordAuth": "Acerca de la autenticación por contraseña",
+        "aboutRelay": "Acerca del control de alimentación por relé GPIO",
+        "aboutReadback": "Acerca de la verificación de lectura de la SD",
+        "aboutActiveLow": "Acerca de las señales de relé activas en nivel bajo",
+        "aboutRestart": "Acerca del reinicio de Klipper después del encendido",
         "done": "Listo",
         "sshDisconnected": "Sesión SSH: desconectada",
         "noSshSession": "No hay una sesión activa. Elegí un equipo en Descubrimiento.",
@@ -3740,7 +3857,29 @@ const STUDIO_INSTALLATION_TEXT = {
         "cancel": "Cancelar",
         "flashingComplete": "Gravação concluída!",
         "provisioned": "Cartão SD gravado e configurado!",
+        "readbackVerified": "Leitura do SD verificada: a imagem do sistema gravada corresponde ao checksum SHA-256.",
+        "readbackSkipped": "A leitura de verificação do SD foi ignorada. A imagem gravada não foi conferida por uma nova leitura.",
+        "readbackScope": "A leitura confere a imagem do sistema antes de adicionar a configuração de inicialização. Não verifica a configuração posterior nem a instalação do KACE.",
+        "flashNextSteps": "Ejete o cartão com segurança, insira-o na Pi, ligue-a e abra Descoberta.",
+        "readbackEvidenceMissing": "Não há um resultado válido do gravador para esta operação. Não é possível confirmar a preparação do SD.",
         "eject": "Ejetar cartão SD",
+        "ejecting": "Ejetando…",
+        "ejectSafe": "Pode remover",
+        "ejectSafeHint": "O cartão SD pode ser removido com segurança.",
+        "ejectNoDrive": "Não há uma operação de gravação concluída para ejetar o cartão.",
+        "ejectFailed": "Não foi possível ejetar o cartão SD. Mantenha-o inserido e tente novamente.",
+        "ejectDesktopOnly": "A ejeção está disponível apenas no aplicativo desktop para Windows.",
+        "recoveryConnected": "Conexão com a Pi restabelecida.",
+        "recoveryComplete": "printer.cfg e os arquivos necessários foram instalados e verificados na Pi.",
+        "recoveryPending": "O progresso da instalação foi preservado, mas a conclusão ainda precisa ser verificada. Execute kace e escolha continuar a instalação pendente.",
+        "recoveryUnavailable": "Não foi possível verificar o estado da instalação. Execute kace para revisar o progresso e as instruções de recuperação.",
+        "aboutSsh": "Sobre habilitar SSH",
+        "aboutCrowsnest": "Sobre o Crowsnest",
+        "aboutPasswordAuth": "Sobre a autenticação por senha",
+        "aboutRelay": "Sobre o controle de energia por relé GPIO",
+        "aboutReadback": "Sobre a verificação de leitura do SD",
+        "aboutActiveLow": "Sobre os sinais de relé ativos em nível baixo",
+        "aboutRestart": "Sobre reiniciar o Klipper após ligar a energia",
         "done": "Concluído",
         "sshDisconnected": "Sessão SSH: desconectada",
         "noSshSession": "Não há uma sessão ativa. Escolha um dispositivo em Descoberta.",

@@ -401,7 +401,7 @@ def safe_print_out(msg):
         except Exception:
             pass
 
-def write_status(file_path, status, progress=0, message=""):
+def write_status(file_path, status, progress=0, message="", *, readback=None):
     """
     Writes structured JSON status to the progress file.
     """
@@ -416,6 +416,8 @@ def write_status(file_path, status, progress=0, message=""):
         match = re.fullmatch(r"kace_flash_\d+_([0-9a-f]{32})\.json", os.path.basename(file_path))
         if match:
             data["operation_id"] = match.group(1)
+        if readback is not None:
+            data["readback"] = readback
         # Write to a temp file then atomically replace the target.
         # Path.replace() is atomic on both POSIX and Windows (unlike os.remove + os.rename).
         temp_path = file_path + ".tmp"
@@ -749,7 +751,15 @@ def main():
             safe_print_err(warn_msg)
         
         safe_print_out("SUCCESS: Flashing completed successfully.")
-        write_status(status_file, "success", progress=100, message="Flashing completed successfully.")
+        write_status(status_file, "success", progress=100, message="Flashing completed successfully.",
+                     readback={
+                         "schema": "kace-studio-readback/v1",
+                         "operation_id": write_contract["operation_id"],
+                         "disk_identity": expected_identity,
+                         "image_sha256": expected_image_sha256.lower(),
+                         "image_size": image_size,
+                         "status": "verified" if verify_write else "skipped",
+                     })
         sys.exit(0)
         
     except subprocess.CalledProcessError as e:

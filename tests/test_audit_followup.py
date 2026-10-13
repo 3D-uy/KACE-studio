@@ -14,6 +14,7 @@ import pytest
 import main
 from backend import imager, kace_writer, resources
 from tests.test_drive_identity import snapshot
+from tests.test_readback_outcome import evidence
 
 
 def image_file(tmp_path, content=b"A"):
@@ -53,7 +54,9 @@ def test_completion_requires_own_operation_and_successful_exit(tmp_path, monkeyp
         info._obj.hProcess = 123
         status = Path(kace_writer._expected_status_path(3, contract["operation_id"]))
         statuses.append(status)
-        status.write_text(encode({"status": "success", "operation_id": "f" * 32 if foreign else contract["operation_id"]}))
+        status.write_text(encode({"status": "success", "operation_id": "f" * 32 if foreign else contract["operation_id"],
+                                 "readback": evidence(contract["operation_id"], contract["disk_identity"],
+                                                      contract["image_sha256"], contract["image_size"])}))
         return True
     def exited(_handle, value):
         value._obj.value = exit_code

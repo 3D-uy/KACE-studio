@@ -102,6 +102,7 @@ def test_frontend_selects_fluidd_profile_and_preserves_lite_dashboard_choices():
     source = app[app.index('function startFlashing()'):app.index('function cancelFlashing()')]
     harness = r'''
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const nodes = new Map();
 const document = {getElementById(id) {
     if (!nodes.has(id)) nodes.set(id, {value:'',checked:false,style:{},dataset:{}});
@@ -114,6 +115,7 @@ const window = {updateDeviceState() {}, pywebview:{api:{start_flash(...args) {
 function updateProgress() {}
 function alert(message) {throw Error(message);}
 let lastFlashedDriveId;
+let ejectRequestGeneration = 0;
 const driveIdentitySnapshots = new Map([['7', {number:7}]]);
 function set(id,value) {document.getElementById(id).value=value;}
 set('drive-select','7'); set('os-arch-select','64bit'); set('pi-model-select','pi5');
@@ -129,12 +131,15 @@ for (const dashboard of ['mainsail','fluidd','both']) {
         const args = calls.at(-1);
         assert.equal(args[6],dashboard);
         assert.equal(args[9],'64bit');
+        assert.equal(args[23],true);
+        assert.match(args[24],/^[0-9a-f]{32}$/);
         assert.equal(args[21],source === 'raspios_lite' ? 'raspios_vanilla' :
             source === 'custom' ? 'custom_vanilla' :
             dashboard === 'fluidd' ? 'fluidd_prebaked' : 'mainsailos_prebaked');
     }
 }
 assert.equal(calls.length,9);
+assert.equal(new Set(calls.map(args=>args[24])).size,9);
 '''
     result = subprocess.run([node, "-"], input=harness + source + scenario, capture_output=True, text=True, encoding="utf-8", timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr

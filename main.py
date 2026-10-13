@@ -19,6 +19,7 @@ from backend.imager import (
     inject_config,
     _normalize_disk_identity,
     bootstrap_preflight_facts,
+    validate_readback_evidence,
 )
 from backend.provisioning import (
     ImageType,
@@ -199,6 +200,7 @@ class Api:
         self._flash_cancel_event = threading.Event()
         self._flash_lock = threading.Lock()
         self._flash_active = False
+        self._flash_operation_id = None
         self._drive_snapshots = {}
         # INFO-02 FIX: Timestamp for scan rate-limiting (one scan per 10 seconds max).
         self._last_scan_time = 0.0
@@ -315,7 +317,7 @@ class Api:
         except Exception:
             return False
 
-    def set_device_state(self, state: str, progress: int = 0, message: str = ""):
+    def set_device_state(self, state: str, progress: int = 0, message: str = "", flash_context=None):
         """
         Broadcasting helper to propagate device lifecycle states to the frontend.
         """
@@ -325,7 +327,8 @@ class Api:
                 # INFO-01 FIX: JSON-encode state to prevent JS injection if state
                 # ever contains a single-quote character (e.g. from an unexpected code path).
                 escaped_state = json.dumps(state)
-                js_code = f"window.updateDeviceState({escaped_state}, {int(progress)}, {escaped_msg});"
+                context_argument = f", {json.dumps(flash_context)}" if flash_context is not None else ""
+                js_code = f"window.updateDeviceState({escaped_state}, {int(progress)}, {escaped_msg}{context_argument});"
                 self._window.evaluate_js(js_code)
             except Exception as e:
                 print(f"evaluate_js error (non-fatal): {e}", file=sys.stderr)
@@ -381,7 +384,7 @@ class Api:
             )
         return result
 
-    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, image_type: str = ImageType.RASPIOS_VANILLA.value, wifi_security: str = "wpa2", verify_write: bool = True):
+    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, image_type: str = ImageType.RASPIOS_VANILLA.value, wifi_security: str = "wpa2", verify_write: bool = True, operation_id=None):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
         """
@@ -457,16 +460,21 @@ class Api:
                     pass  # A closed renderer cannot change the rejected operation.
             return False
 
+        if operation_id is not None and (not isinstance(operation_id, str) or not re.fullmatch(r"[0-9a-f]{32}", operation_id)):
+            self.set_device_state("ERROR", 0, "Invalid flash operation identity.")
+            return False
         with self._flash_lock:
             if self._flash_active:
                 self.set_device_state("ERROR", 0, "A flash operation is already running.")
                 return False
             self._flash_active = True
+            self._flash_operation_id = operation_id or uuid.uuid4().hex
+            operation_id = self._flash_operation_id
             self._flash_cancel_event.clear()
         try:
             thread = threading.Thread(
                 target=self._flash_worker,
-                args=(drive_id, provisioning, drive_identity),
+                args=(drive_id, provisioning, drive_identity, operation_id),
                 daemon=True
             )
             thread.start()
@@ -951,9 +959,23 @@ class Api:
 
     # ── Flash Worker Orchestrator ─────────────────────────────────────────
 
-    def _flash_worker(self, drive_id: int, provisioning: ProvisioningData, drive_identity: dict = None):
+    def _flash_worker(self, drive_id: int, provisioning: ProvisioningData, drive_identity: dict = None, operation_id=None):
+        if operation_id is None:
+            with self._flash_lock:
+                operation_id = uuid.uuid4().hex
+                self._flash_operation_id = operation_id
+        # Keep the accepted destination independent of later UI/list mutations.
+        drive_identity = dict(drive_identity or {})
+        context = {"operation_id": operation_id, "disk_identity": drive_identity}
+
+        def current_operation():
+            if operation_id != self._flash_operation_id:
+                raise ValueError("Flash operation was superseded.")
+            self._check_cancelled()
+
         try:
-            self.set_device_state("FLASHING", 0, "Initializing physical block-writing...")
+            current_operation()
+            self.set_device_state("FLASHING", 0, "Initializing physical block-writing...", context)
 
             # Stage 1: Resolve image path (download/cache/verify)
             image_path = provisioning.image_path
@@ -978,12 +1000,14 @@ class Api:
                 self._check_cancelled()
 
             # Stage 2: Flash image to drive
+            current_operation()
             self.set_device_state("FLASHING", 0, "Writing blocks to SD card...")
 
             def progress_callback(status, percent, message):
-                self.set_device_state("FLASHING", percent, message)
+                if operation_id == self._flash_operation_id:
+                    self.set_device_state("FLASHING", percent, message, context)
 
-            success, err_msg = flash_drive(
+            success, write_result = flash_drive(
                 drive_id,
                 image_path,
                 progress_callback,
@@ -991,10 +1015,19 @@ class Api:
                 provisioning.verify_write,
                 expected_image_sha256=resolved_image.sha256,
                 expected_image_size=resolved_image.size_bytes,
+                operation_id=operation_id,
             )
+            current_operation()
             if not success:
-                self.set_device_state("ERROR", 0, f"Flashing failed: {err_msg}")
+                self.set_device_state("ERROR", 0, f"Flashing failed: {write_result}", context)
                 return
+
+            readback = validate_readback_evidence(
+                write_result, operation_id=operation_id, drive_identity=drive_identity,
+                image_sha256=resolved_image.sha256, image_size=resolved_image.size_bytes,
+                verify_write=provisioning.verify_write,
+            )
+            current_operation()
 
             # Stage 3: Inject boot configuration files
             self.set_device_state("FLASHING", 95, "Injecting system configuration files...")
@@ -1022,20 +1055,24 @@ class Api:
                 drive_identity=drive_identity,
             )
 
+            current_operation()
             if inject_success:
-                self.set_device_state("FLASHED", 100, "SD Card successfully flashed and provisioned!")
+                self.set_device_state("FLASHED", 100, "SD Card successfully flashed and provisioned!", readback)
             else:
-                self.set_device_state("ERROR", 95, "Error injecting boot configurations to FAT32 partition.")
+                self.set_device_state("ERROR", 95, "Error injecting boot configurations to FAT32 partition.", context)
 
         except Exception as e:
             print(f"Flash worker exception: {e}", file=sys.stderr)
+            if operation_id != self._flash_operation_id:
+                return
             if self._flash_cancel_event.is_set():
-                self.set_device_state("ERROR", 0, "Flashing cancelled by user.")
+                self.set_device_state("ERROR", 0, "Flashing cancelled by user.", context)
             else:
-                self.set_device_state("ERROR", 0, f"Exception occurred: {self._sanitize_error(e)}")
+                self.set_device_state("ERROR", 0, f"Exception occurred: {self._sanitize_error(e)}", context)
         finally:
             with self._flash_lock:
-                self._flash_active = False
+                if operation_id == self._flash_operation_id:
+                    self._flash_active = False
 
     def scan_network(self):
         """

@@ -25,6 +25,39 @@ identity. SFTP results/downloads remain bound to their originating SSH generatio
 Preserve gates, receipts, validations and rollback; terminal failures and manual
 recovery must not become success states. Credentials must not enter logs/fixtures.
 
+The writer publishes `kace-studio-readback/v1` evidence with the operation ID,
+disk identity, image digest/size and observed `verified` or `skipped` outcome.
+Imager validates it against the accepted write contract; the worker validates it
+again and emits `FLASHED` only after successful boot injection and a current,
+uncancelled operation. Missing or incompatible evidence fails. The frontend
+correlates the accepted operation/disk and presents the backend outcome, without
+inferring verification from preferences. Worker errors and rejected-start
+callbacks carry that operation's context; an independent SSH error cannot
+invalidate its completion. Eject replies
+are discarded after a newer request or flash starts, including on the same disk.
+
+Checkpoint parsing is read-only and validates the v1 wire structure. Artifact
+evidence is required from `ARTIFACT_READY`; from `MCU_VERIFIED`, both KACE and
+Studio require a saved non-empty verified serial path and positive integer flash
+evidence timestamp. Studio also validates projection types, board identity and
+internal artifact/build/transformation references. It does not access Pi paths
+through the Windows filesystem or repeat physical verification of historical
+`COMPLETE`. MCU model aliases, BoardContracts and physical receipts remain KACE
+authority. The producer-generated corpus in `tests/fixtures/firmware_checkpoints.json`
+includes all states, a historical v1 checkpoint, a legitimate MCU alias and a
+Robin transformation. Legacy baseline identity, VID:PID lists and build firmware
+identity may be absent; recorded references must remain consistent. Regenerate
+it using `tests/fixtures/generate_firmware_checkpoints.py` with KACE's development
+Python and the producer checkout path after an intentional contract change.
+
+Critical reconnect, readback, eject and accessible service-help labels use the
+existing EN/ES/PT catalog. Visible modal/eject labels update when language changes;
+terminal history remains unchanged. The explicit Imager Next action requests
+focus in Credentials, while sidebar, validation and background updates retain
+their own focus behavior. Regressions: `test_readback_outcome.py`,
+`test_readback_frontend.py`, `test_firmware_checkpoint.py`,
+`test_recovery_localization.py` and `test_navigation_focus.py`.
+
 ## 🛠️ Source environment and tests
 
 Use Windows 10/11, WebView2 and Python 3.11/3.12 for source development. From the
@@ -172,6 +205,15 @@ Detailed engineering procedures have one canonical English source linked from
 each language, avoiding three drifting copies of release/security contracts.
 
 ## Remote-session and integration boundaries
+
+SSH first-use trust stages a new host key only in Paramiko's in-memory key set.
+After authentication and the cancellation check, the existing locked writer
+merges and atomically publishes `known_hosts`. A temporary-write or replace
+failure preserves the previous file and fails the connection; known-key
+mismatches remain rejected. The atomic replacement is the publication boundary:
+a later cancellation or permission error does not roll back published trust.
+Tests in `test_known_hosts_safety.py` execute Paramiko's real host-key policy with
+a simulated transport and temporary trust files.
 
 SFTP listings and downloads belong to the originating SSH connection.
 An SSH reconnection does not confirm KACE installation success: pending

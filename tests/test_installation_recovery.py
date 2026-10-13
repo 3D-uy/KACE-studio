@@ -78,6 +78,41 @@ startFirmwareCheckpointWatch();
 ''')
 
 
+@pytest.mark.parametrize('invalid', [False, True])
+def test_checkpoint_api_result_cannot_complete_ui_from_invalid_evidence(invalid):
+    from main import Api
+    from test_firmware_checkpoint import CORPUS, checkpoint, resigned
+
+    value = checkpoint('COMPLETE')
+    if invalid:
+        value['artifact'] = None
+        resigned(value)
+    else:
+        value = next(case['checkpoint'] for case in CORPUS['cases']
+                     if case['case'] == 'historical-v1-COMPLETE')
+    api = Api()
+    api._ssh_gen = 7
+    api._ssh = Mock(read_text_file=Mock(return_value=json.dumps(value)))
+    result = api.get_firmware_workflow_checkpoint()
+    pending = checkpoint('READY_TO_DEPLOY')
+    pending['last_error'] = 'verification pending'
+    event = checkpoint_event(pending)
+    workflow = APP[APP.index('const KACE_INSTALLATION_STEPS'):APP.index('function restoreKaceDeploymentManifest')]
+    observer = APP[APP.index('let checkpointWatchToken'):APP.index('let firstBootDiscovery')]
+    run_js(HARNESS + workflow + observer + f'''
+firmwareGeneration = 7;
+window.updateKaceWorkflowEvent({json.dumps(event)}, 7);
+window.pywebview = {{api:{{async get_firmware_workflow_checkpoint(){{return {json.dumps(result)};}}}}}};
+timers.length = 0;
+startFirmwareCheckpointWatch();
+(async()=>{{
+ await timers.shift()();
+ assert.equal(nodes.get('kace-workflow-status').textContent, {json.dumps('Recuperación necesaria' if invalid else 'Completada')});
+ assert.equal(nodes.get('kace-firmware-download').style.display, 'none');
+}})().catch(error=>{{console.error(error);process.exitCode=1}});
+''')
+
+
 def test_first_boot_discovery_is_bounded_stoppable_and_serial():
     retry = APP[APP.index('let discoveryScanRetryAt'):APP.index('function triggerScan()')]
     renderer = APP[APP.index('function populateDevices(devices)'):APP.index('function connectManually()')]
