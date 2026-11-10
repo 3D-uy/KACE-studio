@@ -382,6 +382,21 @@ def verify_rebuild(reference: Path, candidate: Path) -> str:
     return candidate_hash
 
 
+def verify_toolchain(contract: dict) -> tuple[str, str]:
+    """Use the same tool versions for packaging and its release manifest."""
+    python_version = platform.python_version()
+    pyinstaller_version = importlib.metadata.version("pyinstaller")
+    if python_version != contract["python"]:
+        raise ReleaseContractError(
+            f"Python toolchain mismatch: {python_version} != {contract['python']}"
+        )
+    if pyinstaller_version != contract["pyinstaller"]:
+        raise ReleaseContractError(
+            f"PyInstaller toolchain mismatch: {pyinstaller_version} != {contract['pyinstaller']}"
+        )
+    return python_version, pyinstaller_version
+
+
 def build_manifest(
     artifact: Path,
     *,
@@ -402,16 +417,7 @@ def build_manifest(
     if dirty and not allow_dirty:
         raise ReleaseContractError("release manifest requires a clean worktree")
 
-    python_version = platform.python_version()
-    pyinstaller_version = importlib.metadata.version("pyinstaller")
-    if python_version != contract["python"]:
-        raise ReleaseContractError(
-            f"Python toolchain mismatch: {python_version} != {contract['python']}"
-        )
-    if pyinstaller_version != contract["pyinstaller"]:
-        raise ReleaseContractError(
-            f"PyInstaller toolchain mismatch: {pyinstaller_version} != {contract['pyinstaller']}"
-        )
+    python_version, pyinstaller_version = verify_toolchain(contract)
     commit_epoch = _git("show", "-s", "--format=%ct", "HEAD", root=root)
     expected_environment = contract.get("build_environment", {})
     if os.environ.get("PYTHONHASHSEED") != expected_environment.get("PYTHONHASHSEED"):

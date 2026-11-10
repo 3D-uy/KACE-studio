@@ -11,6 +11,7 @@ from tests.test_provisioning_preflight import valid_request
 
 
 @pytest.mark.parametrize("value", ['Lab"Printer', "Lab'Printer", " both'\" ", r"printer\wifi123", "  spaces  ", "#lab=work", "Taller ñ", "", "a'\"`´b"])
+@pytest.mark.usefixtures("isolated_boot_refresh")
 def test_prebaked_wifi_round_trips_through_exact_consumer(tmp_path, monkeypatch, value):
     boot = tmp_path / "boot"
     boot.mkdir()

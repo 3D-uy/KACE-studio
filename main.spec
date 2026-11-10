@@ -6,7 +6,11 @@ import sys
 
 sys.path.insert(0, SPECPATH)
 from backend.resources import require_release_ready
+from scripts.release import verify_toolchain
 require_release_ready()
+
+contract = json.loads((Path(SPECPATH) / 'release-contract.json').read_text(encoding='utf-8'))
+verify_toolchain(contract)
 
 from PyInstaller.utils.win32.versioninfo import (
     FixedFileInfo,
@@ -19,7 +23,6 @@ from PyInstaller.utils.win32.versioninfo import (
 )
 
 
-contract = json.loads((Path(SPECPATH) / 'release-contract.json').read_text(encoding='utf-8'))
 metadata = contract['windows_metadata']
 numeric_version = tuple(metadata['numeric_version'])
 version_info = VSVersionInfo(

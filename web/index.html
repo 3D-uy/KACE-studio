@@ -263,7 +263,9 @@
                         <div class="credentials-fields">
                             <!-- Step 7: Credentials -->
                             <div class="form-group" style="margin-bottom: 0;">
-                                <label for="ssh-username"><span class="brand-orange"><span data-ui-text="step7">STEP 7:</span></span> <span data-ui-text="accountUsername">ACCOUNT USERNAME</span></label>
+                                <div class="credentials-label-row">
+                                    <label for="ssh-username"><span class="brand-orange"><span data-ui-text="step7">STEP 7:</span></span> <span data-ui-text="accountUsername">ACCOUNT USERNAME</span></label>
+                                </div>
                                 <input type="text" id="ssh-username" value="kace" placeholder="Username" style="margin-bottom: 8px;">
                                 <div class="password-wrapper" style="margin-bottom: 8px;">
                                     <label for="ssh-password" data-password-label="ssh-password">Password</label>
@@ -279,7 +281,7 @@
 
                             <!-- Step 8: WiFi Setup -->
                             <div class="form-group" style="margin-bottom: 0;">
-                                <div class="wifi-label-row">
+                                <div class="credentials-label-row wifi-label-row">
                                     <label for="wifi-ssid"><span class="brand-orange"><span data-ui-text="step8">STEP 8:</span></span> <span data-ui-text="wifiNetwork">WI-FI NETWORK</span></label>
                                     <label for="wifi-security-select" class="wifi-security-label"><span data-ui-text="securityLabel">Security</span>
                                         <select id="wifi-security-select" onchange="toggleWifiSecurity()">
@@ -536,7 +538,7 @@
                         <div class="bootstrap-stage-bar">
                             <div class="bstage" id="bstage-PACKAGES">
                                 <div class="bstage-dot"></div>
-                                <span>Packages</span>
+                                <span data-ui-text="bootstrapPackages">Packages</span>
                             </div>
                             <div class="bstage" id="bstage-KLIPPER">
                                 <div class="bstage-dot"></div>
@@ -544,7 +546,7 @@
                             </div>
                             <div class="bstage" id="bstage-KLIPPER_FIX">
                                 <div class="bstage-dot"></div>
-                                <span>Svc Patch</span>
+                                <span data-ui-text="bootstrapPatch">Service setup</span>
                             </div>
                             <div class="bstage" id="bstage-MOONRAKER">
                                 <div class="bstage-dot"></div>
@@ -552,19 +554,19 @@
                             </div>
                             <div class="bstage" id="bstage-CONFIGS">
                                 <div class="bstage-dot"></div>
-                                <span>Configs</span>
+                                <span data-ui-text="bootstrapConfigs">Configuration</span>
                             </div>
                             <div class="bstage" id="bstage-MAINSAIL">
                                 <div class="bstage-dot"></div>
-                                <span>Dashboard</span>
+                                <span data-ui-text="bootstrapDashboard">Web interface</span>
                             </div>
                             <div class="bstage" id="bstage-FLUIDD">
                                 <div class="bstage-dot"></div>
-                                <span>Dashboard</span>
+                                <span data-ui-text="bootstrapDashboard">Web interface</span>
                             </div>
                             <div class="bstage" id="bstage-CLIENT_CFG">
                                 <div class="bstage-dot"></div>
-                                <span>UI Config</span>
+                                <span data-ui-text="bootstrapClient">Client configuration</span>
                             </div>
                             <div class="bstage" id="bstage-NGINX">
                                 <div class="bstage-dot"></div>
@@ -572,7 +574,7 @@
                             </div>
                             <div class="bstage" id="bstage-SERVICES">
                                 <div class="bstage-dot"></div>
-                                <span>Services</span>
+                                <span data-ui-text="bootstrapServices">Services</span>
                             </div>
                             <div class="bstage" id="bstage-CROWSNEST">
                                 <div class="bstage-dot"></div>
@@ -590,20 +592,28 @@
                     <section id="kace-workflow-tracker" class="kace-workflow-tracker" style="display: none;" aria-live="polite">
                         <div class="kace-workflow-header">
                             <div>
-                                <span class="kace-workflow-eyebrow">KACE installation</span>
                                 <strong id="kace-workflow-title">Waiting for workflow events</strong>
+                                <span id="kace-workflow-current" class="kace-workflow-current"></span>
                             </div>
                             <div class="kace-workflow-actions">
                                 <button id="kace-firmware-download" class="btn btn-secondary btn-sm" type="button"
                                     style="display: none;" onclick="downloadKaceFirmwareArtifact()">
                                     <i class="fa-solid fa-download"></i> Download firmware
                                 </button>
+                                <button id="kace-configuration-download" class="btn btn-secondary btn-sm" type="button"
+                                    style="display: none;" onclick="downloadKaceConfiguration()">
+                                    <i class="fa-solid fa-download"></i> Download configuration
+                                </button>
                                 <span id="kace-workflow-status" class="kace-workflow-status">In progress</span>
                             </div>
                         </div>
-                        <ol id="kace-workflow-steps" class="kace-workflow-steps"></ol>
-                        <details><summary>Technical details / Detalles técnicos / Detalhes técnicos</summary><pre id="kace-workflow-advanced"></pre></details>
-                            <div id="kace-workflow-detail" class="kace-workflow-detail"></div>
+                        <div id="kace-configuration-download-status" class="kace-workflow-detail" role="status" hidden></div>
+                        <div id="kace-workflow-detail" class="kace-workflow-detail"></div>
+                        <details id="kace-workflow-history" class="kace-workflow-history" ontoggle="if (fitAddon) fitAddon.fit()">
+                            <summary id="kace-workflow-history-label" data-ui-text="workflowHistory">Stages and technical details</summary>
+                            <ol id="kace-workflow-steps" class="kace-workflow-steps"></ol>
+                            <pre id="kace-workflow-advanced"></pre>
+                        </details>
                     </section>
 
                     <!-- Terminal Search Bar -->

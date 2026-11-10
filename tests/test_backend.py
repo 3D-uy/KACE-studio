@@ -403,6 +403,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_bootstrap_config_injection_preserves_active_low_selection(self):
         import tempfile
         import shutil
@@ -665,15 +666,19 @@ class TestKaceBackend(unittest.TestCase):
         import tempfile
         import shutil
         
+        bash = shutil.which("bash")
         try:
-            subprocess.run(["bash", "--version"], capture_output=True, check=True)
+            if bash is None:
+                raise FileNotFoundError("bash")
+            subprocess.run([bash, "--version"], capture_output=True, check=True, timeout=10)
         except (subprocess.SubprocessError, FileNotFoundError):
             raise unittest.SkipTest("bash not available on this platform")
             
         temp_dir = tempfile.mkdtemp()
         try:
             mock_boot_cfg = os.path.join(temp_dir, "kace-bootstrap.txt")
-            with open(mock_boot_cfg, "w") as f:
+            # Match the production atomic writer's UTF-8/LF wire format.
+            with open(mock_boot_cfg, "w", encoding="utf-8", newline="\n") as f:
                 f.write("DASHBOARD=fluidd\n")
                 f.write("CROWSNEST=true\n")
                 f.write("TIMEZONE=Europe/London\n")
@@ -684,38 +689,49 @@ class TestKaceBackend(unittest.TestCase):
                 
             posix_boot_cfg_path = mock_boot_cfg.replace("\\", "/")
             
-            modified_content = content.replace(
+            # Execute only the real argument/config/allowlist block. Running the
+            # bootstrap preamble would truncate a user log and register cleanup
+            # of /tmp files before the old banner-based exit could stop it.
+            start = content.index('DASHBOARD=""\nCROWSNEST=""')
+            end = content.index("# ── Resolve Printer User Home Directory", start)
+            parsing = content[start:end]
+            modified_content = parsing.replace(
                 '/boot/firmware/kace-bootstrap.txt', posix_boot_cfg_path
             ).replace(
                 '/boot/kace-bootstrap.txt', posix_boot_cfg_path
-            ).replace(
-                'exec > >(tee -a -i "$LOG_FILE") 2>&1', '# exec > >(tee -a -i "$LOG_FILE") 2>&1'
             )
-            
-            target_str = 'echo "--------------------------------------------------------"'
-            idx = modified_content.find(target_str)
-            if idx != -1:
-                next_idx = modified_content.find(target_str, idx + len(target_str))
-                if next_idx != -1:
-                    insert_pos = next_idx + len(target_str)
-                    modified_content = modified_content[:insert_pos] + "\nexit 0\n" + modified_content[insert_pos:]
-            
+            # Library mode loads production helpers without host setup or traps.
+            modified_content = (
+                'set -e\nexport KACE_BOOTSTRAP_LIB_ONLY=1\nsource "$1"\nshift\n'
+                + modified_content
+                + '\nprintf "Dashboard UI : %s\\nWebcam Stream: %s\\nTimezone     : %s\\n" '
+                '"$DASHBOARD" "$CROWSNEST" "$TIMEZONE"\n'
+            )
             temp_script = os.path.join(temp_dir, "bootstrap_test.sh")
             with open(temp_script, "w", newline="\n", encoding="utf-8") as f:
                 f.write(modified_content)
                 
             res = subprocess.run([
-                "bash", temp_script,
+                bash, temp_script, bootstrap_sh_path.replace("\\", "/"),
                 "--dashboard", "mainsail",
                 "--crowsnest", "false",
                 "--timezone", "America/New_York"
-            ], capture_output=True, text=True)
+            ], capture_output=True, text=True, timeout=10)
             
-            self.assertEqual(res.returncode, 0)
+            self.assertEqual(res.returncode, 0, res.stderr)
             self.assertIn("Dashboard UI : mainsail", res.stdout)
             self.assertIn("Webcam Stream: false", res.stdout)
             self.assertIn("Timezone     : America/New_York", res.stdout)
-            
+
+            # This control proves the injected file was read: otherwise the CLI
+            # assertions above could pass while the fixture ignored that file.
+            fallback = subprocess.run(
+                [bash, temp_script, bootstrap_sh_path.replace("\\", "/")],
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(fallback.returncode, 0, fallback.stderr)
+            self.assertIn("Dashboard UI : fluidd", fallback.stdout)
+            self.assertIn("Webcam Stream: true", fallback.stdout)
         finally:
             shutil.rmtree(temp_dir)
 
@@ -1203,6 +1219,7 @@ class TestKaceBackend(unittest.TestCase):
         self.assertEqual(len(data["items"]), 1)
         self.assertEqual(data["items"][0]["name"], "file.txt")
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_inject_config_prebaked_flag(self):
         """
         Tests that inject_config properly writes PREBAKED=true or PREBAKED=false
@@ -1624,6 +1641,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_firstrun_trap_fallback_logic(self):
         """
         Verify that both generated firstrun.sh variants retain durable state,

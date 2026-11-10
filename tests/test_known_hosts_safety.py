@@ -18,6 +18,10 @@ from backend import ssh_client
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def approve(session, state, hostname="printer.local"):
+    session.approved_host_key = (hostname, state.new_key.get_name(), state.new_key.get_base64())
+
+
 def _set_home(monkeypatch, home: Path) -> None:
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
@@ -216,6 +220,7 @@ def test_real_policy_persistence_failure_preserves_all_prior_keys(paramiko_trust
     # Exercise the unchanged retry loop without waiting through its backoff.
     cancellation = SimpleNamespace(is_set=lambda: False, wait=lambda _seconds: False)
     session = ssh_client.SSHSession()
+    approve(session, state)
     with pytest.raises(OSError, match="simulated .* failure"):
         session._connect_until_deadline(
             "printer.local", "simulated", "simulated", time.monotonic() + 30, cancellation
@@ -237,6 +242,7 @@ def test_real_policy_persistence_failure_preserves_all_prior_keys(paramiko_trust
 def test_real_policy_publishes_new_host_once_and_preserves_known_key(paramiko_trust, address, stored_name):
     state = paramiko_trust
     session = ssh_client.SSHSession()
+    approve(session, state, stored_name)
     try:
         assert session.connect(address, "simulated", "simulated") is True
         assert session.is_connected()
@@ -282,6 +288,7 @@ def test_cancelled_real_connection_does_not_publish_staged_host_key(paramiko_tru
     cancellation = threading.Event()
     state.on_auth = cancellation.set
     session = ssh_client.SSHSession()
+    approve(session, state)
 
     with pytest.raises(ssh_client.SSHConnectionDeadlineExceeded):
         session._connect_until_deadline(
@@ -295,6 +302,51 @@ def test_cancelled_real_connection_does_not_publish_staged_host_key(paramiko_tru
     assert len(state.clients) == 1
     assert state.clients[0].closed
     assert session.client is None
+
+
+def test_unknown_key_blocks_authentication_and_publication(paramiko_trust):
+    state = paramiko_trust
+    session = ssh_client.SSHSession()
+    with pytest.raises(ssh_client.UnknownHostKey) as error:
+        session.connect("printer.local", "simulated", "simulated")
+    assert error.value.hostname == "printer.local"
+    assert error.value.fingerprint.startswith("SHA256:")
+    assert state.authenticated == []
+    assert state.publications == []
+    assert state.path.read_bytes() == state.original
+    assert all(client.closed for client in state.clients)
+
+
+def test_approval_for_a_different_key_never_authenticates(paramiko_trust):
+    state = paramiko_trust
+    session = ssh_client.SSHSession()
+    session.approved_host_key = ("printer.local", state.old_key.get_name(), state.old_key.get_base64())
+    with pytest.raises(ssh_client.UnknownHostKey):
+        session.connect("printer.local", "simulated", "simulated")
+    assert state.authenticated == []
+    assert state.publications == []
+
+
+def test_superseded_approval_never_authenticates(paramiko_trust):
+    state = paramiko_trust
+    session = ssh_client.SSHSession()
+    approve(session, state)
+    session.approval_current = lambda: False
+    with pytest.raises(ssh_client.SSHConnectionDeadlineExceeded):
+        session.connect("printer.local", "simulated", "simulated")
+    assert state.authenticated == []
+    assert state.publications == []
+
+
+def test_approved_unicode_hostname_is_accepted_without_comparison_error(paramiko_trust):
+    state = paramiko_trust
+    session = ssh_client.SSHSession()
+    approve(session, state, "piñ.local")
+    try:
+        assert session.connect("piñ.local", "simulated", "simulated")
+        assert len(state.authenticated) == 1
+    finally:
+        session.close()
 
 
 def test_ssh_trust_transaction_holds_lock_through_connect_and_publish(tmp_path, monkeypatch):

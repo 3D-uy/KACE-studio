@@ -1,0 +1,1288 @@
+{
+  "provenance": {
+    "producer_commit": "738c519da0cdfdbc2ab998c89b4ae1548f82acbe",
+    "producer_source_sha256": "cd213ca0489d62b3676db8dc59ceed0e093bf9d32e16010803d45368f0b9b543",
+    "historical_commit": "216674f4a9647ba3d911936ee1d8d8264d8f6c55",
+    "historical_sources_sha256": {
+      "firmware/artifacts.py": "7f6e1911d3d02db9e39bce3c76118c058f6c4f81a742eeb1023e027147dab601",
+      "firmware/deployment/models.py": "92f57ca0922ff00c1b34f9183f58ea20d975aaf404039279ee369038f8788b7e",
+      "firmware/deployment/service.py": "fa463cf804f39f793d19ec035150a5c5b8256a95a72bf05699dc8539cf9e2809"
+    },
+    "generation": "Real current/original v1 to_dict serializers and atomic _write_manifest writers; synthetic result states.",
+    "limits": "Synthetic native/Robin bytes, not physical evidence. Pi paths replace temporary paths only after preparation. No hardware execution."
+  },
+  "cases": [
+    {
+      "case": "current-robin-ARTIFACT_READY",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "firmware_identity": {
+              "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+              "artifact_format": "BIN",
+              "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+              "artifact_size": 32118,
+              "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "build_options": {},
+              "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+              "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+              "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "gcc",
+                "compiler_version": "test",
+                "make_command": "make",
+                "make_version": "test"
+              }
+            },
+            "flashable": true,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "Robin_nano.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile": {
+            "auto_flash": false,
+            "backend": "",
+            "backend_options": {},
+            "board_ids": [],
+            "bootloader_offset": null,
+            "config_mcu": "",
+            "exact_match_required": false,
+            "fallback": true,
+            "final_filename": "Robin_nano.bin",
+            "formats": [
+              "BIN"
+            ],
+            "id": "unsupported-board-prepare-only",
+            "instructions": [
+              "deployment.prepare_only.unsupported"
+            ],
+            "mcu_patterns": [],
+            "method": "MANUAL",
+            "native_filenames": [
+              "klipper.bin"
+            ],
+            "post_flash_verification": "NOT_APPLICABLE",
+            "strategy": "PREPARE_ONLY",
+            "usb": {
+              "application_vid_pids": [],
+              "bootloader_vid_pids": [],
+              "topology": "NOT_APPLICABLE"
+            }
+          },
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+          "staged_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu",
+            "usb_path": "",
+            "usb_pid": "",
+            "usb_vid": ""
+          },
+          "transformation": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "final_filename": "Robin_nano.bin",
+            "final_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+            "final_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+            "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+            "lcd_removed": null,
+            "native_path": "/home/kace/kace/native/klipper.bin",
+            "native_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "schema": "kace-robin-delivery/v1",
+            "script_sha256": "3a31d672edc333b79345be753906e88f069b782504a18310632b73d690c57811",
+            "serial_port": "USART3",
+            "size_bytes": 32118
+          }
+        },
+        "firmware_identity": {
+          "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+          "artifact_format": "BIN",
+          "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "artifact_size": 32118,
+          "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "build_options": {},
+          "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+          "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+          "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+          "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+          "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "schema": "kace-firmware-build/v1",
+          "toolchain": {
+            "compiler": "gcc",
+            "compiler_version": "test",
+            "make_command": "make",
+            "make_version": "test"
+          }
+        },
+        "schema": 1,
+        "sequence": 1,
+        "state": "ARTIFACT_READY",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    },
+    {
+      "case": "current-robin-MEDIA_PREPARED",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "firmware_identity": {
+              "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+              "artifact_format": "BIN",
+              "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+              "artifact_size": 32118,
+              "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "build_options": {},
+              "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+              "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+              "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "gcc",
+                "compiler_version": "test",
+                "make_command": "make",
+                "make_version": "test"
+              }
+            },
+            "flashable": true,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "Robin_nano.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile": {
+            "auto_flash": false,
+            "backend": "",
+            "backend_options": {},
+            "board_ids": [],
+            "bootloader_offset": null,
+            "config_mcu": "",
+            "exact_match_required": false,
+            "fallback": true,
+            "final_filename": "Robin_nano.bin",
+            "formats": [
+              "BIN"
+            ],
+            "id": "unsupported-board-prepare-only",
+            "instructions": [
+              "deployment.prepare_only.unsupported"
+            ],
+            "mcu_patterns": [],
+            "method": "MANUAL",
+            "native_filenames": [
+              "klipper.bin"
+            ],
+            "post_flash_verification": "NOT_APPLICABLE",
+            "strategy": "PREPARE_ONLY",
+            "usb": {
+              "application_vid_pids": [],
+              "bootloader_vid_pids": [],
+              "topology": "NOT_APPLICABLE"
+            }
+          },
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+          "staged_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu",
+            "usb_path": "",
+            "usb_pid": "",
+            "usb_vid": ""
+          },
+          "transformation": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "final_filename": "Robin_nano.bin",
+            "final_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+            "final_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+            "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+            "lcd_removed": null,
+            "native_path": "/home/kace/kace/native/klipper.bin",
+            "native_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "schema": "kace-robin-delivery/v1",
+            "script_sha256": "3a31d672edc333b79345be753906e88f069b782504a18310632b73d690c57811",
+            "serial_port": "USART3",
+            "size_bytes": 32118
+          }
+        },
+        "firmware_identity": {
+          "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+          "artifact_format": "BIN",
+          "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "artifact_size": 32118,
+          "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "build_options": {},
+          "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+          "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+          "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+          "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+          "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "schema": "kace-firmware-build/v1",
+          "toolchain": {
+            "compiler": "gcc",
+            "compiler_version": "test",
+            "make_command": "make",
+            "make_version": "test"
+          }
+        },
+        "result": {
+          "detail": "Synthetic delivery fixture: MEDIA_PREPARED",
+          "error_code": "",
+          "executed_automatically": false,
+          "status": "MEDIA_PREPARED"
+        },
+        "schema": 1,
+        "sequence": 2,
+        "state": "MEDIA_PREPARED",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    },
+    {
+      "case": "current-robin-ACTION_REQUIRED",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "firmware_identity": {
+              "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+              "artifact_format": "BIN",
+              "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+              "artifact_size": 32118,
+              "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "build_options": {},
+              "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+              "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+              "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "gcc",
+                "compiler_version": "test",
+                "make_command": "make",
+                "make_version": "test"
+              }
+            },
+            "flashable": true,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "Robin_nano.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile": {
+            "auto_flash": false,
+            "backend": "",
+            "backend_options": {},
+            "board_ids": [],
+            "bootloader_offset": null,
+            "config_mcu": "",
+            "exact_match_required": false,
+            "fallback": true,
+            "final_filename": "Robin_nano.bin",
+            "formats": [
+              "BIN"
+            ],
+            "id": "unsupported-board-prepare-only",
+            "instructions": [
+              "deployment.prepare_only.unsupported"
+            ],
+            "mcu_patterns": [],
+            "method": "MANUAL",
+            "native_filenames": [
+              "klipper.bin"
+            ],
+            "post_flash_verification": "NOT_APPLICABLE",
+            "strategy": "PREPARE_ONLY",
+            "usb": {
+              "application_vid_pids": [],
+              "bootloader_vid_pids": [],
+              "topology": "NOT_APPLICABLE"
+            }
+          },
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+          "staged_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu",
+            "usb_path": "",
+            "usb_pid": "",
+            "usb_vid": ""
+          },
+          "transformation": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "final_filename": "Robin_nano.bin",
+            "final_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+            "final_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+            "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+            "lcd_removed": null,
+            "native_path": "/home/kace/kace/native/klipper.bin",
+            "native_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "schema": "kace-robin-delivery/v1",
+            "script_sha256": "3a31d672edc333b79345be753906e88f069b782504a18310632b73d690c57811",
+            "serial_port": "USART3",
+            "size_bytes": 32118
+          }
+        },
+        "firmware_identity": {
+          "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+          "artifact_format": "BIN",
+          "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "artifact_size": 32118,
+          "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "build_options": {},
+          "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+          "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+          "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+          "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+          "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "schema": "kace-firmware-build/v1",
+          "toolchain": {
+            "compiler": "gcc",
+            "compiler_version": "test",
+            "make_command": "make",
+            "make_version": "test"
+          }
+        },
+        "result": {
+          "detail": "Synthetic delivery fixture: ACTION_REQUIRED",
+          "error_code": "",
+          "executed_automatically": false,
+          "status": "ACTION_REQUIRED"
+        },
+        "schema": 1,
+        "sequence": 3,
+        "state": "ACTION_REQUIRED",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    },
+    {
+      "case": "current-robin-FLASHED",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "firmware_identity": {
+              "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+              "artifact_format": "BIN",
+              "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+              "artifact_size": 32118,
+              "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "build_options": {},
+              "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+              "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+              "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "gcc",
+                "compiler_version": "test",
+                "make_command": "make",
+                "make_version": "test"
+              }
+            },
+            "flashable": true,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "Robin_nano.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile": {
+            "auto_flash": false,
+            "backend": "",
+            "backend_options": {},
+            "board_ids": [],
+            "bootloader_offset": null,
+            "config_mcu": "",
+            "exact_match_required": false,
+            "fallback": true,
+            "final_filename": "Robin_nano.bin",
+            "formats": [
+              "BIN"
+            ],
+            "id": "unsupported-board-prepare-only",
+            "instructions": [
+              "deployment.prepare_only.unsupported"
+            ],
+            "mcu_patterns": [],
+            "method": "MANUAL",
+            "native_filenames": [
+              "klipper.bin"
+            ],
+            "post_flash_verification": "NOT_APPLICABLE",
+            "strategy": "PREPARE_ONLY",
+            "usb": {
+              "application_vid_pids": [],
+              "bootloader_vid_pids": [],
+              "topology": "NOT_APPLICABLE"
+            }
+          },
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+          "staged_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu",
+            "usb_path": "",
+            "usb_pid": "",
+            "usb_vid": ""
+          },
+          "transformation": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "final_filename": "Robin_nano.bin",
+            "final_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+            "final_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+            "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+            "lcd_removed": null,
+            "native_path": "/home/kace/kace/native/klipper.bin",
+            "native_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "schema": "kace-robin-delivery/v1",
+            "script_sha256": "3a31d672edc333b79345be753906e88f069b782504a18310632b73d690c57811",
+            "serial_port": "USART3",
+            "size_bytes": 32118
+          }
+        },
+        "firmware_identity": {
+          "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+          "artifact_format": "BIN",
+          "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "artifact_size": 32118,
+          "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "build_options": {},
+          "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+          "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+          "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+          "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+          "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "schema": "kace-firmware-build/v1",
+          "toolchain": {
+            "compiler": "gcc",
+            "compiler_version": "test",
+            "make_command": "make",
+            "make_version": "test"
+          }
+        },
+        "result": {
+          "detail": "Synthetic delivery fixture: FLASHED",
+          "error_code": "",
+          "executed_automatically": true,
+          "status": "FLASHED"
+        },
+        "schema": 1,
+        "sequence": 4,
+        "state": "FLASHED",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    },
+    {
+      "case": "current-robin-CANCELLED",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "firmware_identity": {
+              "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+              "artifact_format": "BIN",
+              "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+              "artifact_size": 32118,
+              "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "build_options": {},
+              "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+              "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+              "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "gcc",
+                "compiler_version": "test",
+                "make_command": "make",
+                "make_version": "test"
+              }
+            },
+            "flashable": true,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "Robin_nano.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile": {
+            "auto_flash": false,
+            "backend": "",
+            "backend_options": {},
+            "board_ids": [],
+            "bootloader_offset": null,
+            "config_mcu": "",
+            "exact_match_required": false,
+            "fallback": true,
+            "final_filename": "Robin_nano.bin",
+            "formats": [
+              "BIN"
+            ],
+            "id": "unsupported-board-prepare-only",
+            "instructions": [
+              "deployment.prepare_only.unsupported"
+            ],
+            "mcu_patterns": [],
+            "method": "MANUAL",
+            "native_filenames": [
+              "klipper.bin"
+            ],
+            "post_flash_verification": "NOT_APPLICABLE",
+            "strategy": "PREPARE_ONLY",
+            "usb": {
+              "application_vid_pids": [],
+              "bootloader_vid_pids": [],
+              "topology": "NOT_APPLICABLE"
+            }
+          },
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+          "staged_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu",
+            "usb_path": "",
+            "usb_pid": "",
+            "usb_vid": ""
+          },
+          "transformation": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "final_filename": "Robin_nano.bin",
+            "final_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+            "final_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+            "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+            "lcd_removed": null,
+            "native_path": "/home/kace/kace/native/klipper.bin",
+            "native_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "schema": "kace-robin-delivery/v1",
+            "script_sha256": "3a31d672edc333b79345be753906e88f069b782504a18310632b73d690c57811",
+            "serial_port": "USART3",
+            "size_bytes": 32118
+          }
+        },
+        "firmware_identity": {
+          "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+          "artifact_format": "BIN",
+          "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "artifact_size": 32118,
+          "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "build_options": {},
+          "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+          "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+          "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+          "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+          "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "schema": "kace-firmware-build/v1",
+          "toolchain": {
+            "compiler": "gcc",
+            "compiler_version": "test",
+            "make_command": "make",
+            "make_version": "test"
+          }
+        },
+        "result": {
+          "detail": "Synthetic delivery fixture: CANCELLED",
+          "error_code": "",
+          "executed_automatically": false,
+          "status": "CANCELLED"
+        },
+        "schema": 1,
+        "sequence": 5,
+        "state": "CANCELLED",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    },
+    {
+      "case": "current-robin-FAILED_FLASH",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "board_contract_digest": "",
+            "board_id": "",
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "build_proof_digest": "",
+            "build_target_id": "",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "firmware_identity": {
+              "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+              "artifact_format": "BIN",
+              "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+              "artifact_size": 32118,
+              "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "build_options": {},
+              "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+              "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+              "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+              "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+              "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "schema": "kace-firmware-build/v1",
+              "toolchain": {
+                "compiler": "gcc",
+                "compiler_version": "test",
+                "make_command": "make",
+                "make_version": "test"
+              }
+            },
+            "flashable": true,
+            "format": "BIN",
+            "hardware_variant_id": "",
+            "klipper_commit": "",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "Robin_nano.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile": {
+            "auto_flash": false,
+            "backend": "",
+            "backend_options": {},
+            "board_ids": [],
+            "bootloader_offset": null,
+            "config_mcu": "",
+            "exact_match_required": false,
+            "fallback": true,
+            "final_filename": "Robin_nano.bin",
+            "formats": [
+              "BIN"
+            ],
+            "id": "unsupported-board-prepare-only",
+            "instructions": [
+              "deployment.prepare_only.unsupported"
+            ],
+            "mcu_patterns": [],
+            "method": "MANUAL",
+            "native_filenames": [
+              "klipper.bin"
+            ],
+            "post_flash_verification": "NOT_APPLICABLE",
+            "strategy": "PREPARE_ONLY",
+            "usb": {
+              "application_vid_pids": [],
+              "bootloader_vid_pids": [],
+              "topology": "NOT_APPLICABLE"
+            }
+          },
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+          "staged_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu",
+            "usb_path": "",
+            "usb_pid": "",
+            "usb_vid": ""
+          },
+          "transformation": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "final_filename": "Robin_nano.bin",
+            "final_path": "/home/kace/kace/deploy/fixture/Robin_nano.bin",
+            "final_sha256": "ffc5676bd3d53f715228187be0a031749b13a2a57ee3141ddfe11b0828b89a86",
+            "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+            "lcd_removed": null,
+            "native_path": "/home/kace/kace/native/klipper.bin",
+            "native_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "schema": "kace-robin-delivery/v1",
+            "script_sha256": "3a31d672edc333b79345be753906e88f069b782504a18310632b73d690c57811",
+            "serial_port": "USART3",
+            "size_bytes": 32118
+          }
+        },
+        "firmware_identity": {
+          "artifact_build_id": "b9a64169f46e4baec03845acffc1c9459abbd895ca335fe10cf81da296fde3b5",
+          "artifact_format": "BIN",
+          "artifact_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "artifact_size": 32118,
+          "build_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "build_options": {},
+          "canonical_config": "CONFIG_FLASH_APPLICATION_ADDRESS=0x08007000\nCONFIG_INITIAL_PINS=\"!PC6,!PD13\"\nCONFIG_MACH_STM32F103=y\nCONFIG_SERIAL=y\nCONFIG_STM32_SERIAL_USART3=y\n",
+          "config_sha256": "57143e58870402df60a473009620bbe8a55b958971933b821da874ab76adf28b",
+          "input_sha256": "09526b1dd432b13cc37aba4273cf342b9c1ad7014aa63022d0e4ee306e0dabdc",
+          "klipper_commit": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+          "reported_version": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "schema": "kace-firmware-build/v1",
+          "toolchain": {
+            "compiler": "gcc",
+            "compiler_version": "test",
+            "make_command": "make",
+            "make_version": "test"
+          }
+        },
+        "result": {
+          "detail": "Synthetic delivery fixture: FAILED_FLASH",
+          "error_code": "",
+          "executed_automatically": false,
+          "status": "FAILED"
+        },
+        "schema": 1,
+        "sequence": 6,
+        "state": "FAILED_FLASH",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    },
+    {
+      "case": "historical-v1-ARTIFACT_READY",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "flashable": true,
+            "format": "BIN",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "klipper.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/klipper.bin",
+          "staged_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu"
+          }
+        },
+        "schema": 1,
+        "sequence": 1,
+        "state": "ARTIFACT_READY",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    },
+    {
+      "case": "historical-v1-ACTION_REQUIRED",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "flashable": true,
+            "format": "BIN",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "klipper.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/klipper.bin",
+          "staged_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu"
+          }
+        },
+        "result": {
+          "detail": "Synthetic delivery fixture: ACTION_REQUIRED",
+          "error_code": "",
+          "executed_automatically": false,
+          "status": "ACTION_REQUIRED"
+        },
+        "schema": 1,
+        "sequence": 3,
+        "state": "ACTION_REQUIRED",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    },
+    {
+      "case": "historical-v1-FLASHED",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "flashable": true,
+            "format": "BIN",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "klipper.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/klipper.bin",
+          "staged_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu"
+          }
+        },
+        "result": {
+          "detail": "Synthetic delivery fixture: FLASHED",
+          "error_code": "",
+          "executed_automatically": true,
+          "status": "FLASHED"
+        },
+        "schema": 1,
+        "sequence": 4,
+        "state": "FLASHED",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    },
+    {
+      "case": "historical-v1-CANCELLED",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "flashable": true,
+            "format": "BIN",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "klipper.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/klipper.bin",
+          "staged_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu"
+          }
+        },
+        "result": {
+          "detail": "Synthetic delivery fixture: CANCELLED",
+          "error_code": "",
+          "executed_automatically": false,
+          "status": "CANCELLED"
+        },
+        "schema": 1,
+        "sequence": 5,
+        "state": "CANCELLED",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    },
+    {
+      "case": "historical-v1-FAILED_FLASH",
+      "manifest": {
+        "deployment": {
+          "artifact": {
+            "build_id": "44444444-4444-4444-4444-444444444444",
+            "firmware_fingerprint": "kace-b1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "flashable": true,
+            "format": "BIN",
+            "mcu": "stm32f103",
+            "native_filename": "klipper.bin",
+            "path": "/home/kace/kace/native/klipper.bin",
+            "provenance": "REAL",
+            "sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+            "size_bytes": 32118
+          },
+          "automation": {
+            "blockers": [
+              "profile prepares an artifact but cannot perform the physical flash"
+            ],
+            "eligible": false,
+            "supported": false
+          },
+          "deployment_id": "44444444-4444-4444-4444-444444444444",
+          "final_filename": "klipper.bin",
+          "instructions": [
+            {
+              "id": "deployment.robin.transformed",
+              "level": "INFO",
+              "text": "Robin_nano.bin contains the verified Robin transformation. Preserve its native klipper.bin and transformation evidence for recovery. KACE has not copied it to an SD card or verified installation."
+            },
+            {
+              "id": "deployment.robin.manual_sd",
+              "level": "INFO",
+              "text": "Manual procedure: copy the already transformed Robin_nano.bin to the controller's SD card, safely eject it, and restart only the printer with that card inserted. Do not run update_mks_robin.py again or use make flash. KACE does not perform these actions."
+            },
+            {
+              "id": "deployment.robin.manual_verify",
+              "level": "INFO",
+              "text": "After completing the manual installation, reconnect the original controller through the chosen connection and select Verify MCU in KACE. A downloaded file or a visible USB adapter alone does not verify the installed Klipper build."
+            }
+          ],
+          "method": "MANUAL",
+          "profile_id": "unsupported-board-prepare-only",
+          "staged_path": "/home/kace/kace/deploy/fixture/klipper.bin",
+          "staged_sha256": "6ba85cf4df908e79f05ee7ad2704e812197885ec7e16ad7461d239ae5982ebd8",
+          "target": {
+            "board": "printer-kingroon-kp3s-2020.cfg",
+            "device_path": "",
+            "mcu": "stm32f103",
+            "mcu_name": "mcu"
+          }
+        },
+        "result": {
+          "detail": "Synthetic delivery fixture: FAILED_FLASH",
+          "error_code": "",
+          "executed_automatically": false,
+          "status": "FAILED"
+        },
+        "schema": 1,
+        "sequence": 6,
+        "state": "FAILED_FLASH",
+        "workflow_id": "44444444-4444-4444-4444-444444444444",
+        "workflow_kind": "firmware_deployment"
+      }
+    }
+  ]
+}

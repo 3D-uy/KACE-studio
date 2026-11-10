@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import PurePosixPath
 import re
 from typing import Mapping, Optional
 
@@ -21,6 +22,16 @@ ALLOWED_STATES = {
     "READY_TO_DEPLOY",
     "DEPLOYING",
     "COMPLETE",
+}
+# The delivery manifest records preparation/transfer only. It cannot establish
+# installation completion, even when a durable checkpoint is missing or invalid.
+_MANIFEST_RESULTS = {
+    "ARTIFACT_READY": None,
+    "MEDIA_PREPARED": "MEDIA_PREPARED",
+    "ACTION_REQUIRED": "ACTION_REQUIRED",
+    "FLASHED": "FLASHED",
+    "CANCELLED": "CANCELLED",
+    "FAILED_FLASH": "FAILED",
 }
 _SECRET_KEYS = {
     "password",
@@ -60,6 +71,64 @@ def _integer(value: object, minimum: int = 0) -> bool:
 
 def _digest(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+
+
+def parse_deployment_manifest(raw: object) -> Optional[dict]:
+    """Validate v1 delivery projection fields without making hardware decisions.
+
+    Original v1 producers lacked profile, transformation and firmware_identity
+    records. Those remain KACE's authority; this reader validates the envelope
+    and the fields it presents or uses for an artifact download.
+    """
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError, RecursionError):
+        return None
+    if (not isinstance(value, dict) or type(value.get("schema")) is not int
+            or value["schema"] != 1 or value.get("workflow_kind") != "firmware_deployment"
+            or not _text(value.get("workflow_id")) or not _integer(value.get("sequence"), 1)):
+        return None
+    state = value.get("state")
+    if not isinstance(state, str) or state not in _MANIFEST_RESULTS:
+        return None
+    deployment = value.get("deployment")
+    if (not isinstance(deployment, dict)
+            or deployment.get("deployment_id") != value["workflow_id"]):
+        return None
+    filename, path = deployment.get("final_filename"), deployment.get("staged_path")
+    if (not _text(filename) or not _text(path)
+            or any(ord(char) < 32 for char in filename + path)
+            or "/" in filename or "\\" in filename or filename in {".", ".."}
+            or "\\" in path or not PurePosixPath(path).is_absolute()
+            or any(part in {".", ".."} for part in path.split("/"))
+            or PurePosixPath(path).name != filename):
+        return None
+    if ("method" in deployment and not _text(deployment["method"])
+            or "staged_sha256" in deployment and not _digest(deployment["staged_sha256"])):
+        return None
+    instructions = deployment.get("instructions", [])
+    if not isinstance(instructions, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("text"), str)
+        or not isinstance(item.get("id", ""), str) for item in instructions
+    ):
+        return None
+    automation = deployment.get("automation", {})
+    if not isinstance(automation, dict) or any(
+        key in automation and type(automation[key]) is not bool for key in ("supported", "eligible")
+    ):
+        return None
+    blockers = automation.get("blockers", [])
+    if not isinstance(blockers, list) or any(not isinstance(item, str) for item in blockers):
+        return None
+    if "result" in value:
+        result = value["result"]
+        if (not isinstance(result, dict) or _MANIFEST_RESULTS[state] is None
+                or result.get("status") != _MANIFEST_RESULTS[state]
+                or not isinstance(result.get("detail"), str)
+                or type(result.get("executed_automatically", False)) is not bool
+                or not isinstance(result.get("error_code", ""), str)):
+            return None
+    return value
 
 
 def _valid_artifact(artifact: dict) -> bool:
@@ -181,6 +250,11 @@ def _validated_checkpoint(value: object) -> Optional[dict]:
     return value
 
 
+def configuration_download_available(checkpoint: Mapping[str, object]) -> bool:
+    """Generated files may be exported without claiming deployment success."""
+    return checkpoint.get("state") in {"CONFIG_GENERATED", "READY_TO_DEPLOY", "DEPLOYING", "COMPLETE"}
+
+
 def checkpoint_event(checkpoint: Mapping[str, object]) -> dict:
     artifact = checkpoint.get("artifact")
     data = {
@@ -188,6 +262,7 @@ def checkpoint_event(checkpoint: Mapping[str, object]) -> dict:
         "last_error": checkpoint.get("last_error", ""),
         "language": checkpoint.get("wizard_data", {}).get("language", "English"),
         "download_available": checkpoint["state"] in {"ARTIFACT_READY", "AWAITING_FLASH", "VERIFYING_MCU"},
+        "configuration_download_available": configuration_download_available(checkpoint),
         "board": checkpoint["hardware"]["board"],
         "mcu": checkpoint["hardware"]["mcu"],
         "verified_serial_path": checkpoint["hardware"].get("verified_serial_path", ""),

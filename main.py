@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 import secrets
+import zipfile
 import webview
 
 # Adjust path to allow absolute imports
@@ -29,12 +30,14 @@ from backend.provisioning import (
 )
 from backend.ejector import request_safe_eject
 from backend.discovery import scan_network, probe_manual_ip, DiscoveryError
-from backend.ssh_client import SSHSession
+from backend.ssh_client import SSHSession, UnknownHostKey
 from backend.power_controller import MoonrakerPowerController, PowerControllerError
 from backend.moonraker_authorization import moonraker_client_access
 from backend.remote_power_config import RemotePowerConfigError, parse_remote_power_config
 from backend.workflow_events import KaceWorkflowEventParser
-from backend.firmware_workflow import checkpoint_event, parse_checkpoint
+from backend.firmware_workflow import (
+    checkpoint_event, parse_checkpoint, parse_deployment_manifest, configuration_download_available,
+)
 from backend.bootstrap_events import BootstrapEventParser, MachineProtocolDisplayFilter
 from backend.resources import (
     bundled_path, verify_runtime_resources, ResourceContractError,
@@ -190,6 +193,7 @@ class Api:
         self._ssh_lock = threading.Lock()
         self._ssh_gen = 0
         self._ssh_attempt_gen = 0
+        self._ssh_host_key_challenge = None
         self._bootstrap_lock = threading.Lock()
         self._bootstrap_active = False
         self._bootstrap_workflow_id = None
@@ -200,6 +204,7 @@ class Api:
         self._flash_cancel_event = threading.Event()
         self._flash_lock = threading.Lock()
         self._flash_active = False
+        self._eject_active = False
         self._flash_operation_id = None
         self._drive_snapshots = {}
         # INFO-02 FIX: Timestamp for scan rate-limiting (one scan per 10 seconds max).
@@ -215,22 +220,21 @@ class Api:
         with self._ssh_lock:
             if ssh_generation != self._ssh_gen:
                 return
-
-        workflow_id = event["workflow_id"]
-        event_name = event["event"]
-        with self._bootstrap_lock:
-            expected = self._bootstrap_workflow_id
-            if expected is not None and workflow_id != expected:
-                return
-            if event_name in ("workflow_started", "stage_started"):
-                self._bootstrap_active = True
-                self._bootstrap_workflow_id = workflow_id
-                if event_name == "workflow_started":
-                    self._last_kace_workflow_state = ""
-            elif BootstrapEventParser.is_terminal(event):
-                self._bootstrap_active = False
-                self._bootstrap_workflow_id = None
-                self._bootstrap_recovery = None
+            workflow_id = event["workflow_id"]
+            event_name = event["event"]
+            with self._bootstrap_lock:
+                expected = self._bootstrap_workflow_id
+                if expected is not None and workflow_id != expected:
+                    return
+                if event_name in ("workflow_started", "stage_started"):
+                    self._bootstrap_active = True
+                    self._bootstrap_workflow_id = workflow_id
+                    if event_name == "workflow_started":
+                        self._last_kace_workflow_state = ""
+                elif BootstrapEventParser.is_terminal(event):
+                    self._bootstrap_active = False
+                    self._bootstrap_workflow_id = None
+                    self._bootstrap_recovery = None
 
         if self._window is not None:
             try:
@@ -240,7 +244,7 @@ class Api:
             except Exception as exc:
                 print(f"[KACE] Could not forward bootstrap event: {exc}")
 
-    def _interrupt_bootstrap(self, reason: str) -> bool:
+    def _interrupt_bootstrap(self, reason: str, power_context=None) -> bool:
         """Close an active local projection when SSH ends without a terminal event."""
         with self._bootstrap_lock:
             if not self._bootstrap_active:
@@ -253,33 +257,36 @@ class Api:
             try:
                 self._window.evaluate_js(
                     "window.updateBootstrapInterrupted("
-                    f"{json.dumps(workflow_id)}, {json.dumps(reason)});"
+                    f"{json.dumps(workflow_id)}, {json.dumps(reason)}, {json.dumps(power_context)});"
                 )
             except Exception as exc:
                 print(f"[KACE] Could not forward bootstrap interruption: {exc}")
         return True
 
-    def _suspend_bootstrap_for_ssh_loss(self, reason: str, *, expected: bool) -> bool:
+    def _suspend_bootstrap_for_ssh_loss(self, reason: str, *, expected: bool, power_context=None) -> bool:
         """Preserve a recoverable run when transport ends without failure evidence."""
-        with self._bootstrap_lock:
-            if not self._bootstrap_active:
+        with self._ssh_lock:
+            if power_context is not None and power_context.get("session") != self._ssh_gen:
                 return False
-            workflow_id = self._bootstrap_workflow_id or "pending-bootstrap"
-            self._bootstrap_active = False
-            self._bootstrap_workflow_id = None
-            self._bootstrap_recovery = {
-                "workflow_id": workflow_id,
-                "reason": reason,
-                "expected": bool(expected),
-                "kace_state": self._last_kace_workflow_state,
-            }
+            with self._bootstrap_lock:
+                if not self._bootstrap_active:
+                    return False
+                workflow_id = self._bootstrap_workflow_id or "pending-bootstrap"
+                self._bootstrap_active = False
+                self._bootstrap_workflow_id = None
+                self._bootstrap_recovery = {
+                    "workflow_id": workflow_id,
+                    "reason": reason,
+                    "expected": bool(expected),
+                    "kace_state": self._last_kace_workflow_state,
+                }
 
         if self._window is not None:
             try:
                 self._window.evaluate_js(
                     "window.updateBootstrapDisconnected("
                     f"{json.dumps(workflow_id)}, {json.dumps(reason)}, "
-                    f"{json.dumps(bool(expected))});"
+                    f"{json.dumps(bool(expected))}, {json.dumps(power_context)});"
                 )
             except Exception as exc:
                 print(f"[KACE] Could not forward recoverable SSH loss: {exc}")
@@ -377,12 +384,20 @@ class Api:
                 "success": False,
                 "error": "Target disk identity is unavailable. Refresh the drive list and try again.",
             }
-        result = request_safe_eject(disk_number, expected_identity)
-        if result.get("success") is not True:
-            result["error"] = self._sanitize_error(
-                result.get("error") or "Windows could not safely remove the disk."
-            )
-        return result
+        with self._flash_lock:
+            if self._flash_active or self._eject_active:
+                return {"success": False, "error": "A flash or eject operation is already running."}
+            self._eject_active = True
+        try:
+            result = request_safe_eject(disk_number, expected_identity)
+            if result.get("success") is not True:
+                result["error"] = self._sanitize_error(
+                    result.get("error") or "Windows could not safely remove the disk."
+                )
+            return result
+        finally:
+            with self._flash_lock:
+                self._eject_active = False
 
     def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, image_type: str = ImageType.RASPIOS_VANILLA.value, wifi_security: str = "wpa2", verify_write: bool = True, operation_id=None):
         """
@@ -464,8 +479,8 @@ class Api:
             self.set_device_state("ERROR", 0, "Invalid flash operation identity.")
             return False
         with self._flash_lock:
-            if self._flash_active:
-                self.set_device_state("ERROR", 0, "A flash operation is already running.")
+            if self._flash_active or self._eject_active:
+                self.set_device_state("ERROR", 0, "A flash or eject operation is already running.")
                 return False
             self._flash_active = True
             self._flash_operation_id = operation_id or uuid.uuid4().hex
@@ -1119,6 +1134,7 @@ class Api:
                 candidate.close()
                 return {"status": "superseded"}
             with self._power_lock:
+                previous_power_context = self._power_context
                 host = ip.strip().casefold()
                 if power_selection is not None and (
                     type(power_selection) is not int
@@ -1132,6 +1148,20 @@ class Api:
                 self._invalidate_power_locked()
             self._ssh_attempt_gen += 1
             attempt_gen = self._ssh_attempt_gen
+            challenge = self._ssh_host_key_challenge
+            self._ssh_host_key_challenge = None
+            if (challenge and challenge["approved"] and challenge["attempt"] == attempt_gen - 1
+                    and challenge["host"] == host and challenge["selection"] == self._power_selection
+                    and time.monotonic() < challenge["expires"]):
+                candidate.approved_host_key = challenge["identity"]
+                def approval_current():
+                    with self._ssh_lock:
+                        with self._power_lock:
+                            return (attempt_gen == self._ssh_attempt_gen
+                                    and challenge["selection"] == self._power_selection
+                                    and host == self._power_host
+                                    and time.monotonic() < challenge["expires"])
+                candidate.approval_current = approval_current
 
         connection_error_state = "SSH_DISCONNECTED" if _reconnect_attempt is not None else "ERROR"
         self.set_device_state("CONNECTING", 50, f"Establishing SSH connection to {ip}...")
@@ -1139,6 +1169,26 @@ class Api:
         import paramiko
         try:
             success = candidate.connect(ip, username, password)
+        except UnknownHostKey as unknown:
+            candidate.close()
+            with self._ssh_lock:
+                if attempt_gen != self._ssh_attempt_gen:
+                    return {"status": "superseded"}
+                with self._power_lock:
+                    if host != self._power_host:
+                        return {"status": "superseded"}
+                    selection = self._power_selection
+                if _reconnect_attempt is not None:
+                    return {"status": "host_key_confirmation_required"}
+                token = secrets.token_urlsafe(32)
+                self._ssh_host_key_challenge = {
+                    "token": token, "attempt": attempt_gen, "host": host,
+                    "selection": selection, "expires": time.monotonic() + 300,
+                    "identity": (unknown.hostname, unknown.key_type, unknown.key_base64),
+                    "approved": False,
+                }
+            return {"status": "host_key_confirmation_required", "token": token,
+                    "host": host, "algorithm": unknown.key_type, "fingerprint": unknown.fingerprint}
         except paramiko.BadHostKeyException as host_key_err:
             candidate.close()
             with self._ssh_lock:
@@ -1174,6 +1224,9 @@ class Api:
                 else:
                     superseded = False
                     previous_session = self._ssh
+                    self._interrupt_bootstrap(
+                        "SSH session was replaced before bootstrap completed.", previous_power_context,
+                    )
                     self._ssh = candidate
                     self._ssh_gen += 1
                     current_gen = self._ssh_gen
@@ -1188,7 +1241,6 @@ class Api:
                 candidate.close()
                 return {"status": "failed", "message": "Connection superseded by a newer attempt."}
 
-            self._interrupt_bootstrap("SSH session was replaced before bootstrap completed.")
             previous_session.close()
 
             # Reachability (including an open Moonraker port) is not evidence
@@ -1222,7 +1274,7 @@ class Api:
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen or self._window is None:
                         return
-                self._last_kace_workflow_state = str(event.get("state") or "")
+                    self._last_kace_workflow_state = str(event.get("state") or "")
                 try:
                     self._window.evaluate_js(
                         f"window.updateKaceWorkflowEvent({json.dumps(event)}, {current_gen});"
@@ -1242,13 +1294,19 @@ class Api:
             bootstrap_parser = BootstrapEventParser(forward_bootstrap_event)
             
             def flush_write_buffer():
-                with buffer_lock:
-                    if write_buffer:
+                with self._ssh_lock:
+                    with buffer_lock:
+                        if current_gen != self._ssh_gen or candidate is not self._ssh:
+                            write_buffer.clear()
+                            if flush_timer[0] is not None:
+                                flush_timer[0].cancel()
+                            flush_timer[0] = None
+                            return
+                        if not write_buffer:
+                            return
                         combined = ''.join(write_buffer)
                         write_buffer.clear()
-                    else:
-                        return
-                    flush_timer[0] = None
+                        flush_timer[0] = None
                 escaped = json.dumps(combined)
                 self._window.evaluate_js(
                     f"window.writeTerminalData({escaped}, {json.dumps(power_context)});"
@@ -1287,6 +1345,14 @@ class Api:
                     flush_write_buffer()
                 
             def on_close():
+                with self._ssh_lock:
+                    if current_gen != self._ssh_gen or candidate is not self._ssh:
+                        with buffer_lock:
+                            write_buffer.clear()
+                            if flush_timer[0] is not None:
+                                flush_timer[0].cancel()
+                            flush_timer[0] = None
+                        return
                 # Flush any remaining buffered data before closing
                 visible_tail = protocol_display_filter.flush()
                 if visible_tail:
@@ -1295,6 +1361,14 @@ class Api:
                 flush_write_buffer()
                 with self._ssh_lock:
                     if current_gen != self._ssh_gen:
+                        return
+                    # A shell EOF does not imply that the authenticated SSH
+                    # transport (and its SFTP/power authority) was lost.
+                    if self._ssh_session_is_active(candidate):
+                        if self._window is not None:
+                            self._window.evaluate_js(
+                                f"window.updateTerminalClosed({current_gen});"
+                            )
                         return
                     with self._power_lock:
                         if self._power_context == power_context:
@@ -1318,15 +1392,19 @@ class Api:
                 suspended = self._suspend_bootstrap_for_ssh_loss(
                     disconnect_message,
                     expected=expected,
+                    power_context=power_context,
                 )
-                if suspended:
-                    self.set_device_state(
-                        "BOOTSTRAP_RECOVERABLE",
-                        0,
-                        disconnect_message,
-                    )
-                else:
-                    self.set_device_state("SSH_DISCONNECTED", 0, disconnect_message)
+                with self._ssh_lock:
+                    if current_gen != self._ssh_gen or candidate is not self._ssh:
+                        return
+                    if suspended:
+                        self.set_device_state(
+                            "BOOTSTRAP_RECOVERABLE",
+                            0,
+                            disconnect_message,
+                        )
+                    else:
+                        self.set_device_state("SSH_DISCONNECTED", 0, disconnect_message)
                 if not self._ssh_session_is_active(candidate):
                     threading.Thread(
                         target=self._recover_ssh,
@@ -1334,7 +1412,10 @@ class Api:
                         daemon=True,
                     ).start()
                 
-            candidate.run_command_stream("bash", on_data, on_close, cols=cols, rows=rows)
+            # Opt this authenticated Studio shell into KACE's existing read-only
+            # event stream. SSH environment requests depend on server AcceptEnv;
+            # a process-local env prefix also covers manual `kace` invocations.
+            candidate.run_command_stream("env KACE_MACHINE_OUTPUT=1 bash", on_data, on_close, cols=cols, rows=rows)
             return {"status": "success", "power_config": remote_power, "generation": current_gen}
         else:
             candidate.close()
@@ -1372,10 +1453,19 @@ class Api:
             return {"ok": False, "detail": "A client IP must be explicitly approved"}
         return self._moonraker_access(power_context, approved_ip)
 
-    def start_bootstrap(self, dashboard_ui: str) -> dict:
+    def start_bootstrap(self, dashboard_ui: str, power_context=None) -> dict:
         """Start exactly one guarded bootstrap command on the active SSH PTY."""
         if dashboard_ui not in {"mainsail", "fluidd", "both"}:
             return {"status": "failed", "message": "Invalid dashboard selection."}
+        with self._ssh_lock:
+            session, generation = self._ssh, self._ssh_gen
+            with self._power_lock:
+                if power_context is not None:
+                    try:
+                        self._require_power_context_locked(power_context)
+                    except PowerControllerError:
+                        return {"status": "failed", "message": "SSH session changed. Retry on the selected host."}
+                    power_context = dict(power_context)
         try:
             require_release_ready()
             bootstrap_sha = load_release_contract()["kace"]["bootstrap_sha256"]
@@ -1385,18 +1475,6 @@ class Api:
             return {"status": "failed", "message": str(exc)}
 
         workflow_id = f"bootstrap-{uuid.uuid4().hex}"
-        with self._bootstrap_lock:
-            if self._bootstrap_active:
-                return {
-                    "status": "busy",
-                    "message": "A bootstrap workflow is already active.",
-                    "workflow_id": self._bootstrap_workflow_id,
-                }
-            self._bootstrap_active = True
-            self._bootstrap_workflow_id = workflow_id
-            self._bootstrap_recovery = None
-            self._last_kace_workflow_state = ""
-
         missing_event = {
             "protocol": "kace-bootstrap/v1",
             "event": "workflow_failed",
@@ -1429,13 +1507,42 @@ class Api:
             + f"else printf '%s\\n' '{missing_marker}'; fi\n"
         )
 
-        self.set_device_state("BOOTSTRAPPING", 0, "Starting KACE bootstrap.")
-        if not self._ssh.send_input(command):
+        # Reserve and send against the captured session while replacement and
+        # disconnection are excluded. Preflight may have yielded to either.
+        with self._ssh_lock:
+            if session is not self._ssh or generation != self._ssh_gen:
+                return {"status": "failed", "message": "SSH session changed. Retry on the selected host."}
+            with self._power_lock:
+                if power_context is not None:
+                    try:
+                        self._require_power_context_locked(power_context)
+                    except PowerControllerError:
+                        return {"status": "failed", "message": "SSH session changed. Retry on the selected host."}
             with self._bootstrap_lock:
-                self._bootstrap_active = False
-                self._bootstrap_workflow_id = None
-            self.set_device_state("SSH_READY", 100, "Bootstrap could not be sent to SSH.")
-            return {"status": "failed", "message": "SSH terminal is not ready."}
+                if self._bootstrap_active:
+                    return {
+                        "status": "busy",
+                        "message": "A bootstrap workflow is already active.",
+                        "workflow_id": self._bootstrap_workflow_id,
+                    }
+                self._bootstrap_active = True
+                self._bootstrap_workflow_id = workflow_id
+                self._bootstrap_recovery = None
+                self._last_kace_workflow_state = ""
+            self.set_device_state("BOOTSTRAPPING", 0, "Starting KACE bootstrap.")
+            try:
+                sent = session.send_input(command)
+            except Exception:
+                with self._bootstrap_lock:
+                    self._bootstrap_active = False
+                    self._bootstrap_workflow_id = None
+                raise
+            if not sent:
+                with self._bootstrap_lock:
+                    self._bootstrap_active = False
+                    self._bootstrap_workflow_id = None
+                self.set_device_state("SSH_READY", 100, "Bootstrap could not be sent to SSH.")
+                return {"status": "failed", "message": "SSH terminal is not ready."}
         return {"status": "started", "workflow_id": workflow_id}
 
     def send_ssh_input(self, data: str):
@@ -1450,6 +1557,25 @@ class Api:
         """
         self._ssh.resize_pty(cols, rows)
 
+    def respond_ssh_host_key(self, token, accept):
+        """Approve one displayed identity for the same next login attempt."""
+        if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token) or type(accept) is not bool:
+            return False
+        with self._ssh_lock:
+            challenge = self._ssh_host_key_challenge
+            if not challenge or not secrets.compare_digest(token, challenge["token"]):
+                return False
+            with self._power_lock:
+                current = (challenge["attempt"] == self._ssh_attempt_gen
+                           and challenge["selection"] == self._power_selection
+                           and challenge["host"] == self._power_host
+                           and time.monotonic() < challenge["expires"])
+            if not current or not accept or challenge["approved"]:
+                self._ssh_host_key_challenge = None
+                return False
+            challenge["approved"] = True
+            return True
+
     def disconnect_ssh(self, power_selection=None):
         """
         Closes current SSH session.
@@ -1458,12 +1584,16 @@ class Api:
             with self._power_lock:
                 if power_selection is not None and power_selection != self._power_selection:
                     return False
+                previous_power_context = self._power_context
                 self._invalidate_power_locked()
             previous_session = self._ssh
+            self._interrupt_bootstrap(
+                "SSH session was closed before bootstrap completed.", previous_power_context,
+            )
             self._ssh = SSHSession()
             self._ssh_attempt_gen += 1
+            self._ssh_host_key_challenge = None
             self._ssh_gen += 1
-        self._interrupt_bootstrap("SSH session was closed before bootstrap completed.")
         previous_session.close()
         return True
 
@@ -1515,14 +1645,129 @@ class Api:
                 return False
         return session.download_file(remote_path, chosen_path)
 
-    def _recover_ssh(self, ip, username, password, cols, rows, selection, attempt):
-        """Bounded reconnect using session-only credentials and normal host-key checks."""
-        for delay in (2, 4, 8):
-            time.sleep(delay)
+    def _configuration_download_snapshot(self, session, workflow_id, sequence):
+        checkpoint = parse_checkpoint(session.read_text_file("kace/firmware-workflow.json"))
+        if (checkpoint is None or checkpoint["workflow_id"] != workflow_id
+                or checkpoint["sequence"] != sequence or not configuration_download_available(checkpoint)):
+            raise ValueError("Configuration workflow changed")
+        names = ["printer.cfg"]
+        # Presence alone must never export a stale macros.cfg from another run.
+        if checkpoint["wizard_data"].get("macros_generated") is True:
+            names.append("macros.cfg")
+        files = {}
+        for name in names:
+            status, text = session.read_text_file_result("kace/" + name, max_bytes=1024 * 1024)
+            if status != "ok" or not isinstance(text, str) or not text.strip():
+                raise OSError("Generated configuration file unavailable")
+            files[name] = text.encode("utf-8")
+        return checkpoint["integrity_sha256"], files
+
+    def download_kace_configuration(self, workflow_id, sequence, generation):
+        """Export current generated files only; never apply or activate them."""
+        if not self._window or not isinstance(workflow_id, str) or type(sequence) is not int:
+            return {"status": "cancelled"}
+        with self._ssh_lock:
+            session, selected_generation = self._ssh, self._ssh_gen
+            if type(generation) is not int or generation != selected_generation or not session.is_connected():
+                return {"status": "error", "code": "configurationDownloadChanged"}
+        temporary = None
+        try:
+            snapshot = self._configuration_download_snapshot(session, workflow_id, sequence)
+            chosen = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename="kace-configuration.zip")
+            if not chosen:
+                return {"status": "cancelled"}
+            if isinstance(chosen, (list, tuple)):
+                chosen = chosen[0] if chosen else None
+            if not chosen:
+                return {"status": "cancelled"}
+            with self._ssh_lock:
+                if session is not self._ssh or selected_generation != self._ssh_gen:
+                    return {"status": "error", "code": "configurationDownloadChanged"}
+            # The native dialog can remain open across regeneration/reconnection.
+            # Do not publish a mixture of files from different questionnaire runs.
+            if self._configuration_download_snapshot(session, workflow_id, sequence) != snapshot:
+                return {"status": "error", "code": "configurationDownloadChanged"}
+            chosen = os.path.abspath(chosen)
+            with tempfile.NamedTemporaryFile(dir=os.path.dirname(chosen), prefix=".kace-config-", delete=False) as target:
+                temporary = target.name
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for name, content in snapshot[1].items():
+                    archive.writestr(name, content)
+            with open(temporary, "r+b") as target:
+                os.fsync(target.fileno())
+            with self._ssh_lock:
+                if session is not self._ssh or selected_generation != self._ssh_gen or not session.is_connected():
+                    return {"status": "error", "code": "configurationDownloadChanged"}
+                os.replace(temporary, chosen)
+                temporary = None
+            return {"status": "success"}
+        except ValueError:
+            return {"status": "error", "code": "configurationDownloadChanged"}
+        except Exception:
+            return {"status": "error", "code": "configurationDownloadFailed"}
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+
+    def _wait_ssh_recovery(self, seconds, attempt):
+        """Wait in short slices so a disconnect/new selection cancels promptly."""
+        remaining = seconds
+        while remaining > 0:
+            with self._ssh_lock:
+                if attempt != self._ssh_attempt_gen:
+                    return False
+            interval = min(0.25, remaining)
+            time.sleep(interval)
+            remaining -= interval
+        with self._ssh_lock:
+            return attempt == self._ssh_attempt_gen
+
+    def _observe_recovered_installation(self, result, selection, attempt, checkpoint):
+        """Observe KACE's existing verifier; never start or advance installation."""
+        initial = checkpoint.get("checkpoint", {}) if checkpoint else {}
+        if initial.get("state") != "DEPLOYING" or initial.get("last_error"):
+            return
+        latest = checkpoint
+        deadline = time.monotonic() + 45
+        for _ in range(15):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if not self._wait_ssh_recovery(min(3, remaining), attempt):
+                return
+            if time.monotonic() >= deadline:
+                break
+            observed = self.get_firmware_workflow_checkpoint()
             with self._ssh_lock:
                 if attempt != self._ssh_attempt_gen:
                     return
-            self.set_device_state("CONNECTING", 0, "Reconectando con la Pi para consultar la instalación…")
+            if not observed or observed.get("generation") != result["generation"]:
+                continue
+            candidate = observed.get("checkpoint", {})
+            if candidate.get("workflow_id") != initial.get("workflow_id"):
+                return
+            if candidate.get("sequence", 0) <= latest["checkpoint"].get("sequence", 0):
+                continue
+            latest = observed
+            if candidate.get("state") != "DEPLOYING" or candidate.get("last_error"):
+                break
+        with self._ssh_lock:
+            if attempt != self._ssh_attempt_gen:
+                return
+        if self._window is not None:
+            self._window.evaluate_js(
+                f"window.finishSshRecovery({result['generation']}, {selection}, {json.dumps(latest)});"
+            )
+
+    def _recover_ssh(self, ip, username, password, cols, rows, selection, attempt):
+        """Bounded reconnect using session-only credentials and normal host-key checks."""
+        for delay in (2, 10, 20):
+            if not self._wait_ssh_recovery(delay, attempt):
+                return
+            self.set_device_state("CONNECTING", 0, "sshRecoveryTrying")
             result = self.connect_ssh(
                 ip, username, password, cols, rows, selection, _reconnect_attempt=attempt,
             )
@@ -1536,13 +1781,16 @@ class Api:
                     if attempt != self._ssh_attempt_gen:
                         return
                 if self._window is not None:
+                    waiting = bool(checkpoint and checkpoint.get("checkpoint", {}).get("state") == "DEPLOYING"
+                                   and not checkpoint["checkpoint"].get("last_error"))
                     self._window.evaluate_js(
-                        f"window.restoreSshAfterReconnect({json.dumps(result)}, {selection}, {json.dumps(checkpoint)});"
+                        f"window.restoreSshAfterReconnect({json.dumps(result)}, {selection}, {json.dumps(checkpoint)}, {json.dumps(waiting)});"
                     )
+                self._observe_recovered_installation(result, selection, attempt, checkpoint)
                 return
-            if result.get("status") in {"host_key_mismatch", "superseded"}:
+            if result.get("status") in {"host_key_mismatch", "host_key_confirmation_required", "superseded"}:
                 break
-        self.set_device_state("DISCOVERED", 0, "No se pudo reconectar automáticamente. Volvé a iniciar sesión para consultar el progreso guardado.")
+        self.set_device_state("DISCOVERED", 0, "sshRecoveryFailed")
 
     def get_firmware_deployment_manifest(self):
         """Return KACE's non-secret firmware manifest for reconnect recovery."""
@@ -1552,16 +1800,8 @@ class Api:
         with self._ssh_lock:
             if session is not self._ssh or generation != self._ssh_gen:
                 return None
-        if not raw:
-            return None
-        try:
-            manifest = json.loads(raw)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return None
-        if not isinstance(manifest, dict) or manifest.get("schema") != 1:
-            return None
-        deployment = manifest.get("deployment")
-        if not isinstance(deployment, dict):
+        manifest = parse_deployment_manifest(raw)
+        if manifest is None:
             return None
         return {**manifest, "generation": generation}
 
@@ -1616,6 +1856,7 @@ class Api:
                 self._power_selection = selection
                 self._power_host = host.strip().casefold()
                 self._ssh_attempt_gen += 1
+                self._ssh_host_key_challenge = None
                 self._invalidate_power_locked()
         return True
 
@@ -1778,6 +2019,9 @@ class Api:
                         for k, v in defaults.items():
                             if k not in data:
                                 data[k] = v
+                        # Ignore legacy opt-outs: SD readback starts enabled each session.
+                        if isinstance(data.get("form_state"), dict):
+                            data["form_state"].pop("skip-write-verification", None)
                         return data
         except Exception as e:
             print(f"Error reading preferences: {e}", file=sys.stderr)
@@ -1792,7 +2036,6 @@ class Api:
             "image-source-select", "pi-model-select",
             "bootstrap-ui-select-imager", "crowsnest-enable", "ssh-username",
             "power-device-name",
-            "skip-write-verification",
         }
         if not isinstance(prefs, dict):
             return False
@@ -1906,7 +2149,12 @@ def _run_smoke_probe(window, result: dict, timeout_seconds: float) -> None:
 
 def run_pywebview_smoke_test(timeout_seconds: float = PYWEBVIEW_SMOKE_TIMEOUT_SECONDS) -> None:
     """Load the real frontend and JS bridge in an off-screen native window."""
+    import ssl
+
     verify_runtime_resources()
+    # urllib's default opener constructs HTTPSHandler even for Moonraker HTTP.
+    # Catch missing packaged TLS resources before a renderer-only smoke passes.
+    ssl.create_default_context()
     window = _create_application_window(smoke_mode=True)
     result: dict = {}
     webview.start(_run_smoke_probe, args=(window, result, timeout_seconds))

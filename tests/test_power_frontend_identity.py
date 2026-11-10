@@ -17,13 +17,14 @@ BOOTSTRAP_JS = (
     + APP[APP.index("function parseBootstrapProgress"):APP.index("function updateConnectionStatus")]
 )
 GLOBALS_JS = APP[:APP.index("let userPreferences")]
+CATALOG_JS = APP[APP.index("const STUDIO_INSTALLATION_TEXT ="):APP.index("function updateStudioLanguageButton()")]
 
 HARNESS = r"""
 const assert = require('node:assert/strict');
 const nodes = new Map();
 const document = {getElementById(id) {
     if (!nodes.has(id)) nodes.set(id, {
-        value: 'local_suggestion', disabled: false, style: {},
+        value: 'local_suggestion', disabled: false, style: {}, dataset: {},
         classList: {add() {}, remove() {}}, click() {},
     });
     return nodes.get(id);
@@ -58,6 +59,7 @@ const BOOTSTRAP_STAGES = [];
 const bootstrapEventCursors = new Map();
 let bootstrapActive = false, bootstrapAuthoritativeSeen = false, bootstrapFailureHandled = false;
 let bootstrapBuffer = '';
+let firmwareGeneration = null;
 function updateConnectionStatus(connected) {sshConnected = connected;}
 function promptTerminalLogin() {}
 function restoreKaceDeploymentManifest() {}
@@ -70,6 +72,8 @@ function result(context, status) {
 }
 function select(host) {connectToDevice(host, host);}
 function establish(session) {
+    sshConnected = true;
+    firmwareGeneration = session;
     const context = {host: currentDeviceIp.toLowerCase(), selection: powerSelection, session};
     applyRemotePowerConfig(authority(context), powerSelection);
     return context;
@@ -78,6 +82,32 @@ function establish(session) {
 
 
 CASES = {
+    "transport_loss_preserves_selection_but_rejects_stale_authority_and_status": r"""
+        select('A.local');
+        const old = establish(1);
+        const oldStatus = requests.status.at(-1);
+        const selection = powerSelection;
+        const selections = requests.selection.length;
+        window.invalidatePowerSession(old);
+        assert.equal(powerSelection, selection);
+        assert.equal(requests.selection.length, selections);
+        assert.equal(powerContext, null);
+        assert.equal(remotePowerAuthority, null);
+        assert.equal(printerPowerStatus, 'unknown');
+        assert.equal(document.getElementById('printer-power-btn').disabled, true);
+        oldStatus.resolve(result(old, 'on'));
+        await tick();
+        assert.equal(printerPowerStatus, 'unknown');
+        const renewed = establish(2);
+        assert.equal(renewed.selection, selection);
+        window.invalidatePowerSession(old);
+        assert.deepEqual(powerContext, renewed);
+        requests.status.at(-1).resolve(result(renewed, 'off'));
+        await tick();
+        assert.equal(printerPowerStatus, 'off');
+        assert.equal(document.getElementById('printer-power-btn').disabled, false);
+        assert.equal(requests.command.length, 0);
+    """,
     "on_off_waits_for_observed_state_and_blocks_duplicate_commands": r"""
         const actions = [];
         for (const action of ['power_on', 'power_off']) {
@@ -102,7 +132,7 @@ CASES = {
             assert.equal(actions.at(-1), action);
             assert.deepEqual(requests.command.at(-1).args, ['a.local', 'shared_relay', a]);
             assert.equal(button.disabled, true);
-            assert.equal(label.textContent, 'init');
+            assert.equal(label.textContent, studioText('powerState_init'));
             await togglePrinterPower();
             await refreshPrinterPower();
             assert.equal(requests.command.length, commands + 1);
@@ -114,7 +144,7 @@ CASES = {
             assert.equal(printerPowerRequestActive, false);
             assert.equal(requests.status.length, polls + 1);
             assert.deepEqual(requests.status.at(-1).args, ['a.local', 'shared_relay', a]);
-            assert.equal(label.textContent, 'init');
+            assert.equal(label.textContent, studioText('powerState_init'));
             assert.equal(button.disabled, true);
             await togglePrinterPower();
             assert.equal(requests.command.length, commands + 1);
@@ -122,7 +152,7 @@ CASES = {
             requests.status.at(-1).resolve(result(a, observed));
             await toggle;
             assert.equal(printerPowerStatus, observed);
-            assert.equal(label.textContent, observed);
+            assert.equal(label.textContent, studioText(`powerState_${observed}`));
             assert.equal(button.disabled, false);
         }
         assert.deepEqual(actions, ['power_on', 'power_off']);
@@ -134,7 +164,7 @@ CASES = {
         const label = document.getElementById('printer-power-state');
         requests.status.at(-1).reject(new Error('Moonraker unreachable'));
         await tick();
-        assert.equal(label.textContent, 'error');
+        assert.equal(label.textContent, studioText('powerState_error'));
         assert.equal(button.disabled, true);
         assert.equal(powerStatusRequest, null);
         await togglePrinterPower();
@@ -149,7 +179,7 @@ CASES = {
         requests.command.at(-1).reject(new Error('Command failed'));
         await tick();
         assert.equal(printerPowerRequestActive, false);
-        assert.equal(label.textContent, 'error');
+        assert.equal(label.textContent, studioText('powerState_error'));
         assert.equal(button.disabled, true);
         assert.equal(requests.status.length, polls + 1);
         // A reachable device reporting an error must also remain disabled.
@@ -164,7 +194,7 @@ CASES = {
         const retry = refreshPrinterPower();
         requests.status.at(-1).resolve(result(a, 'on'));
         await retry;
-        assert.equal(label.textContent, 'on');
+        assert.equal(label.textContent, studioText('powerState_on'));
         assert.equal(button.disabled, false);
         assert.equal(printerPowerRequestActive, false);
         assert.deepEqual(powerContext, a);
@@ -334,7 +364,7 @@ def test_frontend_power_identity(case):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is required to execute the frontend regression")
-    script = HARNESS + GLOBALS_JS + LOGIN_JS + BOOTSTRAP_JS + POWER_JS + "\n" + r"""
+    script = HARNESS + CATALOG_JS + GLOBALS_JS + LOGIN_JS + BOOTSTRAP_JS + POWER_JS + "\n" + r"""
 term = {cols: 80, rows: 24, write() {}, clear() {}};
 (async () => {
 """ + CASES[case] + r"""

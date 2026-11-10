@@ -47,5 +47,10 @@ def verify_application_cache_contract() -> Path:
                     "The persistent application cache cannot be inside the PyInstaller runtime."
                 )
         except ValueError as exc:
+            runtime_drive = os.path.splitdrive(str(runtime_root))[0]
+            cache_drive = os.path.splitdrive(str(cache))[0]
+            if (runtime_drive and cache_drive
+                    and os.path.normcase(runtime_drive) != os.path.normcase(cache_drive)):
+                return cache
             raise ApplicationPathError("The application cache path is invalid.") from exc
     return cache

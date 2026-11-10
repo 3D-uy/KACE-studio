@@ -31,7 +31,9 @@ KACE Studio guides you through choosing a Raspberry Pi image, setting up first b
 
 Imager keeps paired settings aligned and opens GPIO relay options when enabled. Discovery pauses when new devices respond. Choose Connect, Keep searching (already reviewed addresses do not pause it again), or Stop search. Each search period is bounded to ten minutes; finding a device does not verify a KACE installation.
 
-Readback is enabled by default. The final dialog explicitly reports verified or skipped image readback. That check covers the written image before first-boot configuration injection; KACE installation still requires its own verification on the Pi.
+Readback is enabled by default. Skipping it is a manual choice for the current session and is not saved as a preference. The final dialog explicitly reports verified or skipped image readback. That check covers the written image before first-boot configuration injection; KACE installation still requires its own verification on the Pi.
+
+The Crowsnest checkbox requests installation during provisioning. Leaving it unchecked preserves any Crowsnest files or service already present in the image; it does not uninstall them.
 
 <a id="quick-start"></a>
 <a id="download-and-install"></a>
@@ -77,6 +79,8 @@ Real captures of the Windows application. These screens show preparation, not a 
 Studio handles imaging, first-boot setup and remote access. [KACE](https://github.com/3D-uy/KACE) handles printer configuration, supported MCU firmware workflows, application and installation verification.
 
 Start bootstrap from the SSH workspace, then follow KACE's guided setup on the Pi. Some firmware steps require manual action; complete KACE's verification before commissioning the printer.
+
+For an unknown SSH host, compare the displayed SHA-256 fingerprint with the Pi over a trusted channel. Accept only if it matches; Studio then asks for credentials again before connecting. A changed key blocks the connection and must be investigated before replacing the stored identity.
 
 In the current source, the flag button above the light/dark theme button cycles
 Spanish, English and Portuguese, and remembers your choice for the next opening.
@@ -143,4 +147,6 @@ Source corrections: Moonraker redirects are rejected. See [development contracts
 
 New bootstrap runs configure a persistent Linux journal with a 64 MiB budget, seven-day retention and 30-second synchronization. After an interrupted boot, use `journalctl -b -1`; records not flushed before a hard lock or power loss can still be missing. This does not diagnose or fix the cause of a host freeze.
 
-On a recoverable SSH loss, including after bootstrap, Studio shows Disconnected, disables session controls and keeps the last installation progress visible. Idle terminal sessions require a server reply every ten seconds with a five-second response limit, so a silent host cannot leave the terminal connected indefinitely. Reconnection reloads the remote checkpoint; it does not establish completion. Use the new executable and its matching bootstrap for E2E; an older Pi installation is not upgraded by opening Studio.
+On a recoverable SSH loss, including after bootstrap, Studio shows Disconnected, disables session controls and keeps the last installation progress visible. Idle terminal sessions probe every ten seconds with a five-second response limit per probe; a temporarily slow reply keeps an otherwise active SSH transport for up to 45 seconds without a server response. A silent host still disconnects within that bound. Reconnection reloads the remote checkpoint; it does not establish completion. Use the new executable and its matching bootstrap for E2E; an older Pi installation is not upgraded by opening Studio.
+
+Source update: after KACE generates configuration, Download configuration in the workflow header saves a ZIP with printer.cfg and the optional macros.cfg selected in that flow. This exports generated files; it does not install them. The action requires the current SSH session and checkpoint. A previous executable does not gain this button until rebuilt.
