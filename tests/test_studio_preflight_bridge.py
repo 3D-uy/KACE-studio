@@ -49,11 +49,13 @@ def service():
 
 def request(service, **overrides):
     files = {'printer.cfg': b'[include child.cfg]\n', 'child.cfg': b'# child\n'}
-    value = dict(IDENTITY, schema=bridge.SCHEMA, token=service.token,
+    value = dict(IDENTITY, schema=bridge.SCHEMA,
                  session=service.session, request_id='e' * 32,
                  tree_digest=bridge.tree_digest(files),
                  files=[{'path': k, 'content_base64': base64.b64encode(v).decode()} for k, v in files.items()])
-    return dict(value, **overrides)
+    value.update(overrides)
+    value.setdefault('auth', bridge.authentication(value, service.token, b'request'))
+    return value
 
 
 def exchange(service, payload):
@@ -65,7 +67,9 @@ def exchange(service, payload):
         return None
     size = struct.unpack('!I', channel.output[:4])[0]
     assert size == len(channel.output[4:])
-    return json.loads(channel.output[4:])
+    response = json.loads(channel.output[4:])
+    assert response['auth'] == bridge.authentication(response, service.token, b'response')
+    return response
 
 
 def test_valid_response_is_bound_and_contains_no_capability(service):
@@ -78,7 +82,7 @@ def test_valid_response_is_bound_and_contains_no_capability(service):
 
 
 @pytest.mark.parametrize('field,value', [
-    ('token', 'f' * 64), ('session', 'f' * 32), ('schema', 'unknown'),
+    ('auth', 'f' * 64), ('session', 'f' * 32), ('schema', 'unknown'),
     ('pin', 'f' * 40), ('worker_sha256', 'f' * 64), ('engine_sha256', 'f' * 64),
     ('dockerfile_sha256', 'f' * 64), ('request_id', ''), ('tree_digest', 12),
 ])
@@ -110,6 +114,7 @@ def test_collisions_cannot_be_staged(names):
 def test_digest_change_cannot_be_approved(service):
     payload = request(service)
     payload['files'][1]['content_base64'] = base64.b64encode(b'# changed').decode()
+    payload['auth'] = bridge.authentication(payload, service.token, b'request')
     assert exchange(service, payload)['status'] == 'unverified'
     service.validator.validate_files.assert_not_called()
 
@@ -150,4 +155,25 @@ def test_non_loopback_forward_target_rejected(service):
     channel = Channel(b'')
     service.handle_channel(channel, ('127.0.0.1', 6000), ('0.0.0.0', service.port))
     assert channel.closed.is_set()
+    service.validator.validate_files.assert_not_called()
+
+
+def test_wire_request_never_contains_private_capability(service):
+    payload = request(service)
+    assert 'token' not in payload
+    assert service.token not in json.dumps(payload)
+    assert exchange(service, payload)['status'] == 'valid'
+
+
+def test_request_mac_cannot_be_used_as_response_mac(service):
+    payload = request(service)
+    reply = exchange(service, payload)
+    assert reply['auth'] != payload['auth']
+    assert bridge.authentication(reply, service.token, b'request') != reply['auth']
+
+
+def test_unauthenticated_content_change_never_reaches_docker(service):
+    payload = request(service)
+    payload['files'][0]['content_base64'] = base64.b64encode(b'# substituted').decode()
+    assert exchange(service, payload) is None
     service.validator.validate_files.assert_not_called()

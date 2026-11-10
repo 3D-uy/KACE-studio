@@ -6,6 +6,7 @@ terminal. Validation covers the supplied tree, not the live printer environment.
 """
 import base64
 import hashlib
+import hmac
 import json
 from pathlib import PurePosixPath
 import re
@@ -16,7 +17,7 @@ import time
 import uuid
 
 
-SCHEMA = 'kace-studio-preflight/v1'
+SCHEMA = 'kace-studio-preflight/v2'
 MAX_FRAME = 32 * 1024 * 1024
 MAX_RESPONSE = 64 * 1024
 MAX_FILES = 128
@@ -24,7 +25,15 @@ MAX_CONTENT = 16 * 1024 * 1024
 FORWARD_TIMEOUT = 10.0
 REQUEST_TIMEOUT = 15.0
 IDENTITY_KEYS = {'pin', 'engine_sha256', 'dockerfile_sha256', 'worker_sha256'}
-REQUEST_KEYS = IDENTITY_KEYS | {'schema', 'token', 'session', 'request_id', 'tree_digest', 'files'}
+REQUEST_KEYS = IDENTITY_KEYS | {'schema', 'auth', 'session', 'request_id', 'tree_digest', 'files'}
+
+
+def authentication(payload, token, direction):
+    """Prove both peers know the private capability without transmitting it."""
+    body = {key: value for key, value in payload.items() if key != 'auth'}
+    encoded = json.dumps(body, sort_keys=True, separators=(',', ':'),
+                         ensure_ascii=True, allow_nan=False).encode('utf-8')
+    return hmac.new(bytes.fromhex(token), direction + b'\0' + encoded, hashlib.sha256).hexdigest()
 
 
 def _unique_object(pairs):
@@ -176,8 +185,9 @@ class StudioPreflightBridge:
             request = json.loads(_recv_exact(channel, size, deadline).decode('utf-8'), object_pairs_hook=_unique_object)
             if (not isinstance(request, dict) or set(request) != REQUEST_KEYS
                     or request['schema'] != SCHEMA or request['session'] != self.session
-                    or not isinstance(request['token'], str)
-                    or not secrets.compare_digest(request['token'], self.token)
+                    or not isinstance(request['auth'], str)
+                    or not re.fullmatch('[0-9a-f]{64}', request['auth'])
+                    or not hmac.compare_digest(request['auth'], authentication(request, self.token, b'request'))
                     or any(request[key] != self.identity[key] for key in IDENTITY_KEYS)
                     or not isinstance(request['request_id'], str)
                     or not re.fullmatch('[0-9a-f]{32}', request['request_id'])
@@ -203,6 +213,7 @@ class StudioPreflightBridge:
             except Exception:
                 # Do not expose bearer data, request content, paths or exception echoes.
                 reply.update(status='unverified', detail='Studio could not validate this configuration tree.')
+            reply['auth'] = authentication(reply, self.token, b'response')
             payload = json.dumps(reply, separators=(',', ':')).encode('utf-8')
             if len(payload) > MAX_RESPONSE:
                 return

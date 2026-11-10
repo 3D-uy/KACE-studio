@@ -4,6 +4,8 @@ The fixture authenticates with a synthetic password and an ephemeral pinned host
 key. It accepts only loopback forwarding and never permits command execution.
 """
 import base64
+import hashlib
+import hmac
 import json
 import secrets
 import socket
@@ -171,14 +173,23 @@ class Validator:
         return {"status": self.status, "detail": "synthetic validator result", "tree_digest": tree_digest(files)}
 
 
+def authentication(payload, token, direction):
+    body = {key: value for key, value in payload.items() if key != "auth"}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=True, allow_nan=False).encode("utf-8")
+    return hmac.new(bytes.fromhex(token), direction + canonical, hashlib.sha256).hexdigest()
+
+
 def request(service, **changes):
-    return {
-        "schema": SCHEMA, "token": service.token, "session": service.session,
+    payload = {
+        "schema": SCHEMA, "session": service.session,
         "request_id": uuid.uuid4().hex, **IDENTITY,
         "tree_digest": tree_digest(FILES),
         "files": [{"path": name, "content_base64": base64.b64encode(content).decode("ascii")}
                   for name, content in FILES.items()], **changes,
     }
+    payload["auth"] = authentication(payload, service.token, b"request\0")
+    return payload
 
 
 def send(connection, payload):
@@ -211,6 +222,9 @@ def test_real_encrypted_forwarding_preserves_server_address_and_result(ssh_trans
         assert all(listener.getsockname()[0] == "127.0.0.1" for listener in server.listeners)
         with socket.create_connection(("127.0.0.1", int(environment["KACE_STUDIO_PREFLIGHT_PORT"])), timeout=3) as connection:
             original = request(bridge)
+            assert original["schema"] == "kace-studio-preflight/v2"
+            assert "token" not in original
+            assert bridge.token not in json.dumps(original)
             send(connection, original)
             result = receive(connection)
         assert result["status"] == status
@@ -218,6 +232,8 @@ def test_real_encrypted_forwarding_preserves_server_address_and_result(ssh_trans
         for key in {"schema", "session", "request_id", "tree_digest", *IDENTITY}:
             assert result[key] == original[key]
         assert bridge.token not in json.dumps(result)
+        assert hmac.compare_digest(result["auth"], authentication(result, bridge.token, b"response\0"))
+        assert result["auth"] != authentication(result, bridge.token, b"request\0")
     finally:
         bridge.close()
     assert server.cancelled.wait(3)
@@ -255,6 +271,30 @@ def test_wrong_session_over_real_forwarding_never_calls_validator(ssh_transport)
         bridge.start()
         with socket.create_connection(("127.0.0.1", bridge.port), timeout=3) as connection:
             send(connection, request(bridge, session="0" * 32))
+            with pytest.raises((EOFError, OSError)):
+                receive(connection)
+        assert not validator.calls
+    finally:
+        bridge.close()
+
+
+@pytest.mark.parametrize("mutation", ["unsigned", "changed_tree", "response_mac"])
+def test_real_forwarding_rejects_unauthenticated_or_reflected_requests(ssh_transport, mutation):
+    transport, _server = ssh_transport
+    validator = Validator()
+    bridge = StudioPreflightBridge(transport, validator)
+    try:
+        bridge.start()
+        original = request(bridge)
+        assert bridge.token not in json.dumps(original)
+        if mutation == "unsigned":
+            original.pop("auth")
+        elif mutation == "changed_tree":
+            original["files"][0]["content_base64"] = base64.b64encode(b"# replaced").decode("ascii")
+        else:
+            original["auth"] = authentication(original, bridge.token, b"response\0")
+        with socket.create_connection(("127.0.0.1", bridge.port), timeout=3) as connection:
+            send(connection, original)
             with pytest.raises((EOFError, OSError)):
                 receive(connection)
         assert not validator.calls

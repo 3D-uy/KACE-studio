@@ -162,7 +162,12 @@ files/16 MiB decoded and one validation at a time; unsupported staging paths or
 transport limits are unverified, not Klipper incompatibility.
 
 Both peers bind each result to the session, nonce, effective-tree SHA-256, pin,
-and engine/recipe/worker hashes. Replay, mismatch, Docker failure, timeout or
+and engine/recipe/worker hashes. Protocol `kace-studio-preflight/v2` authenticates
+both directions with HMAC-SHA256 over sorted compact ASCII JSON, excluding
+`auth`, using separate `request\0` and `response\0` domains. The private key is
+never sent in a request. A different process rebinding a stale loopback port
+cannot approve a tree by echoing request fields. Unsigned v1 is not accepted.
+Replay, mismatch, Docker failure, timeout or
 disconnect blocks publication. No disconnected/manual-shell fallback bypasses
 the KACE gate. Actual writes, review and firmware boundaries remain in KACE.
 
