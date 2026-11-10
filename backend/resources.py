@@ -92,4 +92,10 @@ def verify_runtime_resources() -> None:
         raise ResourceContractError("Bundled bootstrap does not match release contract.")
     if not bundled_path("web/index.html").is_file():
         raise ResourceContractError("Bundled frontend entrypoint is missing.")
+    if "preflight" in contract.get("bundled_resources", []):
+        from backend.klipper_preflight import verify_preflight_resources
+        try:
+            verify_preflight_resources()
+        except (ValueError, OSError) as exc:
+            raise ResourceContractError(f"Bundled preflight is invalid: {exc}") from exc
     verify_application_cache_contract()

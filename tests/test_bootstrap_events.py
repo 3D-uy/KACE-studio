@@ -7,6 +7,13 @@ import pytest
 
 from backend.bootstrap_events import BootstrapEventParser, MachineProtocolDisplayFilter
 from main import Api
+import main
+
+
+@pytest.fixture(autouse=True)
+def prepared_pc_validator(monkeypatch):
+    # These cases exercise event ordering; PC validation has its own real suites.
+    monkeypatch.setattr(main, "DockerPreflight", lambda: type("Prepared", (), {"prepare": lambda self: None})())
 
 
 PREFIX = "=== KACE_BOOTSTRAP_EVENT: "
@@ -138,6 +145,12 @@ class FakeSsh:
     def send_input(self, command):
         self.commands.append(command)
         return self.send_ok
+
+    def stop_preflight(self, path=None):
+        return 1
+
+    def start_preflight(self, validator, *, generation=None):
+        return "/tmp/kace-studio-preflight-fixture.env"
 
 
 def test_backend_guard_allows_only_one_active_bootstrap_and_reopens_on_terminal():

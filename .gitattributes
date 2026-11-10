@@ -8,6 +8,8 @@
 *.css text eol=lf
 *.html text eol=lf
 *.svg text eol=lf
+# Verified portable preflight resources use canonical LF bytes on Windows too.
+preflight/* text eol=lf
 # Treat font binaries as binary (no diff / no line-ending conversion)
 *.ttf binary
 *.woff binary

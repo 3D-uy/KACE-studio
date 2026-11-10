@@ -8,11 +8,14 @@ let term = null;
 let fitAddon = null;
 let searchAddon = null;
 let sshConnected = false;
+let terminalShellOpen = false;
 let currentDeviceIp = "";
 let currentDeviceName = "";
 let loginState = 'DISCONNECTED'; // 'DISCONNECTED', 'PROMPTING_USER', 'PROMPTING_PASS', 'CONNECTING'
 let loginUsername = '';
 let loginPassword = '';
+let pendingHostKey = null;
+let approvedHostSelection = null;
 let connectedUsername = 'kace';
 let currentLoginInput = '';
 let printerPowerStatus = 'init';
@@ -26,6 +29,8 @@ let powerTargetReady = Promise.resolve(false);
 let powerRequestSequence = 0;
 let powerStatusRequest = null;
 let powerAuthorityRequest = 0;
+let pendingTerminalData = [];
+let pendingTerminalClosedGeneration = null;
 
 let userPreferences = { theme: 'dark', kace_auto_scan: true, form_state: {} };
 
@@ -612,6 +617,8 @@ function applyStudioLanguage() {
     const stop = document.getElementById('stop-first-boot-scan');
     if (start) start.textContent = studioText('search');
     if (stop) stop.textContent = studioText('stop');
+    const powerButton = document.getElementById('printer-power-btn');
+    if (powerButton) powerButton.ariaLabel = `${studioText('powerLabel')}: ${studioText(`powerState_${printerPowerStatus}`)}`;
     updateStudioLanguageButton();
 }
 
@@ -1150,18 +1157,18 @@ window.updateDeviceState = function (state, progress, message, flashContext = nu
             showFlashNotification();
             break;
         case 'CONNECTING':
-            if (term) term.write(`\x1b[1;33m[Status] ${message}\x1b[0m\r\n`);
+            if (term) term.write(`\x1b[1;33m${studioText(message) || message}\x1b[0m\r\n`);
             break;
         case 'DISCOVERED':
-            if (term) term.write(`\x1b[1;36m[Status] ${message}\x1b[0m\r\n`);
+            if (term) term.write(`\x1b[1;36m${studioText(message) || message}\x1b[0m\r\n`);
             break;
         case 'SSH_DISCONNECTED':
             window.updateSshDisconnected(message);
-            if (term) term.write(`\x1b[1;33m[Status] ${message}\x1b[0m\r\n`);
+            if (term) term.write(`\x1b[1;33m${studioText('sshLost')}\x1b[0m\r\n`);
             break;
         case 'SSH_READY':
             updateConnectionStatus(true);
-            if (term) term.write(`\x1b[1;32m[Status] ${message}\x1b[0m\r\n`);
+            if (term) term.write(`\x1b[1;32m${studioText('sshConnected')}\x1b[0m\r\n`);
             break;
         case 'BOOTSTRAPPING':
             updateConnectionStatus(true);
@@ -1678,25 +1685,57 @@ function handleLoginInput(data) {
     }
 }
 
-window.restoreSshAfterReconnect = function (result, selection, checkpoint) {
+window.restoreSshAfterReconnect = function (result, selection, checkpoint, waiting = false) {
     if (selection !== powerSelection || !result || result.status !== 'success') return;
-    updateConnectionStatus(true, { newSession: true });
+    if (sshConnected && Number.isInteger(firmwareGeneration) && result.generation < firmwareGeneration) return;
+    updateConnectionStatus(true, { newSession: true, preserveWorkflow: true });
     firmwareGeneration = result.generation;
     applyRemotePowerConfig(result.power_config, selection);
+    flushPendingTerminalData();
     loginState = 'DISCONNECTED';
     term.write(`\r\n\x1b[97m${studioText('recoveryConnected')}\x1b[0m\r\n`);
-    if (checkpoint && checkpoint.generation === firmwareGeneration && checkpoint.event) {
-        window.updateKaceWorkflowEvent(checkpoint.event, firmwareGeneration);
-        const complete = checkpoint.checkpoint?.state === 'COMPLETE';
-        term.write(`\r\n${studioText(complete ? 'recoveryComplete' : 'recoveryPending')}\r\n`);
+    const incomingId = checkpoint?.event?.workflow_id;
+    const activeId = document.getElementById('kace-workflow-tracker')?.dataset.workflowId;
+    // A delayed initial read of a known historical flow cannot replace or
+    // announce completion for the newer workflow already shown in this session.
+    const historical = incomingId && activeId && incomingId !== activeId && kaceWorkflowViews.has(incomingId);
+    if (checkpoint && checkpoint.generation === firmwareGeneration && checkpoint.event && !historical) {
+        window.updateKaceWorkflowEvent(checkpoint.event, firmwareGeneration, !waiting);
+        const view = kaceWorkflowViews.get(checkpoint.event.workflow_id);
+        if (waiting && view && view.state === 'DEPLOYING' && view.sequence === checkpoint.event.sequence) {
+            view.generation = firmwareGeneration;
+            view.connectionLost = false;
+            view.recoveryObserving = true;
+            view.resumePending = false;
+            renderKaceWorkflow(view);
+        }
+        const complete = view ? view.state === 'COMPLETE' : checkpoint.checkpoint?.state === 'COMPLETE';
+        term.write(`\r\n${studioText(complete ? 'recoveryComplete' : view?.recoveryObserving ? 'recoveryWaiting' : 'recoveryPending')}\r\n`);
     } else {
         term.write(`\r\n${studioText('recoveryUnavailable')}\r\n`);
     }
-    startFirmwareCheckpointWatch();
+    startFirmwareCheckpointWatch(true);
+};
+
+window.finishSshRecovery = function (generation, selection, checkpoint) {
+    if (!sshConnected || generation !== firmwareGeneration || selection !== powerSelection ||
+        !checkpoint || checkpoint.generation !== generation || !checkpoint.event) return false;
+    const view = kaceWorkflowViews.get(checkpoint.event.workflow_id);
+    if (!view || view.generation !== generation || view.state === 'DISCARDED') return false;
+    const tracker = document.getElementById('kace-workflow-tracker');
+    if (tracker && tracker.dataset.workflowId !== view.workflowId) return false;
+    window.updateKaceWorkflowEvent(checkpoint.event, generation);
+    const current = kaceWorkflowViews.get(checkpoint.event.workflow_id);
+    current.recoveryObserving = false;
+    current.resumePending = current.state === 'DEPLOYING';
+    renderKaceWorkflow(current);
+    term.write(`\r\n${studioText(current.state === 'COMPLETE' ? 'recoveryComplete' : 'recoveryPending')}\r\n`);
+    return true;
 };
 
 function performSshLogin(username, password) {
-    resetPowerTarget(currentDeviceIp);
+    if (approvedHostSelection !== powerSelection) resetPowerTarget(currentDeviceIp);
+    approvedHostSelection = null;
     const selection = powerSelection;
     const host = currentDeviceIp;
     if (window.pywebview && window.pywebview.api) {
@@ -1717,13 +1756,14 @@ function performSshLogin(username, password) {
 
             if (isSuccess) {
                 connectedUsername = username;
-                term.write("\x1b[1;32m[KACE Workspace] SSH connection established successfully.\x1b[0m\r\n");
+                term.write(`\x1b[1;32m${studioText('sshConnected')}\x1b[0m\r\n`);
                 updateConnectionStatus(true, { newSession: true });
                 firmwareGeneration = Number.isInteger(res.generation) ? res.generation : null;
                 applyRemotePowerConfig(res && res.power_config ? res.power_config : {
                     status: 'error',
                     detail: 'SSH connected but remote power configuration was not returned',
                 }, selection);
+                flushPendingTerminalData();
                 loginState = 'DISCONNECTED';
 
                 // Synchronize terminal dimensions with the remote PTY
@@ -1738,14 +1778,20 @@ function performSshLogin(username, password) {
                     window.pywebview.api.get_firmware_workflow_checkpoint()
                         .then(result => {
                             if (selection === powerSelection && sshConnected && result && result.event)
-                                window.updateKaceWorkflowEvent(result.event, result.generation);
+                                window.updateKaceWorkflowEvent(result.event, result.generation, true);
                         })
                         .catch(err => console.debug('No firmware workflow checkpoint available:', err));
                 }
+            } else if (res && res.status === 'host_key_confirmation_required' && res.token) {
+                pendingHostKey = { token: res.token, selection, host };
+                term.write(`\r\n\x1b[1;33m${studioText('hostKeyUnknown')}\x1b[0m\r\n`);
+                term.write(`${studioText('hostKeyHost')}: ${res.host}\r\n${studioText('hostKeyAlgorithm')}: ${res.algorithm}\r\n${studioText('hostKeyFingerprint')}: ${res.fingerprint}\r\n`);
+                term.write(`${studioText('hostKeyVerify')}\r\n${studioText('hostKeyPrompt')} `);
+                loginState = 'PROMPTING_HOST_KEY';
+                updateConnectionStatus(false);
             } else if (isHostKeyMismatch) {
-                term.write(`\r\n\x1b[1;33m[SECURITY ALERT] SSH Host Key Mismatch for ${currentDeviceIp}!\x1b[0m\r\n`);
-                term.write("This is normal if you have recently re-flashed the SD card.\r\n");
-                term.write("Do you want to clear the old stored key and trust the new one? (y/n): ");
+                term.write(`\r\n\x1b[1;33m${studioText('hostKeyChanged')}\x1b[0m\r\n`);
+                term.write(`${studioText('hostKeyChangedHelp')}\r\n${studioText('hostKeyClearPrompt')} `);
                 loginState = 'PROMPTING_HOST_KEY_MISMATCH';
                 updateConnectionStatus(false);
             } else {
@@ -1837,7 +1883,7 @@ function initTerminal() {
 
     // Listen for terminal resize events and forward them to the backend SSH session
     term.onResize(size => {
-        if (sshConnected && window.pywebview && window.pywebview.api) {
+        if (sshConnected && terminalShellOpen && window.pywebview && window.pywebview.api) {
             window.pywebview.api.resize_ssh_pty(size.cols, size.rows);
         }
     });
@@ -1922,6 +1968,30 @@ function initTerminal() {
             window.pywebview.api.send_ssh_input(data);
         } else if (loginState === 'PROMPTING_USER' || loginState === 'PROMPTING_PASS') {
             handleLoginInput(data);
+        } else if (loginState === 'PROMPTING_HOST_KEY') {
+            const char = data.toLowerCase();
+            if ((char === 'y' || char === 'n') && pendingHostKey) {
+                const challenge = pendingHostKey;
+                pendingHostKey = null;
+                loginState = 'CONNECTING';
+                term.write(`${char}\r\n`);
+                window.pywebview.api.respond_ssh_host_key(challenge.token, char === 'y').then(accepted => {
+                    if (challenge.selection !== powerSelection || challenge.host !== currentDeviceIp) return;
+                    if (accepted && char === 'y') {
+                        approvedHostSelection = challenge.selection;
+                        term.write(`${studioText('hostKeyAccepted')}\r\n`);
+                    } else {
+                        approvedHostSelection = null;
+                        term.write(`${studioText('hostKeyRejected')}\r\n`);
+                    }
+                    promptTerminalLogin();
+                }).catch(() => {
+                    if (challenge.selection !== powerSelection) return;
+                    approvedHostSelection = null;
+                    term.write(`${studioText('hostKeyRejected')}\r\n`);
+                    promptTerminalLogin();
+                });
+            }
         } else if (loginState === 'PROMPTING_HOST_KEY_MISMATCH') {
             const char = data.toLowerCase();
             if (char === 'y') {
@@ -1992,6 +2062,12 @@ const KACE_FIRMWARE_DEPLOYMENT_STEPS = [
 const KACE_TERMINAL_ERRORS = new Set([
     'ABORTED', 'CANCELLED', 'FAILED_FLASH', 'FAILED_MONITOR', 'FAILED_UPLOAD',
     'CONFIG_ERROR', 'FAILED_PRECONDITION', 'TIMEOUT',
+]);
+
+// Presentation boundary for the validated delivery fallback, not a firmware
+// decision engine. Delivery alone never proves that installation completed.
+const KACE_MANIFEST_STATES = new Set([
+    'ARTIFACT_READY', 'MEDIA_PREPARED', 'ACTION_REQUIRED', 'FLASHED', 'CANCELLED', 'FAILED_FLASH',
 ]);
 
 const kaceWorkflowViews = new Map();
@@ -2071,7 +2147,35 @@ function renderKaceWorkflow(view) {
     const steps = document.getElementById('kace-workflow-steps');
     const detail = document.getElementById('kace-workflow-detail');
     const downloadButton = document.getElementById('kace-firmware-download');
+    const configurationButton = document.getElementById('kace-configuration-download');
+    const configurationStatus = document.getElementById('kace-configuration-download-status');
     if (!tracker || !title || !status || !steps || !detail) return;
+    // KACE archives its checkpoint before announcing an explicit new flow.
+    // Preserve that old identity/cursor, but stop presenting its prior failure.
+    if (view.state === 'DISCARDED') {
+        if (tracker.dataset.workflowId === view.workflowId) {
+            tracker.style.display = 'none';
+            if (downloadButton) {
+                downloadButton.style.display = 'none';
+                downloadButton.dataset.remotePath = '';
+                downloadButton.disabled = true;
+            }
+            if (configurationButton) {
+                configurationButton.style.display = 'none';
+                configurationButton.dataset.workflowId = '';
+                configurationButton.disabled = true;
+            }
+            if (configurationStatus) configurationStatus.hidden = true;
+            setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 0);
+        }
+        return;
+    }
+    // A new KACE identity starts with its own compact presentation. Keep prior
+    // views for recovery; opening their history must not expand the next flow.
+    if (tracker.dataset.workflowId !== view.workflowId) {
+        const historyPanel = document.getElementById('kace-workflow-history');
+        if (historyPanel) historyPanel.open = false;
+    }
     tracker.dataset.workflowId = view.workflowId;
 
     const isDone = view.state === 'DONE' || view.state === 'COMPLETE';
@@ -2080,8 +2184,8 @@ function renderKaceWorkflow(view) {
             'COMPILE_REQUIRED', 'ARTIFACT_READY', 'AWAITING_USER_ACTION',
             'MEDIA_PREPARED', 'AWAITING_FLASH', 'ACTION_REQUIRED', 'READY_TO_DEPLOY',
         ].includes(view.state);
-    const isRecovery = !isDone && Boolean(view.data && view.data.last_error);
-    const isError = KACE_TERMINAL_ERRORS.has(view.state) || isRecovery || Boolean(view.bootstrapFailed);
+    const isRecovery = !isDone && Boolean(view.resumePending || (view.data && view.data.last_error));
+    const isError = KACE_TERMINAL_ERRORS.has(view.state) || Boolean(view.data && view.data.last_error) || Boolean(view.bootstrapFailed);
     const positionState = isError ? (view.progressState || view.state) : view.state;
     const definition = kaceWorkflowDefinition(view.kind);
     let [completedThrough, currentIndex] = kaceWorkflowPosition(view, positionState);
@@ -2089,16 +2193,20 @@ function renderKaceWorkflow(view) {
 
     tracker.style.display = 'block';
     tracker.classList.toggle('success', isDone);
-    tracker.classList.toggle('action-required', isActionRequired);
+    tracker.classList.toggle('action-required', isActionRequired || isRecovery);
     tracker.classList.toggle('error', isError);
     const method = view.data && typeof view.data.method === 'string' ? view.data.method : '';
     title.textContent = view.kind === 'firmware_deployment'
         ? `Firmware deployment${method ? ` · ${method}` : ''}`
         : `Installation ${view.workflowId.slice(0, 8)}`;
-    status.textContent = workflowText(isDone ? 'completed' : isRecovery ? 'recovery' : isError ? 'failed' : isActionRequired ? 'action' : 'running', view);
+    status.textContent = workflowText(isDone ? 'completed' : isError ? (isRecovery ? 'recovery' : 'failed') : view.connectionLost ? 'disconnected' : view.recoveryObserving ? 'observing' : isRecovery ? 'recovery' : isActionRequired ? 'action' : 'running', view);
 
     title.textContent = workflowText('title', view);
-    const detailLines = [workflowText(isDone ? 'completeDetail' : isRecovery ? 'recoveryDetail' : isError ? 'failedDetail' : 'continueDetail', view)];
+    const detailLines = [workflowText(isDone ? 'completeDetail' : view.connectionLost ? 'disconnectedDetail' : view.recoveryObserving ? 'observingDetail' : view.resumePending ? 'resumeDetail' : isRecovery ? 'recoveryDetail' : isError ? 'failedDetail' : 'continueDetail', view)];
+    const current = document.getElementById('kace-workflow-current');
+    if (current) current.textContent = workflowText(`phase_${view.state}`, view) || workflowStep(definition.steps[currentIndex < 0 ? definition.steps.length - 1 : currentIndex], view);
+    const history = document.getElementById('kace-workflow-history-label');
+    if (history) history.textContent = workflowText('history', view);
     const advanced = document.getElementById('kace-workflow-advanced');
     if (advanced) advanced.textContent = [view.detail, view.data && view.data.last_error,
         view.data && `Final filename: ${view.data.final_filename || ''}`,
@@ -2108,6 +2216,9 @@ function renderKaceWorkflow(view) {
         view.data && JSON.stringify(view.data.instructions || []),
     ].filter(Boolean).join('\n');
     detail.textContent = detailLines.join('\n');
+    // Ordinary progress is already described by the current stage and terminal.
+    // Keep extra space only for actionable recovery, disconnection or completion.
+    detail.hidden = !(isDone || view.connectionLost || view.recoveryObserving || isRecovery || isError);
     const downloadablePath = view.kind === 'firmware_deployment' && view.data &&
         ['ARTIFACT_READY', 'AWAITING_FLASH', 'VERIFYING_MCU', 'ACTION_REQUIRED', 'MEDIA_PREPARED', 'AWAITING_USER_ACTION'].includes(view.state) &&
         typeof view.data.staged_path === 'string' ? view.data.staged_path : '';
@@ -2117,6 +2228,23 @@ function renderKaceWorkflow(view) {
         downloadButton.dataset.remotePath = downloadablePath;
         downloadButton.dataset.generation = Number.isInteger(view.generation) ? String(view.generation) : '';
         downloadButton.disabled = !Number.isInteger(view.generation) || view.generation !== firmwareGeneration;
+    }
+    if (configurationButton) {
+        const available = view.kind === 'firmware_deployment' && view.data &&
+            view.data.configuration_download_available === true &&
+            ['CONFIG_GENERATED', 'READY_TO_DEPLOY', 'DEPLOYING', 'COMPLETE'].includes(view.state);
+        if (configurationButton.dataset.workflowId !== view.workflowId || configurationButton.dataset.sequence !== String(view.sequence)) {
+            configurationButton.dataset.busy = '';
+            if (configurationStatus) configurationStatus.hidden = true;
+        }
+        configurationButton.style.display = available ? 'inline-flex' : 'none';
+        configurationButton.textContent = studioText('configurationDownload');
+        configurationButton.title = studioText('configurationDownloadHint');
+        configurationButton.dataset.workflowId = available ? view.workflowId : '';
+        configurationButton.dataset.sequence = String(view.sequence);
+        configurationButton.dataset.generation = Number.isInteger(view.generation) ? String(view.generation) : '';
+        configurationButton.disabled = configurationButton.dataset.busy === '1' || !sshConnected || Boolean(view.connectionLost) ||
+            !Number.isInteger(view.generation) || view.generation !== firmwareGeneration;
     }
 
     steps.replaceChildren();
@@ -2141,7 +2269,7 @@ function renderKaceWorkflow(view) {
 }
 
 let firmwareGeneration = null;
-window.updateKaceWorkflowEvent = function (event, generation = null) {
+window.updateKaceWorkflowEvent = function (event, generation = null, resumed = false, origin = 'event') {
     if (!event || typeof event !== 'object') return false;
     if (generation !== null && generation !== firmwareGeneration) return false;
     const workflowId = event.workflow_id;
@@ -2153,18 +2281,37 @@ window.updateKaceWorkflowEvent = function (event, generation = null) {
         typeof workflowId !== 'string' || !workflowId ||
         !Number.isInteger(sequence) || sequence < 1 ||
         typeof state !== 'string' || !state) return false;
+    if (origin === 'manifest' && !KACE_MANIFEST_STATES.has(state)) return false;
 
     const previous = kaceWorkflowViews.get(workflowId);
-    if (previous && sequence <= previous.sequence) return false;
+    // A late poll/manifest response cannot revive an explicitly archived flow.
+    if (previous && previous.state === 'DISCARDED') return false;
+    if (origin === 'manifest' && Array.from(kaceWorkflowViews.values()).some(view =>
+        view.generation === generation && view.kind === 'firmware_deployment' && view.origin !== 'manifest')) return false;
+    const replacesManifest = previous && previous.origin === 'manifest' && origin !== 'manifest';
+    if (previous && !replacesManifest && sequence <= previous.sequence) {
+        if (resumed && sequence === previous.sequence && previous.state === state &&
+            (previous.generation !== generation || (state === 'DEPLOYING' && !previous.resumePending))) {
+            previous.generation = generation;
+            previous.connectionLost = false;
+            previous.resumePending = state === 'DEPLOYING';
+            renderKaceWorkflow(previous);
+            return true;
+        }
+        return false;
+    }
     const view = {
         generation,
+        origin,
+        recoveryObserving: state === 'DEPLOYING' && Boolean(previous && previous.recoveryObserving),
+        resumePending: state === 'DEPLOYING' && (resumed || Boolean(previous && previous.resumePending)),
         workflowId,
         sequence,
         state,
         kind: typeof event.workflow_kind === 'string'
             ? event.workflow_kind
             : (previous ? previous.kind : 'installation'),
-        data: Object.assign({}, previous ? previous.data : null,
+        data: Object.assign({}, previous && !replacesManifest ? previous.data : null,
             event.data && typeof event.data === 'object' ? event.data : null),
         detail: typeof event.detail === 'string' ? event.detail : '',
         progressState: KACE_TERMINAL_ERRORS.has(state)
@@ -2178,16 +2325,17 @@ window.updateKaceWorkflowEvent = function (event, generation = null) {
 
 function restoreKaceDeploymentManifest(manifest) {
     if (!manifest || typeof manifest !== 'object' ||
+        !sshConnected || !Number.isInteger(manifest.generation) || manifest.generation !== firmwareGeneration ||
         manifest.workflow_kind !== 'firmware_deployment' ||
+        !KACE_MANIFEST_STATES.has(manifest.state) ||
         !manifest.deployment || typeof manifest.deployment !== 'object') return false;
     const deployment = manifest.deployment;
     return window.updateKaceWorkflowEvent({
         schema: 2,
         workflow_kind: 'firmware_deployment',
-        workflow_id: manifest.workflow_id || deployment.deployment_id,
-        sequence: Number.isInteger(manifest.sequence) && manifest.sequence > 0
-            ? manifest.sequence : 1,
-        state: typeof manifest.state === 'string' ? manifest.state : 'ARTIFACT_READY',
+        workflow_id: manifest.workflow_id,
+        sequence: manifest.sequence,
+        state: manifest.state,
         detail: manifest.result && typeof manifest.result.detail === 'string'
             ? manifest.result.detail
             : `${deployment.final_filename || 'Firmware'} is ready`,
@@ -2198,7 +2346,7 @@ function restoreKaceDeploymentManifest(manifest) {
             instructions: deployment.instructions,
             automation: deployment.automation,
         },
-    }, manifest.generation);
+    }, manifest.generation, false, 'manifest');
 }
 
 window.downloadKaceFirmwareArtifact = function () {
@@ -2211,6 +2359,42 @@ window.downloadKaceFirmwareArtifact = function () {
         .catch(err => console.error('Firmware download failed:', err))
         .finally(() => {
             if (firmwareGeneration === generation && button.dataset.generation === String(generation)) button.disabled = false;
+        });
+    return true;
+};
+
+window.downloadKaceConfiguration = function () {
+    const button = document.getElementById('kace-configuration-download');
+    const message = document.getElementById('kace-configuration-download-status');
+    const workflowId = button && button.dataset.workflowId;
+    const generation = button && button.dataset.generation ? Number(button.dataset.generation) : null;
+    const sequence = button && button.dataset.sequence ? Number(button.dataset.sequence) : null;
+    if (!workflowId || button.disabled || !sshConnected || !Number.isInteger(sequence) ||
+        !Number.isInteger(generation) || generation !== firmwareGeneration || !window.pywebview || !window.pywebview.api) return false;
+    const current = () => sshConnected && generation === firmwareGeneration &&
+        button.dataset.generation === String(generation) && button.dataset.workflowId === workflowId &&
+        button.dataset.sequence === String(sequence);
+    const show = key => {
+        if (message && current()) {
+            message.hidden = !key;
+            message.textContent = key ? studioText(key) : '';
+        }
+    };
+    button.dataset.busy = '1';
+    button.disabled = true;
+    show('configurationDownloadSaving');
+    window.pywebview.api.download_kace_configuration(workflowId, sequence, generation)
+        .then(result => {
+            if (result && result.status === 'success') show('configurationDownloadSuccess');
+            else if (result && result.status === 'cancelled') show('');
+            else show(result && result.code === 'configurationDownloadChanged' ? result.code : 'configurationDownloadFailed');
+        })
+        .catch(() => show('configurationDownloadFailed'))
+        .finally(() => {
+            if (current()) {
+                button.dataset.busy = '';
+                button.disabled = false;
+            }
         });
     return true;
 };
@@ -2242,7 +2426,8 @@ function setBootstrapStage(stageId) {
 
     const label = document.getElementById('bootstrap-stage-label');
     if (label) {
-        label.textContent = BOOTSTRAP_STAGES[idx].label + '...';
+        label.dataset.uiText = `stage_${stageId}`;
+        label.textContent = studioText(label.dataset.uiText);
     }
 
     // Mark all previous stages as completed, current as active
@@ -2260,7 +2445,8 @@ function setBootstrapStage(stageId) {
     // Also update the old connection-subtitle for backwards compatibility
     const connSubtitle = document.getElementById('connection-subtitle');
     if (connSubtitle) {
-        connSubtitle.innerHTML = `<i class="fa-solid fa-spinner fa-spin" style="color:var(--primary-color)"></i> <span style="color:var(--primary-color);font-weight:600"> ${BOOTSTRAP_STAGES[idx].label}...</span>`;
+        connSubtitle.dataset.uiText = `stage_${stageId}`;
+        connSubtitle.textContent = studioText(connSubtitle.dataset.uiText);
     }
 }
 
@@ -2271,16 +2457,18 @@ function completeBootstrapSuccess(message, context) {
         if (el) { el.classList.remove('active'); el.classList.add('done'); }
     });
     const label = document.getElementById('bootstrap-stage-label');
-    if (label) label.textContent = '✔ Bootstrap complete!';
+    if (label) { label.dataset.uiText = 'bootstrapComplete'; label.textContent = studioText('bootstrapComplete'); }
     const connSubtitle = document.getElementById('connection-subtitle');
     if (connSubtitle) {
-        connSubtitle.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--success-color)"></i> <span style="color:var(--success-color);font-weight:600"> Bootstrap and KACE wizard completed successfully.</span>';
+        connSubtitle.dataset.uiText = 'bootstrapComplete';
+        connSubtitle.textContent = studioText('bootstrapComplete');
     }
     window.updateDeviceState('BOOTSTRAPPED', 100, message || 'Bootstrap completed successfully.');
     if (window.pywebview && window.pywebview.api) {
         refreshRemotePowerConfig(context);
     }
     setTimeout(() => {
+        if (!currentSshContext(context)) return;
         const tracker = document.getElementById('bootstrap-progress-tracker');
         if (tracker && tracker.style.display !== 'none') {
             tracker.style.display = 'none';
@@ -2294,9 +2482,10 @@ function completeBootstrapTerminal(state, message) {
     bootstrapFailureHandled = true;
     const isCancelled = state === 'BOOTSTRAP_CANCELLED';
     const label = document.getElementById('bootstrap-stage-label');
-    if (label) label.textContent = `${isCancelled ? '⚠' : '✖'} ${message}`;
+    if (label) { delete label.dataset.uiText; label.textContent = `${isCancelled ? '⚠' : '✖'} ${message}`; }
     const connSubtitle = document.getElementById('connection-subtitle');
     if (connSubtitle) {
+        delete connSubtitle.dataset.uiText;
         connSubtitle.textContent = message;
         connSubtitle.style.color = isCancelled
             ? 'var(--warning-color)'
@@ -2308,6 +2497,7 @@ function completeBootstrapTerminal(state, message) {
 }
 
 window.updateBootstrapEvent = function (event, context) {
+    if (!currentSshContext(context)) return false;
     if (!event || event.protocol !== 'kace-bootstrap/v1') return false;
     const workflowId = event.workflow_id;
     const sequence = event.sequence;
@@ -2356,12 +2546,26 @@ window.updateBootstrapEvent = function (event, context) {
     return false;
 };
 
-window.updateBootstrapInterrupted = function (workflowId, reason) {
+window.updateBootstrapInterrupted = function (workflowId, reason, context) {
+    if (!currentSshContext(context)) return false;
     bootstrapAuthoritativeSeen = true;
     completeBootstrapTerminal(
         'BOOTSTRAP_INTERRUPTED',
         reason || `Bootstrap ${workflowId || ''} was interrupted.`,
     );
+    return true;
+};
+
+window.updateTerminalClosed = function (generation) {
+    if (Number.isInteger(generation) && firmwareGeneration === null) {
+        pendingTerminalClosedGeneration = Math.max(pendingTerminalClosedGeneration ?? -1, generation);
+        return false;
+    }
+    if (!sshConnected || generation !== firmwareGeneration) return false;
+    terminalShellOpen = false;
+    const subtitle = document.getElementById('connection-subtitle');
+    if (subtitle) { subtitle.dataset.uiText = 'terminalClosed'; subtitle.textContent = studioText('terminalClosed'); }
+    if (term) term.write(`\r\n${studioText('terminalClosed')}\r\n`);
     return true;
 };
 
@@ -2375,25 +2579,34 @@ window.updateSshDisconnected = function (reason, expected) {
     powerAuthorityRequest++;
     powerContext = null;
     remotePowerAuthority = null;
-    const message = reason || (expected
-        ? 'SSH disconnected while restart verification was pending. Host status is unknown; reconnect to continue.'
-        : 'SSH was lost unexpectedly. Host status is unknown; reconnect to resume the saved checkpoint.');
-    renderPrinterPower({ available: false, status: 'error', detail: message });
+    const message = studioText('sshLost');
+    renderPrinterPower({ available: false, status: 'unknown', detailKey: 'powerUnknownHint' });
+    for (const view of kaceWorkflowViews.values()) view.connectionLost = true;
+    const tracker = document.getElementById('kace-workflow-tracker');
+    const view = kaceWorkflowViews.get(tracker?.dataset.workflowId);
+    if (view) renderKaceWorkflow(view);
     const accessButton = document.getElementById('authorize-moonraker-btn');
     if (accessButton) accessButton.disabled = true;
     const firmwareDownload = document.getElementById('kace-firmware-download');
     if (firmwareDownload) firmwareDownload.disabled = true;
+    const configurationDownload = document.getElementById('kace-configuration-download');
+    if (configurationDownload) configurationDownload.disabled = true;
+    const configurationStatus = document.getElementById('kace-configuration-download-status');
+    if (configurationStatus) configurationStatus.hidden = true;
     const label = document.getElementById('bootstrap-stage-label');
-    if (label) label.textContent = `⚠ ${message}`;
+    if (label) { label.dataset.uiText = 'sshLost'; label.textContent = message; }
     const connSubtitle = document.getElementById('connection-subtitle');
     if (connSubtitle) {
         connSubtitle.textContent = message;
+        connSubtitle.dataset.uiText = 'sshLost';
+        connSubtitle.title = reason || '';
         connSubtitle.style.color = 'var(--warning-color)';
     }
     return true;
 };
 
-window.updateBootstrapDisconnected = function (workflowId, reason, expected) {
+window.updateBootstrapDisconnected = function (workflowId, reason, expected, context) {
+    if (!currentSshContext(context)) return false;
     window.updateSshDisconnected(reason, expected);
     window.updateDeviceState('BOOTSTRAP_RECOVERABLE', 0, reason);
     return true;
@@ -2431,11 +2644,37 @@ function parseBootstrapProgress(data, context) {
 
 // Push data from Python SSH output stream into xterm terminal
 window.writeTerminalData = function (data, context) {
+    if (!currentSshContext(context)) {
+        // The stream can precede the login Promise. Defer display and parsing
+        // until its authenticated generation is known; never replay another login.
+        if (firmwareGeneration === null && context &&
+            context.selection === powerSelection && context.host === currentDeviceIp.trim().toLowerCase() &&
+            Number.isInteger(context.session)) {
+            const previousGeneration = pendingTerminalData[0]?.context.session;
+            if (previousGeneration !== undefined && context.session < previousGeneration) return false;
+            if (previousGeneration !== undefined && context.session > previousGeneration) pendingTerminalData = [];
+            if (pendingTerminalData.length < 256) {
+                pendingTerminalData.push({data, context: {...context}});
+                return true;
+            }
+        }
+        return false;
+    }
     if (term) {
         term.write(data);
     }
     parseBootstrapProgress(data, context);
+    return true;
 };
+
+function flushPendingTerminalData() {
+    const buffered = pendingTerminalData;
+    const closedGeneration = pendingTerminalClosedGeneration;
+    pendingTerminalData = [];
+    pendingTerminalClosedGeneration = null;
+    buffered.forEach(item => window.writeTerminalData(item.data, item.context));
+    if (closedGeneration !== null) window.updateTerminalClosed(closedGeneration);
+}
 
 function updateConnectionStatus(connected, { newSession = false, preserveWorkflow = false } = {}) {
     // Status notifications (SSH_READY / BOOTSTRAPPING) describe the current
@@ -2443,27 +2682,42 @@ function updateConnectionStatus(connected, { newSession = false, preserveWorkflo
     const sessionChanged = !connected || !sshConnected || newSession;
     if (sessionChanged) {
         firmwareGeneration = null;
+        bootstrapBuffer = '';
+        bootstrapAuthoritativeSeen = false;
+        bootstrapFailureHandled = false;
+        bootstrapEventCursors.clear();
+        lastBootstrapStageIdx = -1;
+        if (!connected) {
+            pendingTerminalData = [];
+            pendingTerminalClosedGeneration = null;
+        }
         if (!preserveWorkflow) kaceWorkflowViews.clear();
         sftpRequestSequence++;
         sftpGeneration = null;
         clearSftpSelection();
     }
     sshConnected = connected;
+    if (sessionChanged) terminalShellOpen = connected;
     const bootstrapBtn = document.getElementById('bootstrap-btn');
     const disconnectBtn = document.getElementById('disconnect-btn');
     const connTitle = document.getElementById('connection-title');
     const connSubtitle = document.getElementById('connection-subtitle');
+    delete connSubtitle.dataset.uiText;
+    connSubtitle.title = '';
 
     if (connected) {
         bootstrapBtn.disabled = bootstrapActive;
         disconnectBtn.style.display = 'block';
-        connTitle.textContent = `SSH Workspace — Connected`;
-        connSubtitle.textContent = `Active session: ${connectedUsername}@${currentDeviceName} (${currentDeviceIp})`;
+        connTitle.dataset.uiText = 'sshConnected';
+        connTitle.textContent = studioText('sshConnected');
+        connSubtitle.textContent = `${connectedUsername}@${currentDeviceName} (${currentDeviceIp})`;
     } else {
         bootstrapBtn.disabled = true;
         disconnectBtn.style.display = 'none';
-        connTitle.textContent = `SSH Session: Disconnected`;
-        connSubtitle.textContent = `No active session. Select a device in the Discovery tab to connect.`;
+        connTitle.dataset.uiText = 'sshDisconnected';
+        connTitle.textContent = studioText('sshDisconnected');
+        connSubtitle.dataset.uiText = 'sshConnectHint';
+        connSubtitle.textContent = studioText('sshConnectHint');
 
         // Hide the progress tracker and resize terminal
         const tracker = document.getElementById('bootstrap-progress-tracker');
@@ -2483,21 +2737,27 @@ function renderPrinterPower(result) {
     const stateLabel = document.getElementById('printer-power-state');
     if (!button || !stateLabel) return;
 
-    const validStates = ['on', 'off', 'init', 'error', 'pending'];
+    const validStates = ['on', 'off', 'init', 'error', 'pending', 'unknown'];
     const status = validStates.includes(result && result.status) ? result.status : 'error';
     printerPowerStatus = status;
     printerPowerAvailable = Boolean(result && result.available);
-    button.classList.remove('state-on', 'state-off', 'state-init', 'state-error');
+    button.classList.remove(...validStates.map(state => `state-${state}`));
     button.classList.add(`state-${status}`);
-    stateLabel.textContent = status === 'pending' ? studioText('powerPending') : status;
+    stateLabel.dataset.uiText = `powerState_${status}`;
+    stateLabel.textContent = studioText(`powerState_${status}`);
+    button.ariaLabel = `${studioText('powerLabel')}: ${studioText(`powerState_${status}`)}`;
     button.disabled = !currentDeviceIp || printerPowerRequestActive ||
         !printerPowerAvailable || !['on', 'off'].includes(status);
-    button.title = (result && result.detail) ||
+    if (result && result.detailKey) button.dataset.uiLabel = result.detailKey;
+    else delete button.dataset.uiLabel;
+    button.title = (result && result.detailKey && studioText(result.detailKey)) || (result && result.detail) ||
         (result && result.device ? `${result.device}: ${status}` : `Power: ${status}`);
 }
 
 function resetPowerTarget(host) {
     firmwareGeneration = null;
+    pendingTerminalData = [];
+    pendingTerminalClosedGeneration = null;
     const accessButton = document.getElementById('authorize-moonraker-btn');
     if (accessButton) accessButton.disabled = true;
     powerSelection += 1;
@@ -2524,11 +2784,26 @@ function currentPowerContext(context) {
         context.host === currentDeviceIp.trim().toLowerCase();
 }
 
+function currentSshContext(context) {
+    return Boolean(sshConnected && context && Number.isInteger(firmwareGeneration) &&
+        context.session === firmwareGeneration && context.selection === powerSelection &&
+        context.host === currentDeviceIp.trim().toLowerCase());
+}
+
 window.invalidatePowerSession = function(context) {
     if (context && context.selection === powerSelection &&
         context.host === currentDeviceIp.trim().toLowerCase() &&
         (!powerContext || samePowerContext(context, powerContext))) {
-        resetPowerTarget(currentDeviceIp);
+        // The selected host is unchanged. Incrementing selection here would
+        // cancel the backend's reconnect and reject its restored authority.
+        stopPowerPolling();
+        powerRequestSequence++;
+        powerStatusRequest = null;
+        powerAuthorityRequest++;
+        powerContext = null;
+        remotePowerAuthority = null;
+        printerPowerRequestActive = false;
+        renderPrinterPower({ available: false, status: 'unknown', detailKey: 'powerUnknownHint' });
     }
 };
 
@@ -2703,6 +2978,8 @@ function disconnectSSH() {
 
 function startBootstrap() {
     if (!sshConnected || bootstrapActive) return;
+    const context = powerContext ? {...powerContext} : null;
+    if (window.pywebview && window.pywebview.api && !currentSshContext(context)) return;
 
     const selectedUi = document.getElementById('bootstrap-ui-select-imager').value || 'mainsail';
 
@@ -2733,7 +3010,7 @@ function startBootstrap() {
         if (el) el.classList.remove('active', 'done');
     });
     const stageLabel = document.getElementById('bootstrap-stage-label');
-    if (stageLabel) stageLabel.textContent = 'Starting bootstrap...';
+    if (stageLabel) { stageLabel.dataset.uiText = 'bootstrapStarting'; stageLabel.textContent = studioText('bootstrapStarting'); }
 
     term.write(`\r\n\x1b[1;36m[KACE Workspace] Starting KACE bootstrap execution [UI selection: ${selectedUi}]... \x1b[0m\r\n`);
 
@@ -2742,7 +3019,8 @@ function startBootstrap() {
     bootstrapFailureHandled = false;
 
     if (window.pywebview && window.pywebview.api) {
-        window.pywebview.api.start_bootstrap(selectedUi).then(result => {
+        window.pywebview.api.start_bootstrap(selectedUi, context).then(result => {
+            if (!currentSshContext(context)) return;
             if (!result || !['started', 'busy'].includes(result.status)) {
                 completeBootstrapTerminal(
                     'BOOTSTRAP_FAILED',
@@ -2750,6 +3028,7 @@ function startBootstrap() {
                 );
             }
         }).catch(error => {
+            if (!currentSshContext(context)) return;
             completeBootstrapTerminal('BOOTSTRAP_FAILED', `Bootstrap start failed: ${error}`);
         });
     } else {
@@ -2801,6 +3080,7 @@ function toggleTheme() {
 // ── Form Persistence (localStorage + Python preferences) ──────────────────
 
 const FORM_PERSIST_KEY = 'kace_form_state';
+// Skipping SD readback is a manual session choice, never a saved default.
 const PERSISTED_FIELDS = [
     { id: 'hostname-input', type: 'value' },
     { id: 'timezone-select', type: 'value' },
@@ -2813,7 +3093,6 @@ const PERSISTED_FIELDS = [
     { id: 'ssh-username', type: 'value' },
     { id: 'wifi-security-select', type: 'value' },
     { id: 'power-device-name', type: 'value' },
-    { id: 'skip-write-verification', type: 'checked' },
 ];
 
 function saveFormState() {
@@ -3251,7 +3530,7 @@ window.terminalContextMenuAction = function (action) {
 };
 
 function handleTerminalPaste(text) {
-    if (sshConnected && window.pywebview && window.pywebview.api) {
+    if (sshConnected && terminalShellOpen && window.pywebview && window.pywebview.api) {
         window.pywebview.api.send_ssh_input(text);
     } else if (loginState === 'PROMPTING_USER' || loginState === 'PROMPTING_PASS') {
         for (let i = 0; i < text.length; i++) {
@@ -3264,7 +3543,7 @@ function handleTerminalPaste(text) {
 
 
 let checkpointWatchToken = 0;
-function startFirmwareCheckpointWatch() {
+function startFirmwareCheckpointWatch(resumedSession = false) {
     const token = ++checkpointWatchToken;
     const generation = firmwareGeneration;
     const deadline = Date.now() + 2 * 60 * 60 * 1000;
@@ -3274,7 +3553,9 @@ function startFirmwareCheckpointWatch() {
             const result = await window.pywebview.api.get_firmware_workflow_checkpoint();
             if (token !== checkpointWatchToken || !sshConnected || generation !== firmwareGeneration) return;
             if (result && result.generation === generation && result.event) {
-                window.updateKaceWorkflowEvent(result.event, generation);
+                const previous = kaceWorkflowViews.get(result.event.workflow_id);
+                const resumed = resumedSession && (!previous || previous.generation !== generation);
+                window.updateKaceWorkflowEvent(result.event, generation, resumed);
             }
         } catch (error) { console.debug('Checkpoint observation unavailable', error); }
         window.setTimeout(observe, 3000);
@@ -3289,13 +3570,27 @@ const WORKFLOW_TEXT = {
         recoveryDetail: 'Installation needs attention. Continue the pending installation in the terminal. Technical details are available below.',
         failedDetail: 'Installation stopped. Review the error and continue in the terminal.',
         continueDetail: 'Follow the installation instructions in the terminal.',
+        history: 'Stages and technical details', disconnected: 'Connection lost',
+        disconnectedDetail: 'Host status is unknown. Reconnect to check the saved installation.',
+        resumeDetail: 'Verification is pending. Run kace in the terminal and choose Continue to recheck the installation.',
+        observing: 'Waiting for installation verification',
+        observingDetail: 'SSH is connected. Waiting up to 45 seconds for KACE to finish its existing verification; no new installation is started.',
+        phase_VERIFYING_CONFIG: 'Verifying the active configuration', phase_FIRMWARE_RESTART: 'Restarting Klipper',
+        phase_ROLLING_BACK: 'Restoring the previous configuration', phase_VERIFYING_ROLLBACK: 'Verifying restoration',
     },
     'Español': {
         title: 'Instalación de KACE', completed: 'Completada', recovery: 'Recuperación necesaria', failed: 'Falló', action: 'Acción requerida', running: 'En curso',
-        completeDetail: 'MCU verificada. Configuración instalada. Klipper listo. Siguiente paso: commissioning del hardware.',
+        completeDetail: 'MCU verificada. Configuración instalada. Klipper listo. Siguiente paso: puesta en marcha física.',
         recoveryDetail: 'La instalación necesita atención. Continuá la instalación pendiente en la terminal. Abajo están los detalles técnicos.',
         failedDetail: 'La instalación se detuvo. Revisá el error y continuá en la terminal.',
         continueDetail: 'Seguí las instrucciones de instalación en la terminal.',
+        history: 'Etapas y detalles técnicos', disconnected: 'Sin conexión',
+        disconnectedDetail: 'El estado del host es desconocido. Reconectá para consultar la instalación guardada.',
+        resumeDetail: 'La verificación está pendiente. Ejecutá kace en la terminal y elegí Continuar para revisar la instalación.',
+        observing: 'Esperando la verificación de la instalación',
+        observingDetail: 'SSH está conectado. Esperando hasta 45 segundos a que KACE termine la verificación en curso; no se inicia otra instalación.',
+        phase_VERIFYING_CONFIG: 'Verificando la configuración activa', phase_FIRMWARE_RESTART: 'Reiniciando Klipper',
+        phase_ROLLING_BACK: 'Restaurando la configuración anterior', phase_VERIFYING_ROLLBACK: 'Verificando la restauración',
     },
     'Português': {
         title: 'Instalação do KACE', completed: 'Concluída', recovery: 'Recuperação necessária', failed: 'Falhou', action: 'Ação necessária', running: 'Em andamento',
@@ -3303,6 +3598,13 @@ const WORKFLOW_TEXT = {
         recoveryDetail: 'A instalação precisa de atenção. Continue a instalação pendente no terminal. Os detalhes técnicos estão abaixo.',
         failedDetail: 'A instalação parou. Revise o erro e continue no terminal.',
         continueDetail: 'Siga as instruções de instalação no terminal.',
+        history: 'Etapas e detalhes técnicos', disconnected: 'Sem conexão',
+        disconnectedDetail: 'O estado do host é desconhecido. Reconecte para consultar a instalação salva.',
+        resumeDetail: 'A verificação está pendente. Execute kace no terminal e escolha Continuar para verificar a instalação.',
+        observing: 'Aguardando a verificação da instalação',
+        observingDetail: 'SSH está conectado. Aguardando até 45 segundos para o KACE concluir a verificação em andamento; nenhuma nova instalação é iniciada.',
+        phase_VERIFYING_CONFIG: 'Verificando a configuração ativa', phase_FIRMWARE_RESTART: 'Reiniciando Klipper',
+        phase_ROLLING_BACK: 'Restaurando a configuração anterior', phase_VERIFYING_ROLLBACK: 'Verificando a restauração',
     },
 };
 function workflowText(key, view) {
@@ -3408,6 +3710,15 @@ function startFirstBootDiscovery(previousDevices = []) {
 
 const STUDIO_INSTALLATION_TEXT = {
     "English": {
+        "hostKeyUnknown": "Unknown SSH server identity",
+        "hostKeyHost": "Host", "hostKeyAlgorithm": "Key algorithm", "hostKeyFingerprint": "Fingerprint",
+        "hostKeyVerify": "Compare this fingerprint with the Pi using a trusted channel before accepting. A wrong identity can expose your password.",
+        "hostKeyPrompt": "Trust this exact identity? (y/n):",
+        "hostKeyAccepted": "Identity approved for the next login. Enter your credentials again.",
+        "hostKeyRejected": "Identity not approved or confirmation expired. Connection cancelled.",
+        "hostKeyChanged": "SECURITY ALERT: The SSH server identity has changed.",
+        "hostKeyChangedHelp": "A reinstalled Pi may have a new key; an attacker may also cause this. Verify its identity independently.",
+        "hostKeyClearPrompt": "Remove the old stored key? The new identity must still be verified. (y/n):",
         "navImager": "Smart Imager",
         "navCredentials": "Credentials",
         "navDiscovery": "Discovery",
@@ -3442,7 +3753,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "enableSsh": "Enable SSH",
         "sshHint": "Allows KACE Studio to connect to the Pi after it boots and opens the SSH Workspace.",
         "installCrowsnest": "Install Crowsnest (Webcam Streamer)",
-        "crowsnestHint": "Installs the webcam streaming service. Leave it disabled when the printer has no camera.",
+        "crowsnestHint": "Installs or configures webcam streaming. If the image already includes Crowsnest, leaving this unchecked preserves its installation and service state.",
         "passwordAuth": "Enable Password Authentication",
         "passwordAuthHint": "Lets you sign in using the password above. Disable it only when SSH keys are already configured.",
         "relayEnabled": "Pi controls printer power through a GPIO relay",
@@ -3472,6 +3783,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "ejectFailed": "The SD card could not be ejected. Keep it inserted and retry.",
         "ejectDesktopOnly": "Eject is available only in the Windows desktop application.",
         "recoveryConnected": "Connection to the Pi restored.",
+        "recoveryWaiting": "SSH restored. Waiting up to 45 seconds for KACE's saved installation verification. No restart or installation is repeated.",
         "recoveryComplete": "printer.cfg and the required files were installed and verified on the Pi.",
         "recoveryPending": "Installation progress is preserved, but completion still needs verification. Run kace and choose to continue the pending installation.",
         "recoveryUnavailable": "The installation state could not be verified. Run kace to review the progress and recovery instructions.",
@@ -3590,12 +3902,38 @@ const STUDIO_INSTALLATION_TEXT = {
         "wifi-password": "Wi-Fi password",
         "wifi-password-confirm": "Confirm Wi-Fi password",
         "powerPending": "Pending setup",
+        "powerState_on": "On", "powerState_off": "Off", "powerState_init": "Checking",
+        "powerState_error": "Error", "powerState_pending": "Pending setup", "powerState_unknown": "Unknown",
+        "powerUnknownHint": "No connection: the printer power state cannot be confirmed.",
+        "sshConnected": "SSH connected", "sshDisconnected": "SSH disconnected",
+        "sshRecoveryTrying": "Reconnecting to the Pi to read installation progress…",
+        "sshRecoveryFailed": "Automatic reconnection failed. Sign in again to check the saved installation.",
+        "sshConnectHint": "Select a device in Discovery to connect.",
+        "sshLost": "SSH connection lost. Host status is unknown; reconnect to check the saved installation.",
+        "terminalClosed": "Terminal finished. SSH remains connected. Disconnect and connect again to open a terminal.",
+        "workflowHistory": "Stages and technical details",
+        "bootstrapPackages": "Packages", "bootstrapPatch": "Service setup", "bootstrapConfigs": "Configuration",
+        "bootstrapDashboard": "Web interface", "bootstrapClient": "Client configuration", "bootstrapServices": "Services",
+        "bootstrapWaiting": "Waiting to start…",
+        "bootstrapStarting": "Starting installation…", "bootstrapComplete": "Host setup and KACE installation completed.",
+        "stage_PACKAGES": "Installing packages…", "stage_KLIPPER": "Installing Klipper…",
+        "stage_KLIPPER_FIX": "Configuring Klipper service…", "stage_MOONRAKER": "Installing Moonraker…",
+        "stage_CONFIGS": "Writing printer configuration…", "stage_MAINSAIL": "Installing Mainsail…",
+        "stage_FLUIDD": "Installing Fluidd…", "stage_CLIENT_CFG": "Downloading client configuration…",
+        "stage_NGINX": "Configuring Nginx…", "stage_SERVICES": "Starting services…",
+        "stage_CROWSNEST": "Installing Crowsnest…", "stage_KACE": "Installing KACE…",
         "verifying": "Verifying image...",
         "writing": "Writing...",
         "search": "First-boot search",
         "searchDone": "First-boot search finished. Manual scan remains available.",
         "stop": "Stop search",
         "download": "Download firmware",
+        "configurationDownload": "Download configuration",
+        "configurationDownloadHint": "ZIP with generated printer.cfg and, if selected, macros.cfg. Downloading does not install them.",
+        "configurationDownloadSaving": "Choose where to save the configuration ZIP…",
+        "configurationDownloadSuccess": "Configuration downloaded. This does not apply it to the printer.",
+        "configurationDownloadChanged": "The session or generated configuration changed. Refresh the current flow and retry.",
+        "configurationDownloadFailed": "Could not download the generated configuration. Check the connection and that its files still exist, then retry.",
         "progressDrive": "Drive",
         "progressFlash": "Flash",
         "progressBoot": "Boot",
@@ -3607,6 +3945,15 @@ const STUDIO_INSTALLATION_TEXT = {
         "ssidPlaceholder": "Network name / SSID"
     },
     "Español": {
+        "hostKeyUnknown": "Identidad desconocida del servidor SSH",
+        "hostKeyHost": "Equipo", "hostKeyAlgorithm": "Algoritmo de clave", "hostKeyFingerprint": "Huella",
+        "hostKeyVerify": "Compara esta huella con la del Pi por un canal confiable antes de aceptar. Una identidad incorrecta puede exponer tu contraseña.",
+        "hostKeyPrompt": "¿Confiar en esta identidad exacta? (y/n):",
+        "hostKeyAccepted": "Identidad aprobada para el próximo acceso. Introduce nuevamente tus credenciales.",
+        "hostKeyRejected": "Identidad no aprobada o confirmación vencida. Conexión cancelada.",
+        "hostKeyChanged": "ALERTA DE SEGURIDAD: La identidad del servidor SSH cambió.",
+        "hostKeyChangedHelp": "Un Pi reinstalado puede tener otra clave; también puede ser un ataque. Verifica su identidad de forma independiente.",
+        "hostKeyClearPrompt": "¿Eliminar la clave guardada? La nueva identidad deberá verificarse. (y/n):",
         "navImager": "Grabador de imágenes",
         "navCredentials": "Credenciales",
         "navDiscovery": "Descubrimiento",
@@ -3641,7 +3988,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "enableSsh": "Habilitar SSH",
         "sshHint": "Permite conectarse al Pi después del arranque y abrir el espacio SSH.",
         "installCrowsnest": "Instalar Crowsnest (cámara web)",
-        "crowsnestHint": "Instala el servicio de cámara web. Dejalo deshabilitado si no hay cámara.",
+        "crowsnestHint": "Instala o configura el servicio de cámara web. Si la imagen ya incluye Crowsnest, dejarlo sin marcar conserva su instalación y el estado del servicio.",
         "passwordAuth": "Habilitar autenticación por contraseña",
         "passwordAuthHint": "Permite ingresar con la contraseña indicada. Deshabilitalo solo si las claves SSH ya están configuradas.",
         "relayEnabled": "El Pi controla la energía mediante un relé GPIO",
@@ -3671,6 +4018,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "ejectFailed": "No se pudo expulsar la tarjeta SD. Mantenela insertada y volvé a intentarlo.",
         "ejectDesktopOnly": "La expulsión solo está disponible en la aplicación de escritorio de Windows.",
         "recoveryConnected": "Conexión con la Pi recuperada.",
+        "recoveryWaiting": "SSH recuperado. Esperando hasta 45 segundos la verificación de la instalación guardada por KACE. No se repite ningún reinicio ni instalación.",
         "recoveryComplete": "printer.cfg y los archivos necesarios quedaron instalados y verificados en la Pi.",
         "recoveryPending": "La instalación conserva su progreso, pero falta verificar el cierre. Ejecutá kace y elegí continuar la instalación pendiente.",
         "recoveryUnavailable": "No se pudo verificar el estado de la instalación. Ejecutá kace para revisar el progreso y las instrucciones de recuperación.",
@@ -3789,12 +4137,38 @@ const STUDIO_INSTALLATION_TEXT = {
         "wifi-password": "Contraseña Wi-Fi",
         "wifi-password-confirm": "Confirmar contraseña Wi-Fi",
         "powerPending": "Pendiente de configuración",
+        "powerState_on": "Encendida", "powerState_off": "Apagada", "powerState_init": "Consultando",
+        "powerState_error": "Error", "powerState_pending": "Pendiente de configuración", "powerState_unknown": "Desconocida",
+        "powerUnknownHint": "Sin conexión: no se puede confirmar el estado de la energía de la impresora.",
+        "sshConnected": "SSH conectado", "sshDisconnected": "SSH desconectado",
+        "sshRecoveryTrying": "Reconectando con la Pi para consultar la instalación…",
+        "sshRecoveryFailed": "No se pudo reconectar automáticamente. Iniciá sesión para consultar la instalación guardada.",
+        "sshConnectHint": "Seleccioná un dispositivo en Buscar para conectarte.",
+        "sshLost": "Se perdió la conexión SSH. El estado del host es desconocido; reconectá para consultar la instalación guardada.",
+        "terminalClosed": "La terminal finalizó. SSH sigue conectado. Desconectá y volvé a conectar para abrir una terminal.",
+        "workflowHistory": "Etapas y detalles técnicos",
+        "bootstrapPackages": "Paquetes", "bootstrapPatch": "Configuración del servicio", "bootstrapConfigs": "Configuración",
+        "bootstrapDashboard": "Interfaz web", "bootstrapClient": "Configuración del cliente", "bootstrapServices": "Servicios",
+        "bootstrapWaiting": "Esperando para comenzar…",
+        "bootstrapStarting": "Iniciando la instalación…", "bootstrapComplete": "Preparación del host e instalación de KACE completadas.",
+        "stage_PACKAGES": "Instalando paquetes…", "stage_KLIPPER": "Instalando Klipper…",
+        "stage_KLIPPER_FIX": "Configurando el servicio Klipper…", "stage_MOONRAKER": "Instalando Moonraker…",
+        "stage_CONFIGS": "Escribiendo la configuración…", "stage_MAINSAIL": "Instalando Mainsail…",
+        "stage_FLUIDD": "Instalando Fluidd…", "stage_CLIENT_CFG": "Descargando la configuración del cliente…",
+        "stage_NGINX": "Configurando Nginx…", "stage_SERVICES": "Iniciando servicios…",
+        "stage_CROWSNEST": "Instalando Crowsnest…", "stage_KACE": "Instalando KACE…",
         "verifying": "Verificando imagen...",
         "writing": "Grabando...",
         "search": "Buscar primer arranque",
         "searchDone": "Terminó la búsqueda automática. Podés seguir buscando manualmente.",
         "stop": "Detener búsqueda",
         "download": "Descargar firmware",
+        "configurationDownload": "Descargar configuración",
+        "configurationDownloadHint": "ZIP con printer.cfg generado y, si las elegiste, macros.cfg. Descargar no instala los archivos.",
+        "configurationDownloadSaving": "Elegí dónde guardar el ZIP de configuración…",
+        "configurationDownloadSuccess": "Configuración descargada. Esto no la aplica a la impresora.",
+        "configurationDownloadChanged": "Cambió la sesión o la configuración generada. Actualizá el flujo actual y volvé a intentar.",
+        "configurationDownloadFailed": "No se pudo descargar la configuración generada. Revisá la conexión y que sus archivos sigan disponibles; después volvé a intentar.",
         "progressDrive": "Unidad",
         "progressFlash": "Grabar",
         "progressBoot": "Arrancar",
@@ -3806,6 +4180,15 @@ const STUDIO_INSTALLATION_TEXT = {
         "ssidPlaceholder": "Nombre de la red / SSID"
     },
     "Português": {
+        "hostKeyUnknown": "Identidade desconhecida do servidor SSH",
+        "hostKeyHost": "Dispositivo", "hostKeyAlgorithm": "Algoritmo da chave", "hostKeyFingerprint": "Impressão digital",
+        "hostKeyVerify": "Compare esta impressão digital com a do Pi por um canal confiável antes de aceitar. Uma identidade incorreta pode expor sua senha.",
+        "hostKeyPrompt": "Confiar nesta identidade exata? (y/n):",
+        "hostKeyAccepted": "Identidade aprovada para o próximo acesso. Informe suas credenciais novamente.",
+        "hostKeyRejected": "Identidade não aprovada ou confirmação expirada. Conexão cancelada.",
+        "hostKeyChanged": "ALERTA DE SEGURANÇA: A identidade do servidor SSH mudou.",
+        "hostKeyChangedHelp": "Um Pi reinstalado pode ter outra chave; também pode ser um ataque. Verifique sua identidade de forma independente.",
+        "hostKeyClearPrompt": "Remover a chave salva? A nova identidade ainda deverá ser verificada. (y/n):",
         "navImager": "Gravador de imagens",
         "navCredentials": "Credenciais",
         "navDiscovery": "Descoberta",
@@ -3840,7 +4223,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "enableSsh": "Habilitar SSH",
         "sshHint": "Permite conectar ao Pi após a inicialização e abrir a área SSH.",
         "installCrowsnest": "Instalar Crowsnest (câmera web)",
-        "crowsnestHint": "Instala o serviço de câmera web. Deixe desabilitado se não há câmera.",
+        "crowsnestHint": "Instala ou configura o serviço de câmera web. Se a imagem já inclui Crowsnest, deixar desmarcado preserva a instalação e o estado do serviço.",
         "passwordAuth": "Habilitar autenticação por senha",
         "passwordAuthHint": "Permite entrar com a senha informada. Desabilite somente se as chaves SSH já estão configuradas.",
         "relayEnabled": "O Pi controla a energia por um relé GPIO",
@@ -3870,6 +4253,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "ejectFailed": "Não foi possível ejetar o cartão SD. Mantenha-o inserido e tente novamente.",
         "ejectDesktopOnly": "A ejeção está disponível apenas no aplicativo desktop para Windows.",
         "recoveryConnected": "Conexão com a Pi restabelecida.",
+        "recoveryWaiting": "SSH recuperado. Aguardando até 45 segundos a verificação da instalação salva pelo KACE. Nenhum reinício ou instalação é repetido.",
         "recoveryComplete": "printer.cfg e os arquivos necessários foram instalados e verificados na Pi.",
         "recoveryPending": "O progresso da instalação foi preservado, mas a conclusão ainda precisa ser verificada. Execute kace e escolha continuar a instalação pendente.",
         "recoveryUnavailable": "Não foi possível verificar o estado da instalação. Execute kace para revisar o progresso e as instruções de recuperação.",
@@ -3988,12 +4372,38 @@ const STUDIO_INSTALLATION_TEXT = {
         "wifi-password": "Senha Wi-Fi",
         "wifi-password-confirm": "Confirmar senha Wi-Fi",
         "powerPending": "Configuração pendente",
+        "powerState_on": "Ligada", "powerState_off": "Desligada", "powerState_init": "Consultando",
+        "powerState_error": "Erro", "powerState_pending": "Configuração pendente", "powerState_unknown": "Desconhecida",
+        "powerUnknownHint": "Sem conexão: não é possível confirmar o estado da energia da impressora.",
+        "sshConnected": "SSH conectado", "sshDisconnected": "SSH desconectado",
+        "sshRecoveryTrying": "Reconectando à Pi para consultar a instalação…",
+        "sshRecoveryFailed": "Não foi possível reconectar automaticamente. Entre novamente para consultar a instalação salva.",
+        "sshConnectHint": "Selecione um dispositivo em Buscar para conectar.",
+        "sshLost": "A conexão SSH foi perdida. O estado do host é desconhecido; reconecte para consultar a instalação salva.",
+        "terminalClosed": "O terminal terminou. SSH continua conectado. Desconecte e conecte novamente para abrir um terminal.",
+        "workflowHistory": "Etapas e detalhes técnicos",
+        "bootstrapPackages": "Pacotes", "bootstrapPatch": "Configuração do serviço", "bootstrapConfigs": "Configuração",
+        "bootstrapDashboard": "Interface web", "bootstrapClient": "Configuração do cliente", "bootstrapServices": "Serviços",
+        "bootstrapWaiting": "Aguardando início…",
+        "bootstrapStarting": "Iniciando a instalação…", "bootstrapComplete": "Preparação do host e instalação do KACE concluídas.",
+        "stage_PACKAGES": "Instalando pacotes…", "stage_KLIPPER": "Instalando Klipper…",
+        "stage_KLIPPER_FIX": "Configurando o serviço Klipper…", "stage_MOONRAKER": "Instalando Moonraker…",
+        "stage_CONFIGS": "Gravando a configuração…", "stage_MAINSAIL": "Instalando Mainsail…",
+        "stage_FLUIDD": "Instalando Fluidd…", "stage_CLIENT_CFG": "Baixando a configuração do cliente…",
+        "stage_NGINX": "Configurando Nginx…", "stage_SERVICES": "Iniciando serviços…",
+        "stage_CROWSNEST": "Instalando Crowsnest…", "stage_KACE": "Instalando KACE…",
         "verifying": "Verificando imagem...",
         "writing": "Gravando...",
         "search": "Buscar primeira inicialização",
         "searchDone": "A busca automática terminou. A busca manual continua disponível.",
         "stop": "Parar busca",
         "download": "Baixar firmware",
+        "configurationDownload": "Baixar configuração",
+        "configurationDownloadHint": "ZIP com printer.cfg gerado e, se escolhidas, macros.cfg. Baixar não instala os arquivos.",
+        "configurationDownloadSaving": "Escolha onde salvar o ZIP de configuração…",
+        "configurationDownloadSuccess": "Configuração baixada. Isto não a aplica à impressora.",
+        "configurationDownloadChanged": "A sessão ou a configuração gerada mudou. Atualize o fluxo atual e tente novamente.",
+        "configurationDownloadFailed": "Não foi possível baixar a configuração gerada. Verifique a conexão e se os arquivos ainda estão disponíveis; depois tente novamente.",
         "progressDrive": "Unidade",
         "progressFlash": "Gravar",
         "progressBoot": "Iniciar",

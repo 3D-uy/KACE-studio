@@ -1,0 +1,9 @@
+{
+  "schema": "kace-studio-preflight/v1",
+  "pin": "fe4eb8650bd7de4c2100a14eaf09b0965c430e29",
+  "files": {
+    "klipper_preflight_engine.py": "dde508139644607d09f289b1fafac587df405f9f0a5ab1ca2cedf60b188cbacc",
+    "klipper_preflight.Dockerfile": "69ae81904220bd00a47e2c6c6669b942ce5b74566a18acbfe30149a3c11a2c7c",
+    "klipper_preflight_worker.py": "c3f83e44a0b0a11daa0663a2679bb926259aca5cd6641f72755925bff561490e"
+  }
+}

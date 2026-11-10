@@ -310,15 +310,16 @@ body {
     box-shadow: 0 0 8px var(--primary-glow);
 }
 
-.wifi-label-row {
+.credentials-label-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+    min-height: 28px;
     margin-bottom: 6px;
 }
 
-.form-group .wifi-label-row > label {
+.form-group .credentials-label-row > label {
     margin-bottom: 0;
 }
 
@@ -1090,6 +1091,7 @@ body {
     background-color: #000000;
     padding: 16px;
     flex-grow: 1;
+    min-height: 120px;
     overflow: hidden;
     position: relative;
 }
@@ -1097,28 +1099,44 @@ body {
 .kace-workflow-tracker {
     background: var(--bg-card);
     border-bottom: 1px solid var(--border-color);
-    padding: 14px 24px 16px;
+    padding: 8px 16px;
+    flex: 0 1 auto;
+    max-height: 40%;
+    overflow-y: auto;
 }
 
 .kace-workflow-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 12px;
+    gap: 6px 16px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
 }
 
 .kace-workflow-header > div:first-child {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 3px 12px;
 }
+
+#kace-workflow-title { font-size: 12px; }
 
 .kace-workflow-actions {
     align-items: center;
     display: flex;
     gap: 8px;
+    flex-wrap: wrap;
 }
+
+.kace-workflow-current { color: var(--text-secondary); font-size: 12px; }
+.kace-workflow-history { margin-top: 0; font-size: 11px; }
+.kace-workflow-history summary { cursor: pointer; width: fit-content; }
+.kace-workflow-history summary:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+.kace-workflow-history[open] .kace-workflow-steps { margin-top: 8px; }
+#kace-workflow-advanced { white-space: pre-wrap; overflow-wrap: anywhere; }
+#printer-power-btn.state-unknown { color: var(--warning-color); }
 
 .kace-workflow-eyebrow {
     color: var(--text-secondary);
@@ -1192,7 +1210,7 @@ body {
 .kace-workflow-detail {
     color: var(--text-secondary);
     font-size: 11px;
-    margin-top: 10px;
+    margin: 4px 0 6px;
     min-height: 15px;
     white-space: pre-wrap;
 }
@@ -1637,6 +1655,11 @@ body.light-mode .modal-card {
 
 .password-wrapper input {
     padding-right: 40px !important;
+}
+
+/* Studio provides its own accessible reveal button in Edge/WebView2. */
+.password-wrapper input::-ms-reveal {
+    display: none;
 }
 
 .password-toggle-icon {
@@ -2264,7 +2287,8 @@ dialog.modal-overlay::backdrop { background: rgba(0, 0, 0, .65); }
 @media (max-width: 950px) {
     .power-control-container { width: 100%; min-width: 0; }
     .power-control { display: flex; min-width: 0; width: 100%; flex-direction: column; gap: 4px; padding: 8px 2px; }
-    .power-control-state { max-width: 100%; overflow-wrap: anywhere; }
+    .power-control-state { max-width: 100%; overflow-wrap: normal; word-break: normal; }
+    .sidebar:not(:has(.sftp-browser-card.is-visible)) .power-control-state { display: none; }
     /* Keep the file browser readable in every tab during an SSH connection. */
     .sidebar:has(.sftp-browser-card.is-visible) { width: 195px !important; align-items: stretch !important; }
     .sidebar:has(.sftp-browser-card.is-visible) .nav-text { display: inline !important; }

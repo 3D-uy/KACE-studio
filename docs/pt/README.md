@@ -31,7 +31,9 @@ O KACE Studio orienta a escolha de uma imagem Raspberry Pi, a configuração do 
 
 O Imager alinha as configurações em pares e abre as opções do relé GPIO ao ativá-lo. A busca pausa quando novos dispositivos respondem. Escolha Conectar, Continuar buscando (endereços já revisados não pausam novamente) ou Parar busca. Cada período dura até dez minutos; encontrar um dispositivo não verifica uma instalação do KACE.
 
-A leitura posterior está habilitada por padrão. O diálogo final informa explicitamente se a leitura da imagem foi verificada ou omitida. Essa verificação cobre a imagem gravada antes da injeção da configuração de primeiro boot; a instalação do KACE ainda exige sua própria verificação na Pi.
+A leitura posterior está habilitada por padrão. Omiti-la é uma escolha manual da sessão atual e não é salva como preferência. O diálogo final informa explicitamente se a leitura da imagem foi verificada ou omitida. Essa verificação cobre a imagem gravada antes da injeção da configuração de primeiro boot; a instalação do KACE ainda exige sua própria verificação na Pi.
+
+A opção Crowsnest solicita sua instalação durante o provisionamento. Quando desmarcada, preserva os arquivos ou o serviço Crowsnest já presentes na imagem; não os desinstala.
 
 <a id="quick-start"></a>
 <a id="download-and-install"></a>
@@ -77,6 +79,8 @@ Capturas reais do aplicativo Windows. Mostram a preparação, não uma gravaçã
 O Studio cuida da imagem, do primeiro boot e do acesso remoto. O [KACE](https://github.com/3D-uy/KACE/blob/main/docs/pt/README.md) cuida da configuração da impressora, dos fluxos de firmware MCU suportados, da aplicação e da verificação da instalação.
 
 Inicie o bootstrap pelo espaço de trabalho SSH e continue com o assistente do KACE no Pi. Algumas etapas de firmware exigem ação manual; conclua a verificação do KACE antes de colocar a impressora em operação.
+
+Se o servidor SSH for desconhecido, compare a impressão digital SHA-256 exibida com a do Pi por um canal confiável. Aceite somente se coincidir; o Studio pedirá as credenciais novamente antes de conectar. Uma chave alterada bloqueia a conexão e deve ser investigada antes de substituir a identidade salva.
 
 No código atual, o botão com bandeira acima do botão de tema claro/escuro alterna
 espanhol, inglês e português e lembra sua escolha na próxima abertura.
@@ -143,4 +147,6 @@ Correções no código-fonte: redirecionamentos do Moonraker são rejeitados. Co
 
 Novas execuções do bootstrap configuram um diário persistente do Linux com orçamento de 64 MiB, retenção de sete dias e sincronização a cada 30 segundos. Após uma inicialização interrompida, use `journalctl -b -1`; registros não sincronizados antes de um travamento ou corte podem ser perdidos. Isso não diagnostica nem corrige a causa de um travamento do host.
 
-Em uma perda recuperável de SSH, também após o bootstrap, o Studio mostra a desconexão, desativa os controles da sessão e mantém o último progresso visível. A sessão de terminal ociosa exige uma resposta do servidor a cada dez segundos, com limite de cinco segundos para responder, evitando permanecer conectada indefinidamente quando o host deixa de responder. Ao reconectar, consulta o checkpoint remoto; a reconexão não comprova a conclusão. Use o novo executável e seu bootstrap correspondente para E2E; abrir o Studio não atualiza uma instalação anterior do Pi.
+Em uma perda recuperável de SSH, também após o bootstrap, o Studio mostra a desconexão, desativa os controles da sessão e mantém o último progresso visível. A sessão de terminal ociosa consulta o servidor a cada dez segundos, com limite de cinco segundos por tentativa; uma resposta temporariamente lenta mantém o transporte SSH ativo por até 45 segundos sem resposta. Se o host permanecer silencioso, o Studio desconecta dentro desse limite. Ao reconectar, consulta o checkpoint remoto; a reconexão não comprova a conclusão. Use o novo executável e seu bootstrap correspondente para E2E; abrir o Studio não atualiza uma instalação anterior do Pi.
+
+Atualização no código-fonte: quando o KACE gera a configuração, Baixar configuração no cabeçalho do fluxo salva um ZIP com printer.cfg e o macros.cfg opcional escolhido nesse fluxo. Exporta arquivos gerados; não os instala. Exige a sessão SSH e o checkpoint atuais. Um executável anterior não recebe este botão até ser recompilado.

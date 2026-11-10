@@ -189,8 +189,13 @@ def test_remote_bootstrap_only_executes_exact_contract_bytes(tmp_path, monkeypat
     monkeypatch.setattr(main, "load_release_contract", lambda: contract)
     api = main.Api()
     api._ssh = Mock()
+    monkeypatch.setattr(main, "DockerPreflight", lambda: Mock())
+    api._ssh.start_preflight.return_value = "/tmp/kace-studio-preflight-fixture.env"
     assert api.start_bootstrap("mainsail")["status"] == "started"
     command = api._ssh.send_input.call_args.args[0]
+    environment = tmp_path / "preflight.env"
+    environment.write_text("# Synthetic private context for the bootstrap byte gate test\n")
+    command = command.replace("/tmp/kace-studio-preflight-fixture.env", "'" + environment.as_posix() + "'")
     # Production boot paths have no spaces; local temporary roots may have them.
     # Quote the file predicates before substituting the fixture paths, just like
     # the digest check and invocation already do in the real command.

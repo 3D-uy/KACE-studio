@@ -1,5 +1,8 @@
 import os
+import base64
+import hashlib
 import csv
+import json
 from contextlib import contextmanager
 from functools import lru_cache
 import math
@@ -9,8 +12,12 @@ import threading
 import time
 import select
 import posixpath
+import re
+import shlex
 import paramiko
+import uuid
 from typing import Callable
+from backend.ssh_diagnostics import record as record_ssh_diagnostic
 
 
 KNOWN_HOSTS_LOCK_TIMEOUT_SECONDS = 5.0
@@ -20,13 +27,94 @@ SFTP_TIMEOUT_SECONDS = 5.0
 SSH_INPUT_TIMEOUT_SECONDS = 5.0
 SSH_CHANNEL_TIMEOUT_SECONDS = 5.0
 SSH_HEARTBEAT_INTERVAL_SECONDS = 10.0
+SSH_HEARTBEAT_GRACE_SECONDS = 45.0
+PREFLIGHT_SETUP_TIMEOUT_SECONDS = 10.0
+_PREFLIGHT_ENV_PATH = re.compile(r"/tmp/kace-studio-preflight-[A-Za-z0-9_-]+\.env\Z")
+_PREFLIGHT_ENV_SCRIPT = """
+import json, os, re, sys, tempfile
+data = json.loads(sys.stdin.buffer.read(4097))
+expected = {'KACE_STUDIO_PREFLIGHT_PORT', 'KACE_STUDIO_PREFLIGHT_TOKEN', 'KACE_STUDIO_PREFLIGHT_SESSION'}
+if not isinstance(data, dict) or set(data) != expected:
+    raise ValueError('invalid preflight context')
+if not all(isinstance(value, str) for value in data.values()):
+    raise ValueError('invalid preflight context')
+if not re.fullmatch(r'[0-9]{1,5}', data['KACE_STUDIO_PREFLIGHT_PORT']) or not 1 <= int(data['KACE_STUDIO_PREFLIGHT_PORT']) <= 65535:
+    raise ValueError('invalid preflight port')
+if not re.fullmatch(r'[0-9a-f]{64}', data['KACE_STUDIO_PREFLIGHT_TOKEN']) or not re.fullmatch(r'[0-9a-f]{32}', data['KACE_STUDIO_PREFLIGHT_SESSION']):
+    raise ValueError('invalid preflight identity')
+fd, path = tempfile.mkstemp(prefix='kace-studio-preflight-', suffix='.env', dir='/tmp')
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as output:
+        for key, value in sorted(data.items()):
+            output.write('export ' + key + '=' + value + '\\n')
+    print(path, flush=True)
+except BaseException:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    raise
+"""
 _known_hosts_thread_lock = threading.RLock()
 
 
-class _InMemoryTOFUPolicy(paramiko.MissingHostKeyPolicy):
-    """Stage new host keys until the locked trust transaction publishes them."""
+def _preflight_channel_command(transport, command, payload=b""):
+    """Bound a non-PTY command; credentials travel only in channel stdin."""
+    channel = transport.open_session(timeout=PREFLIGHT_SETUP_TIMEOUT_SECONDS)
+    timer = threading.Timer(PREFLIGHT_SETUP_TIMEOUT_SECONDS, channel.close)
+    timer.daemon = True
+    timer.start()
+    try:
+        channel.settimeout(PREFLIGHT_SETUP_TIMEOUT_SECONDS)
+        channel.exec_command(command)
+        if payload:
+            channel.sendall(payload)
+        channel.shutdown_write()
+        output = bytearray()
+        while True:
+            part = channel.recv(1024)
+            if not part:
+                break
+            output.extend(part)
+            if len(output) > 4096:
+                raise RuntimeError("Preflight setup returned excessive output")
+        if channel.recv_exit_status() != 0:
+            raise RuntimeError("Remote preflight context setup failed")
+        return bytes(output)
+    finally:
+        timer.cancel()
+        channel.close()
+
+
+class UnknownHostKey(paramiko.SSHException):
+    """A host identity must be approved before authentication."""
+
+    def __init__(self, hostname, key):
+        self.hostname = hostname
+        self.key_type = key.get_name()
+        self.key_base64 = key.get_base64()
+        self.fingerprint = "SHA256:" + base64.b64encode(
+            hashlib.sha256(key.asbytes()).digest()
+        ).decode("ascii").rstrip("=")
+        super().__init__("SSH host identity requires confirmation")
+
+
+class _ConfirmedHostKeyPolicy(paramiko.MissingHostKeyPolicy):
+    def __init__(self, approved, cancelled, deadline, approval_current=None):
+        self.approved = approved
+        self.cancelled = cancelled
+        self.deadline = deadline
+        self.approval_current = approval_current
 
     def missing_host_key(self, client, hostname, key):
+        if self.cancelled.is_set() or time.monotonic() >= self.deadline:
+            raise SSHConnectionDeadlineExceeded("SSH connection deadline exceeded.")
+        identity = (hostname, key.get_name(), key.get_base64())
+        if not self.approved or identity != self.approved:
+            raise UnknownHostKey(hostname, key)
+        if self.approval_current is not None and not self.approval_current():
+            raise SSHConnectionDeadlineExceeded("SSH host approval was superseded.")
         client.get_host_keys().add(hostname, key.get_name(), key)
 
 
@@ -278,16 +366,29 @@ def _persist_host_keys_atomically(
 
 class SSHSession:
     def __init__(self):
+        self._diagnostic_id = uuid.uuid4().hex
         self.client = None
         self.channel = None
         self.running = False
         self._state_lock = threading.RLock()
         self._send_lock = threading.Lock()
+        self.approved_host_key = None
+        self.approval_current = None
+        self._preflight_bridge = None
+        self._preflight_file = None
+        self._preflight_generation = 0
 
     def _discard_client(self, client) -> None:
+        record_ssh_diagnostic("client_discard", session=self._diagnostic_id)
+        bridge = None
         with self._state_lock:
             if self.client is client:
                 self.client = None
+                bridge, self._preflight_bridge = self._preflight_bridge, None
+                self._preflight_file = None
+                self._preflight_generation += 1
+        if bridge is not None:
+            bridge.close()
         try:
             client.close()
         except Exception:
@@ -313,7 +414,82 @@ class SSHSession:
             client = self.client
             self.channel = None
             self.client = None
+            bridge, self._preflight_bridge = self._preflight_bridge, None
+            self._preflight_file = None
+            self._preflight_generation += 1
+        if bridge is not None:
+            bridge.close()
         return channel, client
+
+    def start_preflight(self, validator, *, generation=None):
+        """Bind one PC validator to this authenticated session without PTY secrets."""
+        from backend.studio_preflight_bridge import StudioPreflightBridge
+
+        with self._state_lock:
+            client = self.client
+            if generation is not None and generation != self._preflight_generation:
+                raise RuntimeError("SSH preflight preparation was superseded")
+            if client is None or self._preflight_bridge is not None:
+                raise RuntimeError("SSH preflight session is unavailable or already active")
+            transport = client.get_transport()
+            if transport is None or not transport.is_active():
+                raise RuntimeError("SSH preflight session is disconnected")
+            bridge = StudioPreflightBridge(transport, validator)
+            self._preflight_bridge = bridge
+        path = None
+        try:
+            environment = bridge.start()
+            payload = json.dumps(environment, separators=(",", ":")).encode("utf-8")
+            if len(payload) > 4096:
+                raise RuntimeError("Invalid preflight context size")
+            command = "python3 -c " + shlex.quote(_PREFLIGHT_ENV_SCRIPT)
+            result = _preflight_channel_command(transport, command, payload)
+            path = result.decode("ascii").strip()
+            if not _PREFLIGHT_ENV_PATH.fullmatch(path):
+                raise RuntimeError("Invalid remote preflight context path")
+            with self._state_lock:
+                if (self.client is not client or self._preflight_bridge is not bridge
+                        or not transport.is_active()):
+                    raise RuntimeError("SSH session changed during preflight setup")
+                self._preflight_file = path
+            return path
+        except Exception:
+            with self._state_lock:
+                if self._preflight_bridge is bridge:
+                    self._preflight_bridge = None
+                    self._preflight_file = None
+            bridge.close()
+            self._cleanup_preflight_file(transport, path)
+            raise
+
+    @staticmethod
+    def _cleanup_preflight_file(transport, path):
+        # A disconnected host can retain the private temporary file, but closing
+        # its bridge revokes that token. Never delete an unvalidated path.
+        if isinstance(path, str) and _PREFLIGHT_ENV_PATH.fullmatch(path):
+            try:
+                if transport is not None and transport.is_active():
+                    _preflight_channel_command(transport, "rm -f -- " + shlex.quote(path))
+            except Exception:
+                pass
+
+    def stop_preflight(self, path=None):
+        """Revoke this context before cleanup, optionally matching its owner path."""
+        with self._state_lock:
+            if path is not None and path != self._preflight_file:
+                return self._preflight_generation
+            bridge, self._preflight_bridge = self._preflight_bridge, None
+            path, self._preflight_file = self._preflight_file, None
+            client = self.client
+            self._preflight_generation += 1
+            generation = self._preflight_generation
+        if bridge is not None:
+            bridge.close()
+        if path is not None:
+            transport = client.get_transport() if client is not None else None
+            threading.Thread(target=self._cleanup_preflight_file, args=(transport, path),
+                             daemon=True, name="kace-preflight-context-cleanup").start()
+        return generation
 
     def _abort_connect_nonblocking(self) -> None:
         channel, client = self._detach_transport()
@@ -382,13 +558,8 @@ class SSHSession:
         Establishes an SSH connection to the target device with exponential backoff retries.
         Supports custom ports specified in the format IP:PORT (e.g. 127.0.0.1:2222).
 
-        HOST KEY SECURITY (TOFU — Trust On First Use):
-        - On the first connection to a host, the key is accepted and persisted to
-          ~/.kace/known_hosts.
-        - On subsequent connections, the server key is validated against the stored key.
-          If it has changed (potential MITM), the connection is rejected with a clear error.
-        - TOFU is only applied to *missing* entries; existing entries are always
-          validated by paramiko regardless of policy, so key changes are always detected.
+        Unknown keys must match an explicit approval before authentication.
+        Known keys are verified by Paramiko against the durable trust store.
         """
         retries = 5
         delay = 1
@@ -436,7 +607,10 @@ class SSHSession:
                     # For known hosts, paramiko always validates the key against
                     # load_host_keys() entries regardless of policy, so a key change
                     # (MITM indicator) raises BadHostKeyException unconditionally.
-                    client.set_missing_host_key_policy(_InMemoryTOFUPolicy())
+                    client.set_missing_host_key_policy(
+                        _ConfirmedHostKeyPolicy(self.approved_host_key, cancelled, deadline,
+                                                self.approval_current)
+                    )
 
                     phase_timeout = min(5.0, remaining)
                     client.connect(
@@ -464,8 +638,12 @@ class SSHSession:
                             "SSH connection deadline exceeded."
                         )
 
+                record_ssh_diagnostic("connected", session=self._diagnostic_id)
                 return True
 
+            except UnknownHostKey:
+                self._discard_client(client)
+                raise
             except paramiko.BadHostKeyException as e:
                 # The remote host key changed — surface a clear error and do NOT retry.
                 print(f"[SECURITY] SSH host key mismatch for {ip}: {e}")
@@ -483,6 +661,7 @@ class SSHSession:
 
             except Exception as e:
                 print(f"SSH connection attempt {attempt + 1}/{retries + 1} failed to {ip}: {e}")
+                record_ssh_diagnostic("connect_error", session=self._diagnostic_id, error=e)
                 self._discard_client(client)
                 if cancelled.is_set():
                     raise SSHConnectionDeadlineExceeded(
@@ -518,6 +697,9 @@ class SSHSession:
             decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
             channel = None
             setup_timer = None
+            phase = "channel_open"
+            transport = None
+            record_ssh_diagnostic("stream_start", session=self._diagnostic_id)
             try:
                 transport = client.get_transport()
                 channel = transport.open_session(timeout=SSH_CHANNEL_TIMEOUT_SECONDS)
@@ -531,32 +713,52 @@ class SSHSession:
                 setup_timer.daemon = True
                 setup_timer.start()
                 # Request pty with actual frontend terminal dimensions and 256color support
+                phase = "pty"
                 self.channel.get_pty(term='xterm-256color', width=cols, height=rows)
+                phase = "exec"
                 self.channel.exec_command(command)
                 setup_timer.cancel()
                 last_response = time.monotonic()
+                last_probe = last_response
                 
                 while self.running:
+                    phase = "transport_check"
                     if not transport.is_active():
                         raise EOFError("SSH transport disconnected.")
-                    if time.monotonic() - last_response >= SSH_HEARTBEAT_INTERVAL_SECONDS:
+                    if time.monotonic() - last_probe >= SSH_HEARTBEAT_INTERVAL_SECONDS:
                         # Channel opening requires an acknowledged SSH reply,
                         # unlike Paramiko's fire-and-forget keepalive. No remote
                         # command or hardware action is executed by this probe.
+                        # A single delayed reply during MCU/Klipper activation
+                        # must not tear down the interactive KACE process.
                         try:
+                            phase = "heartbeat"
                             probe = transport.open_session(timeout=SSH_CHANNEL_TIMEOUT_SECONDS)
                         except paramiko.ChannelException:
-                            pass  # A refusal is also an observed server reply.
+                            record_ssh_diagnostic("heartbeat_refused", session=self._diagnostic_id)
+                            last_response = time.monotonic()  # A refusal is an observed server reply.
+                        except (OSError, paramiko.SSHException) as probe_error:
+                            record_ssh_diagnostic("heartbeat_error", session=self._diagnostic_id,
+                                                  phase=phase, error=probe_error,
+                                                  active=bool(transport.is_active()))
+                            if (not transport.is_active() or
+                                    time.monotonic() - last_response >= SSH_HEARTBEAT_GRACE_SECONDS):
+                                raise
                         else:
                             probe.close()
-                        last_response = time.monotonic()
+                            record_ssh_diagnostic("heartbeat_reply", session=self._diagnostic_id)
+                            last_response = time.monotonic()
+                        last_probe = time.monotonic()
                     # Use select() to block until data is available or timeout
                     # This prevents CPU-burning busy-wait and ensures escape
                     # sequences arrive as complete contiguous chunks
+                    phase = "receive"
                     r, _, _ = select.select([self.channel], [], [], 0.1)
                     if r:
                         data = self.channel.recv(16384)
                         if not data:
+                            record_ssh_diagnostic("channel_eof", session=self._diagnostic_id,
+                                                  active=bool(transport.is_active()))
                             break
                         last_response = time.monotonic()
                         text = decoder.decode(data)
@@ -564,13 +766,22 @@ class SSHSession:
                     
                     # Check exit status if no more data is available
                     if self.channel.exit_status_ready() and not self.channel.recv_ready():
+                        record_ssh_diagnostic("channel_exit", session=self._diagnostic_id,
+                                              active=bool(transport.is_active()))
                         break
                         
             except Exception as e:
+                record_ssh_diagnostic("stream_error", session=self._diagnostic_id,
+                                      phase=phase, error=e,
+                                      active=self.is_connected())
                 self._discard_client(client)
                 on_data_callback(f"\r\n[SSH Stream Error]: {e}\r\n")
             finally:
+                record_ssh_diagnostic("stream_end", session=self._diagnostic_id)
                 self.running = False
+                # EOF invalidates the validator even while SSH transport itself
+                # remains alive; late Docker results cannot authorize publication.
+                self.stop_preflight()
                 if setup_timer is not None:
                     setup_timer.cancel()
                 try:
@@ -647,6 +858,7 @@ class SSHSession:
         """
         Safely tears down active channels and connections.
         """
+        record_ssh_diagnostic("close_requested", session=self._diagnostic_id)
         channel, client = self._detach_transport()
         self._close_transport_objects(channel, client)
 

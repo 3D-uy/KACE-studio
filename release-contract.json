@@ -184,6 +184,7 @@
     }
   },
   "bundled_resources": [
+    "preflight",
     "bootstrap.sh",
     "image-manifest.json",
     "release-contract.json",

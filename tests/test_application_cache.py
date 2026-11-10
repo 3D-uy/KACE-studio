@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -60,4 +61,22 @@ def test_frozen_runtime_rejects_persistent_cache_inside_meipass(tmp_path, monkey
     monkeypatch.setattr(sys, "_MEIPASS", str(extraction_root), raising=False)
 
     with pytest.raises(app_paths.ApplicationPathError, match="PyInstaller"):
+        app_paths.verify_application_cache_contract()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows drive paths are required")
+def test_frozen_cache_on_another_drive_is_valid(monkeypatch):
+    cache = Path(chr(67) + r":\KACE-test\cache")
+    monkeypatch.setattr(app_paths, "application_cache_dir", lambda **_kwargs: cache)
+    monkeypatch.setattr(sys, "_MEIPASS", chr(68) + r":\KACE-test\runtime", raising=False)
+    assert app_paths.verify_application_cache_contract() == cache
+
+
+def test_unexpected_commonpath_error_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "data"))
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "runtime"), raising=False)
+    def invalid_commonpath(_paths):
+        raise ValueError("unexpected")
+    monkeypatch.setattr(app_paths.os.path, "commonpath", invalid_commonpath)
+    with pytest.raises(app_paths.ApplicationPathError, match="invalid"):
         app_paths.verify_application_cache_contract()

@@ -1,6 +1,6 @@
 """Loopback F1 fixture: synthetic IO only; never imports the product backend.
 Run python tests/ux_browser_fixture.py and open http://127.0.0.1:8766/.
-Query flags: preview (clean interactive demo), startup (disconnected), invalid, risk, sftp, nodrives, discovery; lang=en/es/pt. Stop with Ctrl+C.
+Query flags: preview (clean interactive demo), startup (disconnected), invalid, risk, sftp, nodrives, discovery, configuration; lang=en/es/pt. Stop with Ctrl+C.
 """
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,7 +28,8 @@ window.addEventListener('load', () => {
   set_preferences:()=>Promise.resolve(true),resize_ssh_pty:()=>{},scan_network:()=>Promise.resolve(params.has('discovery') ? (++scanCalls < 3
     ? [{ip:'192.0.2.10',hostname:'test-device.local',ssh:true}]
     : [{ip:'192.0.2.10',hostname:'test-device.local',ssh:true},{ip:'192.0.2.20',hostname:'kace-preview.local',ssh:true,moonraker:true}]) : []),
-  download_file:(...args)=>{if(preview)return Promise.resolve(true);output.dataset.download=JSON.stringify(args);return new Promise(resolve=>downloads.push(resolve));}
+  download_file:(...args)=>{if(preview)return Promise.resolve(true);output.dataset.download=JSON.stringify(args);return new Promise(resolve=>downloads.push(resolve));},
+  download_kace_configuration:()=>Promise.resolve({status:'success'})
  }};
  window.fetch=url=>preview?Promise.resolve({ok:true,json:async()=>({path:new URL(url,location.origin).searchParams.get('path'),generation:7,items:[{name:'configs',is_dir:true},{name:'logs',is_dir:true},{name:'printer.cfg',is_dir:false},{name:'macros.cfg',is_dir:false},{name:'moonraker.conf',is_dir:false}]})}):new Promise((resolve,reject)=>lists.push({url,resolve,reject}));
  const toolbar=document.createElement('div');toolbar.id='fixture-controls';
@@ -48,6 +49,11 @@ window.addEventListener('load', () => {
  if(params.has('nodrives')){drive.replaceChildren(new Option('No removable drives found.',''));driveIdentitySnapshots.clear();}
  if((preview&&!params.has('startup'))||params.has('sftp')){sshConnected=true;refreshSftpBrowser();}
  if(params.has('sftp'))switchTab('terminal-tab');
+ if(params.has('configuration')){
+  switchTab('terminal-tab');currentDeviceIp='192.0.2.20';currentDeviceName='Pi simulada';
+  updateConnectionStatus(true,{newSession:true});firmwareGeneration=7;
+  window.updateKaceWorkflowEvent({schema:2,workflow_kind:'firmware_deployment',workflow_id:'fixture-configuration',sequence:1,state:'CONFIG_GENERATED',data:{configuration_download_available:true,language:studioLanguage()}},7);
+ }
 });
 </script>
 """

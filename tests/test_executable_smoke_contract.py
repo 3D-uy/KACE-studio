@@ -104,3 +104,22 @@ def test_source_smoke_fails_closed_on_bridge_mismatch(monkeypatch):
     with pytest.raises(RuntimeError, match="runtime contract mismatch"):
         main.run_pywebview_smoke_test(timeout_seconds=1)
     assert runtime.window.destroyed is True
+
+
+def test_smoke_rejects_missing_tls_runtime_before_opening_window(monkeypatch):
+    import ssl
+    import main
+
+    runtime = _FakeWebView({
+        "title": "KACE Studio", "ready": True, "root": True, "bridge": True,
+    })
+    monkeypatch.setattr(main, "webview", runtime)
+    monkeypatch.setattr(main, "verify_runtime_resources", lambda: None)
+
+    def missing_certificate_file(*args, **kwargs):
+        raise FileNotFoundError("TLS runtime certificate file is missing")
+
+    monkeypatch.setattr(ssl, "create_default_context", missing_certificate_file)
+    with pytest.raises(FileNotFoundError, match="TLS runtime certificate"):
+        main.run_pywebview_smoke_test(timeout_seconds=1)
+    assert runtime.create_kwargs is None

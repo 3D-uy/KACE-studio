@@ -31,7 +31,9 @@ KACE Studio te guía para elegir una imagen de Raspberry Pi, configurar el prime
 
 Imager alinea los ajustes por pares y abre las opciones del relé GPIO al activarlo. La búsqueda se pausa cuando responden equipos nuevos. Elegí Conectar, Seguir buscando (las direcciones ya revisadas no vuelven a pausarla) o Detener búsqueda. Cada período de búsqueda dura hasta diez minutos; encontrar un equipo no verifica una instalación de KACE.
 
-La lectura posterior está habilitada por defecto. El diálogo final indica explícitamente si se verificó la lectura de la imagen o se omitió. Esa comprobación cubre la imagen escrita antes de inyectar la configuración de primer arranque; la instalación de KACE sigue requiriendo su propia verificación en la Pi.
+La lectura posterior está habilitada por defecto. Omitirla es una elección manual de la sesión actual y no se guarda como preferencia. El diálogo final indica explícitamente si se verificó la lectura de la imagen o se omitió. Esa comprobación cubre la imagen escrita antes de inyectar la configuración de primer arranque; la instalación de KACE sigue requiriendo su propia verificación en la Pi.
+
+La casilla Crowsnest solicita su instalación durante la provisión. Si queda desmarcada, se conservan los archivos o el servicio Crowsnest que ya estén presentes en la imagen; no se desinstalan.
 
 <a id="quick-start"></a>
 <a id="download-and-install"></a>
@@ -77,6 +79,8 @@ Capturas reales de la aplicación Windows. Muestran la preparación, no una escr
 Studio se ocupa de la imagen, el primer arranque y el acceso remoto. [KACE](https://github.com/3D-uy/KACE/blob/main/docs/es/README.md) se ocupa de la configuración de impresora, los flujos de firmware MCU admitidos, la aplicación y la verificación de la instalación.
 
 Inicia el bootstrap desde el espacio de trabajo SSH y continúa con el asistente de KACE en la Pi. Algunos pasos de firmware requieren intervención manual; completa la verificación de KACE antes de poner en marcha la impresora.
+
+Si el servidor SSH es desconocido, compara la huella SHA-256 mostrada con la de la Pi por un canal confiable. Acepta solo si coincide; Studio volverá a pedir las credenciales antes de conectar. Una clave modificada bloquea la conexión y debe investigarse antes de reemplazar la identidad guardada.
 
 En el código actual, el botón con bandera encima del botón de tema claro/oscuro
 alterna español, inglés y portugués y recuerda tu elección para la próxima apertura.
@@ -143,4 +147,6 @@ Correcciones en fuente: se rechazan redirecciones de Moonraker. Consultá los [c
 
 Las nuevas ejecuciones de bootstrap configuran un diario persistente de Linux con un presupuesto de 64 MiB, retención de siete días y sincronización cada 30 segundos. Tras un arranque interrumpido, usa `journalctl -b -1`; los registros no sincronizados antes de un bloqueo o corte pueden perderse. Esto no diagnostica ni corrige la causa de un bloqueo del host.
 
-Ante una pérdida recuperable de SSH, también después del bootstrap, Studio muestra la desconexión, deshabilita los controles de sesión y conserva visible el último progreso. La terminal inactiva exige una respuesta del servidor cada diez segundos, con un límite de cinco segundos para responder, evitando quedar conectada indefinidamente si el host deja de responder. Al reconectar consulta el checkpoint remoto; la reconexión no demuestra que la instalación terminó. Usa el ejecutable nuevo y su bootstrap correspondiente para E2E; abrir Studio no actualiza una instalación anterior de la Pi.
+Ante una pérdida recuperable de SSH, también después del bootstrap, Studio muestra la desconexión, deshabilita los controles de sesión y conserva visible el último progreso. La terminal inactiva consulta al servidor cada diez segundos, con un límite de cinco segundos por intento; una respuesta temporalmente lenta conserva el transporte SSH activo durante un máximo de 45 segundos sin respuesta. Si el host permanece en silencio, Studio se desconecta dentro de ese límite. Al reconectar consulta el checkpoint remoto; la reconexión no demuestra que la instalación terminó. Usa el ejecutable nuevo y su bootstrap correspondiente para E2E; abrir Studio no actualiza una instalación anterior de la Pi.
+
+Actualización en fuente: cuando KACE genera la configuración, Descargar configuración en el encabezado del flujo guarda un ZIP con printer.cfg y el macros.cfg opcional elegido en ese flujo. Exporta archivos generados; no los instala. Requiere la sesión SSH y el checkpoint actuales. Un ejecutable anterior no incorpora este botón hasta recompilarlo.

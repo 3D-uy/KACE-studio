@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const nodes = new Map(), timers = [], requests = {login: [], checkpoint: [], sftp: [], downloads: []};
+const nodes = new Map(), timers = [], requests = {login: [], checkpoint: [], sftp: [], downloads: [], configurationDownloads: []};
 function node() {
     const classes = new Set();
     return {style: {}, dataset: {}, children: [], value: '', disabled: false, textContent: '',
@@ -22,7 +22,7 @@ function deferred(kind, args) {
 }
 const context = {console, assert, requests, timers, deferred, scenarioName: process.argv[3],
     robinEvents: process.argv[4] ? JSON.parse(fs.readFileSync(process.argv[4], 'utf8')) : null,
-    document: {addEventListener() {}, querySelectorAll() {return [];}, createElement: node,
+    document: {documentElement: {}, addEventListener() {}, querySelectorAll() {return [];}, createElement: node,
         getElementById(id) {if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id);}},
     navigator: {language: 'en'}, addEventListener() {},
     setTimeout(fn, delay) {timers.push({fn, delay}); return timers.length;},
@@ -36,6 +36,7 @@ const context = {console, assert, requests, timers, deferred, scenarioName: proc
         get_firmware_workflow_checkpoint: (...args) => deferred('checkpoint', args),
         get_remote_power_config: () => Promise.resolve({status: 'disabled'}),
         download_file: (...args) => {requests.downloads.push(args); return Promise.resolve(true);},
+        download_kace_configuration: (...args) => deferred('configurationDownloads', args),
     }},
 };
 context.window = context;
@@ -60,10 +61,440 @@ async function login(generation) {
 }
 function begin() {
     window.updateDeviceState('BOOTSTRAPPING', 0, 'Starting bootstrap');
-    window.updateBootstrapEvent({protocol: 'kace-bootstrap/v1', workflow_id: 'boot', sequence: 1, event: 'workflow_started'});
+    window.updateBootstrapEvent({protocol: 'kace-bootstrap/v1', workflow_id: 'boot', sequence: 1, event: 'workflow_started'}, powerContext);
 }
 `;
 const cases = {
+    host_key_confirmation: `
+        const output = [];
+        window.Terminal = class {
+            constructor() { this.cols=80; this.rows=24; }
+            loadAddon() {} open() {} onResize() {} clear() {}
+            onData(fn) { this.input=fn; }
+            write(text) { output.push(text); }
+        };
+        window.FitAddon = {FitAddon: class {fit() {}}};
+        initTerminal();
+        pywebview.api.respond_ssh_host_key = (token, accept) => {
+            assert.equal(token, 'challenge'); assert.equal(accept, true); return Promise.resolve(true);
+        };
+        for (const language of ['English', 'Español', 'Português']) {
+            selectedStudioLanguage=language;
+            performSshLogin('pi', 'first-password'); await tick();
+            const selected = powerSelection;
+            requests.login.at(-1).resolve({status:'host_key_confirmation_required', token:'challenge',
+                host:'pi.local', algorithm:'ssh-ed25519', fingerprint:'SHA256:example'}); await tick();
+            assert.equal(loginState, 'PROMPTING_HOST_KEY');
+            assert.ok(output.join('').includes(studioText('hostKeyVerify')));
+            assert.ok(output.join('').includes('SHA256:example'));
+            term.input('y'); await tick();
+            assert.equal(loginState, 'PROMPTING_USER');
+            assert.equal(approvedHostSelection, selected);
+            performSshLogin('pi', 'second-password'); await tick();
+            assert.equal(powerSelection, selected);
+            assert.equal(requests.login.at(-1).args[2], 'second-password');
+            requests.login.at(-1).resolve({status:'failed'}); await tick();
+        }
+        performSshLogin('pi', 'password'); await tick();
+        requests.login.at(-1).resolve({status:'host_key_confirmation_required', token:'challenge',
+            host:'pi.local', algorithm:'ssh-ed25519', fingerprint:'SHA256:example'}); await tick();
+        pywebview.api.respond_ssh_host_key = (token, accept) => {
+            assert.equal(accept, false); return Promise.resolve(false);
+        };
+        term.input('n'); await tick();
+        assert.equal(loginState, 'PROMPTING_USER');
+        assert.equal(approvedHostSelection, null);
+        performSshLogin('pi', 'password'); await tick();
+        requests.login.at(-1).resolve({status:'host_key_confirmation_required', token:'challenge',
+            host:'pi.local', algorithm:'ssh-ed25519', fingerprint:'SHA256:example'}); await tick();
+        let resolveApproval;
+        pywebview.api.respond_ssh_host_key = () => new Promise(resolve => {resolveApproval=resolve;});
+        term.input('y');
+        resetPowerTarget('other.local'); await tick();
+        resolveApproval(true); await tick();
+        assert.notEqual(approvedHostSelection, powerSelection);
+    `,
+    manifest_never_completes_installation: `
+        await login(7);
+        requests.checkpoint.at(-1).resolve(null); await tick();
+        for (const language of ['English', 'Español', 'Português']) {
+            selectedStudioLanguage=language;
+            for (const [index,state] of ['COMPLETE','DONE',undefined,'READY_TO_DEPLOY'].entries()) {
+                const id=language+'-'+index;
+                const manifest={schema:1,workflow_kind:'firmware_deployment',workflow_id:id,sequence:1,
+                    generation:7,state,deployment:{deployment_id:id,final_filename:'firmware.bin',
+                        staged_path:'/home/kace/kace/deploy/'+id+'/firmware.bin'}};
+                assert.equal(restoreKaceDeploymentManifest(manifest),false);
+                assert.equal(kaceWorkflowViews.has(id),false);
+                assert.equal(window.updateKaceWorkflowEvent({...event(1),state,workflow_id:id},7,false,'manifest'),false);
+                assert.equal(document.getElementById('kace-workflow-tracker').classList.contains('success'),false);
+            }
+        }
+        requests.checkpoint=[];
+        selectedStudioLanguage='Español';
+        const complete={...event(2,'COMPLETE'),data:{language:'Español'}};
+        assert.equal(window.updateKaceWorkflowEvent(complete,7),true);
+        assert.equal(document.getElementById('kace-workflow-status').textContent,'Completada');
+        assert.equal(restoreKaceDeploymentManifest({schema:1,workflow_kind:'firmware_deployment',workflow_id:'bad',
+            sequence:999,generation:7,state:'DONE',deployment:{}}),false);
+        assert.equal(document.getElementById('kace-workflow-status').textContent,'Completada');
+    `,
+    manifest_positive_states_and_authority: `
+        await login(7);
+        for (const language of ['English','Español','Português']) {
+            selectedStudioLanguage=language;
+            for (const [index,state] of ['ARTIFACT_READY','MEDIA_PREPARED','ACTION_REQUIRED','FLASHED','CANCELLED','FAILED_FLASH'].entries()) {
+                const id=language+'-'+state;
+                assert.equal(restoreKaceDeploymentManifest({schema:1,workflow_kind:'firmware_deployment',
+                    workflow_id:id,sequence:index+1,state,generation:7,deployment:{deployment_id:id,
+                        final_filename:'Robin_nano.bin',staged_path:'/home/kace/kace/deploy/'+id+'/Robin_nano.bin',
+                        instructions:[{id:'copy',text:'Copy the final file'}]}}),true);
+                const view=kaceWorkflowViews.get(id);
+                assert.equal(view.state,state);
+                assert.equal(document.getElementById('kace-workflow-tracker').classList.contains('success'),false);
+                assert.notEqual(document.getElementById('kace-workflow-detail').textContent,workflowText('completeDetail',view));
+                const downloadable=['ARTIFACT_READY','MEDIA_PREPARED','ACTION_REQUIRED'].includes(state);
+                assert.equal(document.getElementById('kace-firmware-download').style.display,downloadable?'inline-flex':'none');
+                assert.equal(document.getElementById('kace-configuration-download').style.display,'none');
+                if (downloadable) {
+                    assert.equal(window.downloadKaceFirmwareArtifact(),true);
+                    assert.deepEqual(Array.from(requests.downloads.at(-1)),[view.data.staged_path,7]);
+                    await tick();
+                }
+            }
+        }
+        const checkpoint={...event(1,'COMPLETE'),workflow_id:'verified',data:{language:'English'}};
+        window.updateKaceWorkflowEvent(checkpoint,7);
+        assert.equal(document.getElementById('kace-workflow-tracker').classList.contains('success'),true);
+        assert.equal(restoreKaceDeploymentManifest({schema:1,workflow_kind:'firmware_deployment',workflow_id:'late',
+            sequence:999,generation:7,state:'FLASHED',deployment:{deployment_id:'late',
+                final_filename:'firmware.bin',staged_path:'/home/kace/kace/firmware.bin'}}),false);
+        // The supported installation event stream keeps its original DONE semantics.
+        window.updateKaceWorkflowEvent({schema:1,workflow_id:'legacy',sequence:1,state:'DONE',data:{}},7);
+        assert.equal(document.getElementById('kace-workflow-tracker').classList.contains('success'),true);
+    `,
+    manifest_discard_and_reconnect: `
+        await login(7);
+        const manifest={schema:1,workflow_kind:'firmware_deployment',workflow_id:'flow',sequence:99,
+            generation:7,state:'ARTIFACT_READY',deployment:{deployment_id:'flow',
+                final_filename:'firmware.bin',staged_path:'/home/kace/kace/firmware.bin'}};
+        assert.equal(restoreKaceDeploymentManifest(manifest),true);
+        requests.checkpoint.at(-1).resolve({generation:7,event:event(2,'DEPLOYING'),checkpoint:{state:'DEPLOYING'}});
+        await tick();
+        assert.equal(kaceWorkflowViews.get('flow').state,'DEPLOYING');
+        assert.equal(window.updateKaceWorkflowEvent(event(3,'DISCARDED'),7),true);
+        assert.equal(restoreKaceDeploymentManifest({...manifest,sequence:100}),false);
+        assert.equal(document.getElementById('kace-workflow-tracker').style.display,'none');
+        window.updateSshDisconnected('lost',false);
+        assert.equal(restoreKaceDeploymentManifest({...manifest,workflow_id:'old'}),false);
+        await login(8);
+        assert.equal(restoreKaceDeploymentManifest({...manifest,workflow_id:'old'}),false);
+        const fresh={...manifest,workflow_id:'new',generation:8,deployment:{...manifest.deployment,deployment_id:'new'}};
+        assert.equal(restoreKaceDeploymentManifest(fresh),true);
+        assert.equal(window.downloadKaceFirmwareArtifact(),true);
+        assert.equal(requests.downloads.at(-1)[1],8);
+    `,
+    manifest_checkpoint_api_evidence: `
+        requests.manifest=[];
+        pywebview.api.get_firmware_deployment_manifest=()=>deferred('manifest',[]);
+        await login(7);
+        // Payloads came through the real Python checkpoint/manifest APIs.
+        requests.checkpoint.at(-1).resolve(robinEvents.invalidCheckpoint); await tick();
+        requests.manifest.at(-1).resolve(robinEvents.invalidManifest); await tick();
+        assert.equal(kaceWorkflowViews.size,0);
+        assert.equal(document.getElementById('kace-workflow-tracker').classList.contains('success'),false);
+        for (const language of ['English','Español','Português']) {
+            setStudioLanguage(language,false);
+            const authoritative=robinEvents.complete;
+            window.restoreSshAfterReconnect(result(7),powerSelection,authoritative);
+            const view=kaceWorkflowViews.get(authoritative.event.workflow_id);
+            assert.equal(document.getElementById('kace-workflow-status').textContent,workflowText('completed',view));
+            assert.equal(document.getElementById('kace-workflow-tracker').classList.contains('success'),true);
+            assert.equal(restoreKaceDeploymentManifest(robinEvents.invalidManifest),false);
+            assert.equal(document.getElementById('kace-workflow-tracker').classList.contains('success'),true);
+        }
+    `,
+    configuration_download_lifecycle: `
+        await login(7);
+        const button=document.getElementById('kace-configuration-download');
+        for (const [index,language] of ['English','Español','Português'].entries()) {
+            selectedStudioLanguage=language;
+            const sequence=index+1;
+            window.updateKaceWorkflowEvent({...event(sequence,'CONFIG_GENERATED'),data:{configuration_download_available:true,language}},7);
+            assert.equal(button.style.display,'inline-flex');
+            assert.equal(button.textContent,studioText('configurationDownload'));
+            assert.equal(window.downloadKaceConfiguration(),true);
+            assert.deepEqual(Array.from(requests.configurationDownloads.at(-1).args),['flow',sequence,7]);
+            assert.equal(button.disabled,true);
+            assert.equal(window.downloadKaceConfiguration(),false);
+            requests.configurationDownloads.at(-1).resolve({status:'success'});await tick();
+            assert.equal(button.disabled,false);
+            assert.equal(document.getElementById('kace-configuration-download-status').textContent,studioText('configurationDownloadSuccess'));
+        }
+        window.updateKaceWorkflowEvent({...event(4,'DISCARDED'),data:{}},7);
+        assert.equal(button.style.display,'none');
+        assert.equal(window.downloadKaceConfiguration(),false);
+        assert.equal(window.updateKaceWorkflowEvent({...event(5,'READY_TO_DEPLOY'),data:{configuration_download_available:true}},7),false);
+        window.updateKaceWorkflowEvent({...event(1,'ARTIFACT_READY'),workflow_id:'new-flow'},7);
+        assert.equal(button.style.display,'none');
+        window.updateKaceWorkflowEvent({...event(2,'READY_TO_DEPLOY'),workflow_id:'new-flow',data:{configuration_download_available:true}},7);
+        assert.equal(button.style.display,'inline-flex');
+    `,
+    configuration_download_disconnect: `
+        await login(7);
+        window.updateKaceWorkflowEvent({...event(1,'READY_TO_DEPLOY'),data:{configuration_download_available:true}},7);
+        const button=document.getElementById('kace-configuration-download');
+        window.downloadKaceConfiguration();
+        const old=requests.configurationDownloads.at(-1);
+        window.updateSshDisconnected('lost',false);
+        assert.equal(button.disabled,true);
+        assert.equal(window.downloadKaceConfiguration(),false);
+        await login(8);
+        old.resolve({status:'success'});await tick();
+        assert.equal(document.getElementById('kace-configuration-download-status').hidden,true);
+        window.updateKaceWorkflowEvent({...event(2,'READY_TO_DEPLOY'),data:{configuration_download_available:true}},8);
+        assert.equal(button.disabled,false);
+        assert.equal(window.downloadKaceConfiguration(),true);
+        assert.deepEqual(Array.from(requests.configurationDownloads.at(-1).args),['flow',2,8]);
+    `,
+    configuration_download_cancel_failure: `
+        await login(7);
+        window.updateKaceWorkflowEvent({...event(1,'READY_TO_DEPLOY'),data:{configuration_download_available:true}},7);
+        const button=document.getElementById('kace-configuration-download');
+        window.downloadKaceConfiguration();
+        requests.configurationDownloads.at(-1).resolve({status:'cancelled'});await tick();
+        assert.equal(button.disabled,false);
+        assert.equal(document.getElementById('kace-configuration-download-status').hidden,true);
+        window.downloadKaceConfiguration();
+        requests.configurationDownloads.at(-1).resolve({status:'error',code:'configurationDownloadChanged'});await tick();
+        assert.equal(button.disabled,false);
+        assert.equal(document.getElementById('kace-configuration-download-status').textContent,studioText('configurationDownloadChanged'));
+        window.downloadKaceConfiguration();
+        requests.configurationDownloads.at(-1).resolve({status:'error',code:'untrusted'});await tick();
+        assert.equal(document.getElementById('kace-configuration-download-status').textContent,studioText('configurationDownloadFailed'));
+    `,
+    reconnected_terminal_never_calls_pending_installation_complete: `
+        const output=[];term.write=text=>output.push(text);
+        for (const [index,language] of ['English','Español','Português'].entries()) {
+            selectedStudioLanguage=language;await login(7+index);
+            const pending={generation:7+index,event:{...event(1,'DEPLOYING'),data:{language}},checkpoint:{state:'DEPLOYING'}};
+            output.length=0;
+            window.restoreSshAfterReconnect(result(7+index),powerSelection+1,pending);
+            assert.equal(output.length,0);
+            window.restoreSshAfterReconnect(result(7+index),powerSelection,pending);
+            assert.ok(output.join('').includes(studioText('recoveryPending')));
+            assert.ok(!output.join('').includes(studioText('recoveryComplete')));
+            output.length=0;
+            const complete={...pending,event:{...event(2,'COMPLETE'),data:{language}},checkpoint:{state:'COMPLETE'}};
+            window.restoreSshAfterReconnect(result(7+index),powerSelection,complete);
+            assert.ok(output.join('').includes(studioText('recoveryComplete')));
+        }
+    `,
+    recovered_installation_waits_for_authoritative_verification: `
+        const output=[];term.write=text=>output.push(text);
+        for (const [index,language] of ['English','Español','Português'].entries()) {
+            selectedStudioLanguage=language;await login(20+index);
+            const generation=20+index;
+            const pending={generation,event:{...event(1,'DEPLOYING'),workflow_id:'waiting-'+index,data:{language}},checkpoint:{state:'DEPLOYING'}};
+            output.length=0;
+            window.restoreSshAfterReconnect(result(generation),powerSelection,pending,true);
+            let view=kaceWorkflowViews.get(pending.event.workflow_id);
+            assert.equal(view.recoveryObserving,true);
+            assert.equal(view.resumePending,false);
+            assert.equal(document.getElementById('kace-workflow-status').textContent,workflowText('observing',view));
+            assert.ok(output.join('').includes(studioText('recoveryWaiting')));
+            assert.ok(!output.join('').includes(studioText('recoveryPending')));
+            assert.equal(window.finishSshRecovery(generation-1,powerSelection,pending),false);
+            assert.equal(window.finishSshRecovery(generation,powerSelection+1,pending),false);
+            assert.equal(window.finishSshRecovery(generation,powerSelection,pending),true);
+            assert.equal(view.recoveryObserving,false);
+            assert.equal(view.resumePending,true);
+            assert.ok(output.join('').includes(studioText('recoveryPending')));
+            const complete={...pending,event:{...pending.event,sequence:2,state:'COMPLETE'},checkpoint:{state:'COMPLETE'}};
+            assert.equal(window.finishSshRecovery(generation,powerSelection,complete),true);
+            assert.equal(kaceWorkflowViews.get(pending.event.workflow_id).state,'COMPLETE');
+            // An older timeout response cannot downgrade verified completion.
+            assert.equal(window.finishSshRecovery(generation,powerSelection,pending),true);
+            assert.equal(kaceWorkflowViews.get(pending.event.workflow_id).state,'COMPLETE');
+            assert.ok(output.at(-1).includes(studioText('recoveryComplete')));
+            window.restoreSshAfterReconnect(result(generation-1),powerSelection,pending,true);
+            assert.equal(firmwareGeneration,generation,'older reconnect replies cannot replace the current session');
+            window.updateKaceWorkflowEvent({...pending.event,workflow_id:'new-'+index,sequence:1,state:'HARDWARE_SELECTED'},generation);
+            assert.equal(window.finishSshRecovery(generation,powerSelection,pending),false);
+            assert.equal(document.getElementById('kace-workflow-tracker').dataset.workflowId,'new-'+index);
+        }
+    `,
+    recovery_late_checkpoint_rebinds_preserved_workflow: `
+        const output=[];term.write=text=>output.push(text);
+        await login(7);
+        window.updateKaceWorkflowEvent(event(4,'DEPLOYING'),7);
+        window.updateSshDisconnected('transport lost',false);
+        const before=kaceWorkflowViews.get('flow');
+        assert.equal(before.connectionLost,true);
+        window.restoreSshAfterReconnect(result(8),powerSelection,null);
+        assert.equal(sshConnected,true);
+        assert.equal(kaceWorkflowViews.get('flow'),before,'unavailable initial checkpoint preserves known history');
+        assert.ok(output.join('').includes(studioText('recoveryUnavailable')));
+        const poll=timers.filter(timer=>timer.delay===3000).at(-1).fn();await tick();
+        requests.checkpoint.at(-1).resolve({generation:8,event:event(4,'DEPLOYING')});await poll;
+        assert.equal(before.generation,8);
+        assert.equal(before.connectionLost,false);
+        assert.equal(before.resumePending,true);
+        assert.equal(document.getElementById('kace-workflow-status').textContent,workflowText('recovery',before));
+        // A watcher may finish while the backend observer still owns an older snapshot.
+        window.updateKaceWorkflowEvent(event(5,'COMPLETE'),8);
+        window.finishSshRecovery(8,powerSelection,{generation:8,event:event(4,'DEPLOYING')});
+        assert.equal(kaceWorkflowViews.get('flow').state,'COMPLETE');
+        assert.ok(output.at(-1).includes(studioText('recoveryComplete')));
+        window.updateSshDisconnected('lost again',false);
+        assert.equal(window.finishSshRecovery(8,powerSelection,{generation:8,event:event(4,'DEPLOYING')}),false);
+    `,
+    historical_complete_cannot_finish_newer_active_workflow_on_reconnect: `
+        const output=[];term.write=text=>output.push(text);
+        await login(7);
+        const historical={...event(2,'COMPLETE'),workflow_id:'historical'};
+        window.updateKaceWorkflowEvent(historical,7);
+        window.updateKaceWorkflowEvent(event(4,'DEPLOYING'),7);
+        window.updateSshDisconnected('transport lost',false);
+        output.length=0;
+        window.restoreSshAfterReconnect(result(8),powerSelection,{generation:8,event:historical,checkpoint:{state:'COMPLETE'}});
+        assert.equal(sshConnected,true);
+        assert.ok(output.join('').includes(studioText('recoveryUnavailable')));
+        assert.ok(!output.join('').includes(studioText('recoveryComplete')));
+        assert.equal(document.getElementById('kace-workflow-tracker').dataset.workflowId,'flow');
+        assert.equal(kaceWorkflowViews.get('flow').state,'DEPLOYING');
+        assert.equal(kaceWorkflowViews.get('historical').state,'COMPLETE','historical evidence is retained');
+        const poll=timers.filter(timer=>timer.delay===3000).at(-1).fn();await tick();
+        requests.checkpoint.at(-1).resolve({generation:8,event:event(4,'DEPLOYING')});await poll;
+        assert.equal(kaceWorkflowViews.get('flow').generation,8);
+        assert.equal(kaceWorkflowViews.get('flow').resumePending,true);
+    `,
+    stale_bootstrap_callbacks_are_rejected: `
+        await login(7); begin();
+        const old = {...powerContext};
+        window.updateSshDisconnected('lost', false);
+        await login(8);
+        const state = currentDeviceState;
+        const success = {protocol:'kace-bootstrap/v1', workflow_id:'boot', sequence:2, event:'workflow_succeeded'};
+        for (const context of [old, {...powerContext, host:'other.local'}, {...powerContext, selection:0}, null]) {
+            assert.equal(window.updateBootstrapEvent(success, context), false);
+            assert.equal(window.writeTerminalData('Bootstrap complete! KACE wizard finished successfully.', context), false);
+            assert.equal(window.updateBootstrapInterrupted('boot','old close',context),false);
+            assert.equal(window.updateBootstrapDisconnected('boot','old close',false,context),false);
+            assert.equal(currentDeviceState, state);
+        }
+        assert.equal(window.updateBootstrapEvent(success, powerContext), true);
+        assert.equal(currentDeviceState, 'BOOTSTRAPPED');
+    `,
+    terminal_output_waits_for_login_identity: `
+        const output=[];term.write=text=>output.push(text);
+        loginState='CONNECTING';performSshLogin('fixture','unused');await tick();
+        const context={host:'pi.local',selection:powerSelection,session:7};
+        assert.equal(window.writeTerminalData('initial prompt',context),true);
+        assert.equal(output.includes('initial prompt'),false);
+        requests.login.at(-1).resolve(result(7));await tick();
+        assert.equal(output.includes('initial prompt'),true);
+        loginState='CONNECTING';performSshLogin('fixture','unused');await tick();
+        const rejected={host:'pi.local',selection:powerSelection,session:8};
+        window.writeTerminalData('rejected prompt',rejected);
+        requests.login.at(-1).resolve({status:'failed'});await tick();
+        await login(9);
+        assert.equal(output.includes('rejected prompt'),false);
+        assert.equal(pendingTerminalData.length,0);
+    `,
+    reconnect_preserves_early_terminal_output_and_close: `
+        const output=[];term.write=text=>output.push(text);
+        await login(7);
+        window.updateSshDisconnected('lost',false);
+        window.updateDeviceState('SSH_READY',100,'connected');
+        const context={host:'pi.local',selection:powerSelection,session:8};
+        assert.equal(window.writeTerminalData('new shell prompt',context),true);
+        assert.equal(output.includes('new shell prompt'),false);
+        window.updateTerminalClosed(8);
+        window.restoreSshAfterReconnect(result(8),powerSelection,null);
+        assert.equal(output.includes('new shell prompt'),true);
+        assert.equal(sshConnected,true);
+        assert.equal(terminalShellOpen,false);
+    `,
+    manual_login_preserves_early_terminal_close: `
+        loginState='CONNECTING';performSshLogin('fixture','unused');await tick();
+        window.updateDeviceState('SSH_READY',100,'connected');
+        window.updateTerminalClosed(7);
+        requests.login.at(-1).resolve(result(7));await tick();
+        assert.equal(sshConnected,true);
+        assert.equal(terminalShellOpen,false);
+    `,
+    bootstrap_start_reply_is_bound_to_origin: `
+        requests.bootstrap=[];
+        pywebview.api.start_bootstrap=(...args)=>deferred('bootstrap',args);
+        await login(7);const original={...powerContext};
+        startBootstrap();
+        assert.equal(JSON.stringify(requests.bootstrap[0].args),JSON.stringify(['mainsail',original]));
+        window.updateSshDisconnected('lost',false);await login(8);
+        const state=currentDeviceState;
+        requests.bootstrap[0].resolve({status:'failed',message:'old failure'});await tick();
+        assert.equal(currentDeviceState,state);
+        startBootstrap();
+        requests.bootstrap[1].resolve({status:'failed',message:'current failure'});await tick();
+        assert.equal(currentDeviceState,'BOOTSTRAP_FAILED');
+    `,
+    terminal_fragments_do_not_cross_sessions: `
+        await login(7);
+        window.writeTerminalData('Bootstrap complete! KACE wizard ', powerContext);
+        const old = {...powerContext};
+        window.updateSshDisconnected('lost', false);
+        await login(8);
+        const state = currentDeviceState;
+        window.writeTerminalData('finished successfully.', powerContext);
+        assert.equal(currentDeviceState, state);
+        assert.equal(window.writeTerminalData('Bootstrap complete! KACE wizard finished successfully.', old), false);
+        window.writeTerminalData('Bootstrap complete! KACE wizard finished successfully.', powerContext);
+        assert.equal(currentDeviceState, 'BOOTSTRAPPED');
+    `,
+    checkpoint_precedes_late_manifest: `
+        requests.manifest=[];
+        pywebview.api.get_firmware_deployment_manifest=()=>deferred('manifest',[]);
+        await login(7);
+        const complete={generation:7,event:event(10,'COMPLETE'),checkpoint:{state:'COMPLETE'}};
+        requests.checkpoint.at(-1).resolve(complete); await tick();
+        requests.manifest.at(-1).resolve({workflow_kind:'firmware_deployment',workflow_id:'old-delivery',sequence:99,
+            state:'ACTION_REQUIRED',generation:7,deployment:{deployment_id:'old-delivery',staged_path:'/old/firmware.bin'}});
+        await tick();
+        assert.equal(document.getElementById('kace-workflow-tracker').dataset.workflowId,'flow');
+        assert.equal(document.getElementById('kace-workflow-status').textContent,'Completed');
+        assert.equal(window.updateKaceWorkflowEvent(complete.event,7),false);
+        assert.equal(document.getElementById('kace-workflow-status').textContent,'Completed');
+    `,
+    checkpoint_replaces_manifest_with_higher_sequence: `
+        await login(7);
+        assert.equal(restoreKaceDeploymentManifest({workflow_kind:'firmware_deployment',workflow_id:'flow',sequence:99,
+            state:'ACTION_REQUIRED',generation:7,deployment:{staged_path:'/old/firmware.bin',instructions:['old']}}),true);
+        requests.checkpoint.at(-1).resolve({generation:7,event:{...event(2,'DEPLOYING'),data:{language:'English'}},checkpoint:{state:'DEPLOYING'}});
+        await tick();
+        const view=kaceWorkflowViews.get('flow');
+        assert.equal(view.state,'DEPLOYING');
+        assert.equal(view.data.staged_path,undefined);
+        assert.equal(view.data.instructions,undefined);
+        assert.equal(view.resumePending,true);
+        assert.equal(restoreKaceDeploymentManifest({workflow_kind:'firmware_deployment',workflow_id:'old',generation:7,
+            deployment:{staged_path:'/old/firmware.bin'}}),false);
+    `,
+    manual_login_restores_pending_deployment: `
+        for (const [index,language] of ['English','Español','Português'].entries()) {
+            await login(7+index);
+            const saved={...event(10,'DEPLOYING'),data:{language}};
+            // A polling reply can precede the initial restoration reply.
+            window.updateKaceWorkflowEvent(saved,7+index);
+            requests.checkpoint.at(-1).resolve({generation:7+index,event:saved,checkpoint:{state:'DEPLOYING'}});
+            await tick();
+            const view=kaceWorkflowViews.get('flow');
+            assert.equal(view.resumePending,true);
+            assert.equal(document.getElementById('kace-workflow-status').textContent,workflowText('recovery',view));
+            assert.equal(document.getElementById('kace-workflow-detail').textContent,workflowText('resumeDetail',view));
+            assert.equal(window.updateKaceWorkflowEvent(event(11,'VERIFYING_CONFIG'),7+index),true);
+            assert.equal(kaceWorkflowViews.get('flow').resumePending,false);
+        }
+    `,
     recoverable_disconnect_invalidates_session: `
         await login(7); begin();
         document.getElementById('bootstrap-progress-tracker').style.display = 'block';
@@ -74,10 +505,10 @@ const cases = {
             bootstrapActive = false;
             window.updateDeviceState('SSH_DISCONNECTED', 0, 'SSH lost; host status unknown');
         } else {
-            window.updateBootstrapDisconnected('boot', 'SSH lost; host status unknown', true);
+            window.updateBootstrapDisconnected('boot', 'SSH lost; host status unknown', true, powerContext);
         }
         assert.equal(sshConnected, false);
-        assert.equal(document.getElementById('connection-title').textContent, 'SSH Session: Disconnected');
+        assert.equal(document.getElementById('connection-title').textContent, studioText('sshDisconnected'));
         assert.equal(document.getElementById('bootstrap-btn').disabled, true);
         assert.equal(document.getElementById('printer-power-btn').disabled, true);
         assert.equal(document.getElementById('authorize-moonraker-btn').disabled, true);
@@ -176,16 +607,19 @@ const cases = {
         assert.equal(document.getElementById('sftp-status').textContent,'/home/kace: 0 items');
     `,
     disconnect_diagnostic_is_not_host_diagnosis: `
-        await login(7); begin();
         for (const expected of [true, false]) {
-            window.updateBootstrapDisconnected('boot', '', expected);
+            await login(expected ? 7 : 8); begin();
+            window.updateBootstrapDisconnected('boot', '', expected, powerContext);
             const message = document.getElementById('bootstrap-stage-label').textContent;
             assert.ok(message.includes('Host status is unknown'));
             assert.equal(currentDeviceState, 'BOOTSTRAP_RECOVERABLE');
             assert.equal(bootstrapActive, false);
         }
-        window.updateBootstrapDisconnected('boot', 'SSH channel closed in VERIFYING_CONFIG', true);
-        assert.ok(document.getElementById('bootstrap-stage-label').textContent.includes('SSH channel closed in VERIFYING_CONFIG'));
+        await login(9); begin();
+        window.updateBootstrapDisconnected('boot', 'SSH channel closed in VERIFYING_CONFIG', true, powerContext);
+        assert.equal(document.getElementById('bootstrap-stage-label').textContent, studioText('sshLost'));
+        assert.equal(document.getElementById('connection-subtitle').title, 'SSH channel closed in VERIFYING_CONFIG');
+        assert.equal(printerPowerStatus, 'unknown');
     `,
     robin_final_download: `
         await login(7);
@@ -265,7 +699,7 @@ const cases = {
     `,
     failed_bootstrap_is_not_completion: `
         await login(7); begin(); window.updateKaceWorkflowEvent(event(2, 'VERIFYING_MCU'), 7);
-        window.updateBootstrapEvent({protocol: 'kace-bootstrap/v1', workflow_id: 'boot', sequence: 2, event: 'workflow_failed', code: 'KACE_INSTALL'});
+        window.updateBootstrapEvent({protocol: 'kace-bootstrap/v1', workflow_id: 'boot', sequence: 2, event: 'workflow_failed', code: 'KACE_INSTALL'}, powerContext);
         assert.equal(firmwareGeneration, 7);
         assert.equal(kaceWorkflowViews.get('flow').bootstrapFailed, true);
         assert.notEqual(kaceWorkflowViews.get('flow').state, 'COMPLETE');
