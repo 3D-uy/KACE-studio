@@ -67,6 +67,7 @@ a = Analysis(
         ('bootstrap.sh', '.'),
         ('image-manifest.json', '.'),
         ('release-contract.json', '.'),
+        ('preflight', 'preflight'),
     ],  # Includes vendor/fonts, vendor/xterm, vendor/fontawesome
     hiddenimports=[],
     hookspath=[],

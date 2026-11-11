@@ -150,7 +150,7 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="b78526d47ecdcc5ba55dcd41379a92ea644ac36a"
+KACE_INSTALL_REF="779489ad040a43178cebce339eeba18cd7f59b35"
 KACE_INSTALL_SHA256="de7db74da6f6261bf28fa329067f9d3424bc3e5abde5db4dd91c3f66861f3500"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
@@ -2320,15 +2320,39 @@ fi
 log_stage "KACE" "Installing KACE Agent"
 INSTALL_OK=0
 INSTALL_EXIT=1
+STUDIO_PREFLIGHT_CONTEXT=0
+if [ -n "${KACE_STUDIO_PREFLIGHT_PORT+x}${KACE_STUDIO_PREFLIGHT_TOKEN+x}${KACE_STUDIO_PREFLIGHT_SESSION+x}" ]; then
+    # Empty/partial context remains selected so Core rejects it rather than
+    # falling back to local Docker. Reject multiline data before the stdin frame.
+    if ! [[ "${KACE_STUDIO_PREFLIGHT_PORT:-}" =~ ^[0-9]{0,5}$ &&
+            "${KACE_STUDIO_PREFLIGHT_TOKEN:-}" =~ ^([0-9a-f]{64})?$ &&
+            "${KACE_STUDIO_PREFLIGHT_SESSION:-}" =~ ^([0-9a-f]{32})?$ ]]; then
+        log_err "Invalid Studio preflight context."
+        emit_bootstrap_terminal "workflow_failed" "PREFLIGHT_CONTEXT_INVALID" 1
+        exit 1
+    fi
+    STUDIO_PREFLIGHT_CONTEXT=1
+fi
 
-if [ "$(id -un)" != "$PRINTER_USER" ]; then
-    # Running as a different user (e.g. root), switch to printer user context
-    if sudo -u "$PRINTER_USER" -i env \
-        KACE_INSTALL_URL="$KACE_INSTALL_URL" \
-        KACE_INSTALL_SHA256="$KACE_INSTALL_SHA256" \
-        KACE_SOURCE_REF="$KACE_INSTALL_REF" \
-        KACE_EXPECTED_COMMIT="$KACE_INSTALL_REF" \
+run_kace_installer_as_user() {
+    local -a command=(sudo -u "$PRINTER_USER" -i env
+        KACE_INSTALL_URL="$KACE_INSTALL_URL"
+        KACE_INSTALL_SHA256="$KACE_INSTALL_SHA256"
+        KACE_SOURCE_REF="$KACE_INSTALL_REF"
+        KACE_EXPECTED_COMMIT="$KACE_INSTALL_REF"
+        KACE_STUDIO_PREFLIGHT_CONTEXT="$STUDIO_PREFLIGHT_CONTEXT"
         sh -c '
+        if [ "${KACE_STUDIO_PREFLIGHT_CONTEXT:-0}" = "1" ]; then
+            if ! IFS= read -r KACE_STUDIO_PREFLIGHT_PORT ||
+               ! IFS= read -r KACE_STUDIO_PREFLIGHT_TOKEN ||
+               ! IFS= read -r KACE_STUDIO_PREFLIGHT_SESSION; then
+                echo "Error: incomplete Studio preflight context." >&2
+                exit 1
+            fi
+            export KACE_STUDIO_PREFLIGHT_PORT KACE_STUDIO_PREFLIGHT_TOKEN KACE_STUDIO_PREFLIGHT_SESSION
+            # Restore interactive input where available; first boot may lack a tty.
+            if (: </dev/tty) 2>/dev/null; then exec </dev/tty; fi
+        fi
         tmp_script="/tmp/kace-install.sh"
         rm -f "$tmp_script"
         if curl --fail --silent --show-error --location "$KACE_INSTALL_URL" -o "$tmp_script"; then
@@ -2347,7 +2371,21 @@ if [ "$(id -un)" != "$PRINTER_USER" ]; then
             fi
         fi
         exit 1
-    '; then
+        '
+    )
+    if [ "$STUDIO_PREFLIGHT_CONTEXT" = "1" ]; then
+        "${command[@]}" < <(builtin printf '%s\n%s\n%s\n' \
+            "${KACE_STUDIO_PREFLIGHT_PORT:-}" "${KACE_STUDIO_PREFLIGHT_TOKEN:-}" \
+            "${KACE_STUDIO_PREFLIGHT_SESSION:-}")
+    else
+        "${command[@]}"
+    fi
+}
+
+if [ "$(id -un)" != "$PRINTER_USER" ]; then
+    # Running as a different user (e.g. root), switch to printer user context.
+    # The short-lived capability travels through stdin, never env/sudo argv.
+    if run_kace_installer_as_user; then
         log_ok "KACE agent installed."
         INSTALL_OK=1
         INSTALL_EXIT=0
@@ -2389,7 +2427,11 @@ c = load_checkpoint("firmware-workflow.json", verify_artifact=True)
 raise SystemExit(0 if c and c["state"] != "COMPLETE" else 1)
 ' >/dev/null 2>&1
     ); then
-        log_warn "KACE is installed. Continue the pending installation by running kace."
+        if [ "$STUDIO_PREFLIGHT_CONTEXT" = "1" ]; then
+            log_warn "KACE is installed. Continue the pending installation with 'Resume installation' in KACE Studio."
+        else
+            log_warn "KACE is installed. Continue the pending installation by running kace."
+        fi
         emit_bootstrap_terminal "workflow_cancelled" "RECOVERY_AVAILABLE" "$INSTALL_EXIT"
         exit "$INSTALL_EXIT"
     fi

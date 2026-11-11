@@ -36,6 +36,52 @@ class ReleaseContractError(RuntimeError):
     pass
 
 
+def verify_bootstrap_pc_context(script: str) -> None:
+    """Check the tested context framing in the candidate's installer boundary.
+
+    This structural guard rejects an older bootstrap that cannot transport the
+    Studio bridge. It is not a substitute for the executable sudo-boundary
+    regressions or a proof against arbitrary modifications to shell semantics.
+    """
+    start = script.find("\nSTUDIO_PREFLIGHT_CONTEXT=0\n")
+    end = script.find('\nif [ "$(id -un)"', start)
+    if start < 0 or end < 0:
+        raise ReleaseContractError("bootstrap lacks Studio PC preflight installer boundary")
+    # Comments cannot stand in for executable framing. The executable tests
+    # remain authoritative for behavior; this is an intentionally bounded
+    # compatibility check for the current audited shell contract.
+    block = "\n".join(line.split("#", 1)[0] for line in script[start:end].splitlines())
+    if not re.search(r"(?m)^\s*STUDIO_PREFLIGHT_CONTEXT=1\s*$", block):
+        raise ReleaseContractError("bootstrap never selects Studio PC preflight context")
+    required = (
+        'KACE_STUDIO_PREFLIGHT_PORT+x',
+        'KACE_STUDIO_PREFLIGHT_TOKEN+x',
+        'KACE_STUDIO_PREFLIGHT_SESSION+x',
+        'KACE_STUDIO_PREFLIGHT_CONTEXT="$STUDIO_PREFLIGHT_CONTEXT"',
+        'IFS= read -r KACE_STUDIO_PREFLIGHT_PORT',
+        'IFS= read -r KACE_STUDIO_PREFLIGHT_TOKEN',
+        'IFS= read -r KACE_STUDIO_PREFLIGHT_SESSION',
+        'export KACE_STUDIO_PREFLIGHT_PORT KACE_STUDIO_PREFLIGHT_TOKEN KACE_STUDIO_PREFLIGHT_SESSION',
+        "builtin printf '%s\\n%s\\n%s\\n'",
+        '"${command[@]}" < <(builtin printf',
+        '"${KACE_STUDIO_PREFLIGHT_PORT:-}"',
+        '"${KACE_STUDIO_PREFLIGHT_TOKEN:-}"',
+        '"${KACE_STUDIO_PREFLIGHT_SESSION:-}")',
+    )
+    if any(fragment not in block for fragment in required):
+        raise ReleaseContractError("bootstrap lacks Studio PC preflight context framing")
+    reads = tuple(block.index("IFS= read -r KACE_STUDIO_PREFLIGHT_" + name)
+                  for name in ("PORT", "TOKEN", "SESSION"))
+    frame_block = block[block.index("builtin printf '%s\\n%s\\n%s\\n'"):]
+    frame_values = tuple('"${KACE_STUDIO_PREFLIGHT_' + name + ':-}"'
+                         for name in ("PORT", "TOKEN", "SESSION"))
+    if any(value not in frame_block for value in frame_values):
+        raise ReleaseContractError("bootstrap lacks Studio PC preflight context frame")
+    frame = tuple(frame_block.index(value) for value in frame_values)
+    if reads != tuple(sorted(reads)) or frame != tuple(sorted(frame)):
+        raise ReleaseContractError("bootstrap has invalid Studio PC preflight context order")
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -176,6 +222,8 @@ def verify_inputs(contract: dict | None = None, root: Path = ROOT) -> dict:
         raise ReleaseContractError(
             "bootstrap does not bind every installer path to the declared candidate"
         )
+
+    verify_bootstrap_pc_context(script)
 
     lock_path = root / "requirements.lock"
     if not lock_path.is_file():
