@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from tests.test_power_frontend_identity import (
-    HARNESS, GLOBALS_JS, LOGIN_JS, BOOTSTRAP_JS, POWER_JS,
+    HARNESS, CATALOG_JS, GLOBALS_JS, LOGIN_JS, BOOTSTRAP_JS, POWER_JS,
 )
 
 
@@ -15,7 +15,7 @@ def test_explicit_enrollment_and_stale_responses(scenario):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is required")
-    script = HARNESS + GLOBALS_JS + LOGIN_JS + BOOTSTRAP_JS + POWER_JS + r'''
+    script = HARNESS + CATALOG_JS + GLOBALS_JS + LOGIN_JS + BOOTSTRAP_JS + POWER_JS + r'''
 term = {cols: 80, rows: 24, write() {}, clear() {}};
 (async () => {
     const inspection = deferred(), enrollment = deferred();

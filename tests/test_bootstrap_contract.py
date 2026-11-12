@@ -273,7 +273,7 @@ const assert = require('node:assert/strict');
 const nodes = new Map();
 function element() {
     const classes = new Set();
-    return {style: {}, disabled: false, textContent: '', innerHTML: '',
+    return {style: {}, dataset: {}, disabled: false, textContent: '', innerHTML: '',
         classList: {add: name => classes.add(name), remove: name => classes.delete(name),
             contains: name => classes.has(name)},
         querySelector: element};
@@ -292,6 +292,9 @@ vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), context);
 function scenario() {
     const success = 'Bootstrap complete! KACE wizard finished successfully.';
     const transitions = [];
+    currentDeviceIp = 'pi.local';
+    firmwareGeneration = 1;
+    const session = {host:'pi.local', selection:powerSelection, session:1};
     const update = window.updateDeviceState;
     window.updateDeviceState = (...args) => { transitions.push(args[0]); update(...args); };
     for (const connected of [false, true]) {
@@ -302,9 +305,14 @@ function scenario() {
         bootstrapActive = true;
         transitions.length = 0;
         // A fragmented SSH marker must be recognized only when complete.
-        window.writeTerminalData('=== KACE_BOOTSTRAP_ERR');
+        window.writeTerminalData('=== KACE_BOOTSTRAP_ERR', session);
         assert.equal(transitions.length, 0);
-        window.writeTerminalData('OR: KACE_INSTALL ===\n');
+        window.writeTerminalData('OR: KACE_INSTALL ===\n', session);
+        if (!connected) {
+            assert.equal(transitions.length, 0);
+            assert.equal(bootstrapFailureHandled, false);
+            continue;
+        }
         assert.equal(currentDeviceState, 'BOOTSTRAP_FAILED');
         assert.equal(bootstrapActive, false);
         assert.equal(bootstrapFailureHandled, true);
@@ -312,7 +320,7 @@ function scenario() {
         assert.equal(document.getElementById('connection-subtitle').style.color, 'var(--danger-color)');
         assert.equal(document.getElementById('bootstrap-btn').disabled, !connected);
         // Repeated errors and a later legacy success banner cannot overwrite failure.
-        window.writeTerminalData('=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ===\n' + success);
+        window.writeTerminalData('=== KACE_BOOTSTRAP_ERROR: KACE_INSTALL ===\n' + success, session);
         assert.equal(currentDeviceState, 'BOOTSTRAP_FAILED');
         assert.deepEqual(transitions, ['BOOTSTRAP_FAILED']);
     }
@@ -320,7 +328,7 @@ function scenario() {
     bootstrapBuffer = '';
     bootstrapFailureHandled = false;
     bootstrapActive = true;
-    window.writeTerminalData(success);
+    window.writeTerminalData(success, session);
     assert.equal(currentDeviceState, 'BOOTSTRAPPED');
     assert.equal(bootstrapActive, false);
 }
@@ -341,7 +349,7 @@ def test_frontend_uses_versioned_terminal_event_and_keeps_legacy_fallback():
     assert "eventName === 'workflow_succeeded'" in app_js
     assert "!bootstrapAuthoritativeSeen" in app_js
     assert "Bootstrap complete! KACE wizard finished successfully." in app_js
-    assert "window.pywebview.api.start_bootstrap(selectedUi)" in app_js
+    assert "window.pywebview.api.start_bootstrap(selectedUi, context)" in app_js
     assert "window.pywebview.api.send_ssh_input(bootstrapCmd)" not in app_js
     assert "Bootstrap complete! KACE Node is fully ready." not in app_js
 

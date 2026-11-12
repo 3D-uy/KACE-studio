@@ -60,3 +60,50 @@ console.log('completed');
     result = subprocess.run([node,"-e",script], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == "completed"
+
+
+@pytest.mark.parametrize("source", ["preferences", "localStorage"])
+def test_readback_opt_out_is_session_only(source):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required")
+    fields = re.search(r"const PERSISTED_FIELDS = \[[\s\S]*?^\];", APP, re.M)[0]
+    save = re.search(r"function saveFormState\(\) \{[\s\S]*?^}", APP, re.M)[0]
+    harness = r'''
+const assert = require('node:assert/strict');
+const legacy = {'hostname-input':'printer-one', 'skip-write-verification':true};
+const checkbox = {checked:false};
+const hostname = {value:''};
+const document = {getElementById:id=>({
+    'skip-write-verification':checkbox, 'hostname-input':hostname,
+}[id])};
+const userPreferences = {form_state:source === 'preferences' ? legacy : {}};
+const FORM_PERSIST_KEY = 'test';
+let stored = JSON.stringify(legacy);
+const localStorage = {getItem:()=>stored, setItem:(_key,value)=>{stored=value;}};
+let published;
+const pywebview = {api:{set_preferences:prefs=>{published=JSON.parse(JSON.stringify(prefs));}}};
+const window = {pywebview};
+function toggleWifiSecurity() {}
+function togglePowerRelaySettings() {}
+function updateSelectDescription() {}
+'''
+    assertions = r'''
+restoreFormState();
+assert.equal(checkbox.checked, false, 'legacy opt-out must not disable readback');
+assert.equal(hostname.value, 'printer-one');
+checkbox.checked = true; // An explicit choice remains available for this session.
+saveFormState();
+restoreFormState();
+assert.equal(checkbox.checked, true);
+assert.deepEqual(JSON.parse(stored), {'hostname-input':'printer-one'});
+assert.deepEqual(published.form_state, {'hostname-input':'printer-one'});
+checkbox.checked = false; // A new page starts unchecked.
+restoreFormState();
+assert.equal(checkbox.checked, false);
+console.log('completed');
+'''
+    script = "const source=" + json.dumps(source) + ";\n" + harness + fields + save + RESTORE + assertions
+    result = subprocess.run([node], input=script, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "completed"

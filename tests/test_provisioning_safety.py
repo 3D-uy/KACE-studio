@@ -1,6 +1,6 @@
 import pytest
 
-pytestmark = pytest.mark.usefixtures("finalized_release_contract")
+pytestmark = pytest.mark.usefixtures("coherent_provisioning_candidate")
 
 from backend.imager import inject_config
 from backend.provisioning import ImageType, ProvisioningValidationError

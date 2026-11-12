@@ -105,19 +105,20 @@ def test_ssh_close_reports_observed_phase_without_attributing_host_cause(rig, mo
     from unittest.mock import Mock
 
     api, connect, posts, _ = rig
-    _, session = connect("pi.local")
+    context, session = connect("pi.local")
     api._last_kace_workflow_state = phase
     suspend = Mock(return_value=True)
     status = Mock()
     monkeypatch.setattr(api, "_suspend_bootstrap_for_ssh_loss", suspend)
     monkeypatch.setattr(api, "set_device_state", status)
     # Test only the close diagnostic; reconnect scheduling has its own suite.
-    monkeypatch.setattr(api, "_ssh_session_is_active", lambda _session: True)
+    monkeypatch.setattr(main.threading, "Thread", Mock())
+    session.close()
     session.on_close()
     message = suspend.call_args.args[0]
     assert phase in message
     assert "host status is unknown" in message
-    assert suspend.call_args.kwargs == {"expected": expected}
+    assert suspend.call_args.kwargs == {"expected": expected, "power_context": context}
     status.assert_called_once_with("BOOTSTRAP_RECOVERABLE", 0, message)
     assert posts == []
 
@@ -373,7 +374,8 @@ def test_refresh_responses_out_of_order_in_same_session_keep_newest_authority(ri
     assert posts == []
 
 
-def test_bootstrap_and_disconnect_notifications_carry_originating_session(rig):
+def test_bootstrap_and_disconnect_notifications_carry_originating_session(rig, monkeypatch):
+    from unittest.mock import Mock
     api, connect, posts, _ = rig
     context, session = connect("A.local")
     scripts = []
@@ -385,7 +387,31 @@ def test_bootstrap_and_disconnect_notifications_carry_originating_session(rig):
     event = {"workflow_id": "A", "event": "workflow_succeeded"}
     api._forward_bootstrap_event(event, context["session"], context)
     assert scripts[-1] == f"window.updateBootstrapEvent({json.dumps(event)}, {json.dumps(context)});"
+    monkeypatch.setattr(main.threading, "Thread", Mock())
+    session.close()
     session.on_close()
     assert scripts[-1] == f"window.invalidatePowerSession({json.dumps(context)})"
     assert api._remote_power_authority is None
+    assert posts == []
+
+
+def test_normal_shell_exit_preserves_transport_and_authority_without_recovery(rig, monkeypatch):
+    from unittest.mock import Mock
+
+    api, connect, posts, _ = rig
+    context, session = connect("pi.local")
+    api._window = Mock()
+    api._last_kace_workflow_state = "VERIFYING_CONFIG"
+    suspend, worker, state = Mock(), Mock(), Mock()
+    monkeypatch.setattr(api, "_suspend_bootstrap_for_ssh_loss", suspend)
+    monkeypatch.setattr(main.threading, "Thread", worker)
+    monkeypatch.setattr(api, "set_device_state", state)
+    session.on_close()
+    api._window.evaluate_js.assert_called_once_with(f"window.updateTerminalClosed({context['session']});")
+    assert session.is_connected()
+    assert api._power_context == context
+    assert api._remote_power_authority is not None
+    suspend.assert_not_called()
+    worker.assert_not_called()
+    state.assert_not_called()
     assert posts == []

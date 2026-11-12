@@ -10,6 +10,8 @@ Existen imagen guiada, provisión del primer arranque, Discovery, SSH/SFTP, prog
 
 ## 🧭 Prioridades
 
+La ayuda de Crowsnest aclara que desmarcar la opción conserva una instalación existente. Verificar esa explicación en EN/ES/PT y WebView2 nativo, y probar tanto una imagen limpia como otra con Crowsnest presente durante la calificación controlada del primer arranque; este cambio de código no califica un paquete.
+
 | Prioridad | Resultado requerido | Referencia |
 | --- | --- | --- |
 | 1 · Validación de interfaz | Verificar selectores/iconos de Imager, teclado y foco, credenciales, SFTP persistente y recuperación tanto desde código como en WebView2 nativo. | [Desarrollo (EN)](../../docs/DEVELOPMENT.md) |

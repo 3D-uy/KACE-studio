@@ -45,7 +45,7 @@ const nodes = new Map();
 const document = {getElementById(id){if(!nodes.has(id)) nodes.set(id, element());return nodes.get(id)}, createElement: element};
 const window = {setTimeout(fn){timers.push(fn)}, setInterval(fn){timers.push(fn);return 1}, clearInterval(){}};
 const setTimeout = window.setTimeout;
-let fitAddon = null, sshConnected = true;
+let fitAddon = null, sshConnected = true, bootstrapActive = false, terminalShellOpen = true;
 '''
 
 

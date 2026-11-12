@@ -343,7 +343,7 @@ def test_api_requires_reinforced_confirmation_for_high_risk_disk():
     assert result is False
 
 
-def test_api_rejects_concurrent_flash_operations(monkeypatch):
+def test_api_rejects_concurrent_flash_operations(monkeypatch, coherent_provisioning_candidate):
     api = main.Api()
     selected = snapshot()
     api._drive_snapshots[3] = dict(selected)

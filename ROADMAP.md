@@ -10,6 +10,8 @@ Guided imaging, first-boot provisioning, discovery, SSH/SFTP, bootstrap progress
 
 ## 🧭 Priorities
 
+Crowsnest help now states that an unchecked option preserves an existing installation. Verify that explanation in EN/ES/PT and native WebView2, and exercise both a clean image and one with Crowsnest already present during controlled first-boot qualification; this source change does not qualify a package.
+
 | Priority | Required result | Reference |
 | --- | --- | --- |
 | 1 · Interface validation | Verify Imager selectors/icons, keyboard and focus, credentials, persistent SFTP and recovery states in source and native WebView2. | [Development](docs/DEVELOPMENT.md) |

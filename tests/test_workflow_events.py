@@ -79,6 +79,17 @@ def test_normal_terminal_output_does_not_clear_last_state():
     assert parser.workflows["flow-a"].event == event
 
 
+def test_confirmed_archive_event_retains_cursor_across_fragmented_delivery():
+    parser = KaceWorkflowEventParser()
+    line, _ = marker(sequence=7, state="CONFIG_ERROR")
+    parser.feed(line)
+    archived, event = marker(sequence=8, state="DISCARDED")
+    assert parser.feed(archived[:35]) == []
+    assert parser.feed(archived[35:]) == [event]
+    assert parser.feed(line) == []
+    assert parser.workflows["flow-a"].event == event
+
+
 def test_done_is_delivered_as_the_only_success_state():
     parser = KaceWorkflowEventParser()
     line, event = marker(sequence=20, state="DONE", detail="deployment validated")
@@ -240,7 +251,7 @@ def test_simulated_kace_transcripts_keep_terminal_semantics_observational():
     app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
     assert "'TIMEOUT'" in app_js
     assert "tracker.classList.toggle('success', isDone);" in app_js
-    assert "tracker.classList.toggle('action-required', isActionRequired);" in app_js
+    assert "tracker.classList.toggle('action-required', isActionRequired || isRecovery);" in app_js
     assert "isDone || isActionRequired" not in app_js
     assert "'MEDIA_PREPARED', 'AWAITING_FLASH', 'ACTION_REQUIRED'" in app_js
 
@@ -304,11 +315,15 @@ def test_manifest_reader_is_home_relative_and_size_limited():
     assert session.read_text_file("../etc/passwd") is None
 
 
-def test_api_exposes_only_valid_versioned_deployment_manifest():
-    main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-    method = main_source.split("def get_firmware_deployment_manifest", 1)[1]
-    method = method.split("def get_preferences", 1)[0]
+@pytest.mark.parametrize("payload", [
+    None, [], {"schema": 2, "deployment": {}},
+    {"schema": True, "deployment": {}}, {"schema": 1, "deployment": []},
+])
+def test_api_exposes_only_valid_versioned_deployment_manifest(payload):
+    from unittest.mock import Mock
+    from main import Api
 
-    assert 'read_text_file("kace/deployment-manifest.json")' in method
-    assert 'manifest.get("schema") != 1' in method
-    assert 'manifest.get("deployment")' in method
+    api = Api()
+    api._ssh = Mock(read_text_file=Mock(return_value=json.dumps(payload)))
+    assert api.get_firmware_deployment_manifest() is None
+    api._ssh.read_text_file.assert_called_once_with("kace/deployment-manifest.json")

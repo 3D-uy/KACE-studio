@@ -44,16 +44,81 @@ def test_idle_terminal_requires_bounded_server_reply(monkeypatch, reply):
     channel.exec_command.assert_called_once_with("bash")
     channel.close.assert_called_once()
     probe.exec_command.assert_not_called()
-    if reply == "timeout":
-        client.close.assert_called_once()
-        assert session.client is None
-        assert "Timeout opening channel" in "".join(output)
-    else:
-        client.close.assert_not_called()
-        assert session.client is client
-        assert output == []
+    client.close.assert_not_called()
+    assert session.client is client
+    assert output == []
     if reply == "acknowledged":
         probe.close.assert_called_once()
+
+
+def test_transient_heartbeat_timeout_preserves_terminal_until_reply(monkeypatch):
+    session = ssh_client.SSHSession()
+    channel, probe, transport, client = Mock(), Mock(), Mock(), Mock()
+    client.get_transport.return_value = transport
+    transport.is_active.return_value = True
+    session.client = client
+    clock = [0.0]
+    monkeypatch.setattr(ssh_client.time, "monotonic", lambda: clock[0])
+
+    def select(*_args):
+        clock[0] += 6
+        return [], [], []
+
+    monkeypatch.setattr(ssh_client.select, "select", select)
+    channel.exit_status_ready.side_effect = lambda: clock[0] >= 30
+    channel.recv_ready.return_value = False
+    transport.open_session.side_effect = [channel, TimeoutError("late heartbeat"), probe]
+    closed = threading.Event()
+    output = []
+    session.run_command_stream("bash", output.append, closed.set)
+    assert closed.wait(1)
+    assert transport.open_session.call_count == 3
+    probe.close.assert_called_once()
+    client.close.assert_not_called()
+    assert session.client is client
+    assert output == []
+
+
+def test_unanswered_heartbeat_still_disconnects_after_grace(monkeypatch):
+    events = []
+    monkeypatch.setattr(ssh_client, "record_ssh_diagnostic",
+                        lambda event, **fields: events.append((event, fields)))
+    session = ssh_client.SSHSession()
+    channel, transport, client = Mock(), Mock(), Mock()
+    client.get_transport.return_value = transport
+    transport.is_active.return_value = True
+    session.client = client
+    clock = [0.0]
+    monkeypatch.setattr(ssh_client.time, "monotonic", lambda: clock[0])
+
+    def select(*_args):
+        clock[0] += 6
+        return [], [], []
+
+    monkeypatch.setattr(ssh_client.select, "select", select)
+    channel.exit_status_ready.return_value = False
+    attempts = [0]
+
+    def open_session(**_kwargs):
+        attempts[0] += 1
+        if attempts[0] == 1:
+            return channel
+        raise TimeoutError("unanswered heartbeat")
+
+    transport.open_session.side_effect = open_session
+    closed = threading.Event()
+    output = []
+    session.run_command_stream("bash", output.append, closed.set)
+    assert closed.wait(1), "An unresponsive transport must remain bounded"
+    assert clock[0] >= ssh_client.SSH_HEARTBEAT_GRACE_SECONDS
+    client.close.assert_called_once()
+    assert session.client is None
+    assert "unanswered heartbeat" in "".join(output)
+    failure = next(fields for event, fields in events if event == "stream_error")
+    assert failure["phase"] == "heartbeat"
+    assert failure["active"] is True
+    assert isinstance(failure["error"], TimeoutError)
+    assert [event for event, _ in events][-3:] == ["stream_error", "client_discard", "stream_end"]
 
 
 def test_terminal_setup_failure_closes_transport_and_notifies(monkeypatch):
@@ -70,6 +135,26 @@ def test_terminal_setup_failure_closes_transport_and_notifies(monkeypatch):
     assert closed.wait(1)
     client.close.assert_called_once()
     assert session.client is None
+
+
+def test_inactive_transport_records_host_loss_before_discard(monkeypatch):
+    session = ssh_client.SSHSession()
+    client, transport, channel = Mock(), Mock(), Mock()
+    session.client = client
+    client.get_transport.return_value = transport
+    transport.open_session.return_value = channel
+    transport.is_active.return_value = False
+    events = []
+    monkeypatch.setattr(ssh_client, "record_ssh_diagnostic",
+                        lambda event, **fields: events.append((event, fields)))
+    closed = threading.Event()
+    session.run_command_stream("bash", lambda _: None, closed.set)
+    assert closed.wait(1)
+    failure = next(fields for event, fields in events if event == "stream_error")
+    assert failure["phase"] == "transport_check"
+    assert failure["active"] is False
+    assert isinstance(failure["error"], EOFError)
+    client.close.assert_called_once()
 
 
 @pytest.mark.parametrize("phase", ["pty", "command"])

@@ -34,7 +34,7 @@ def binding(**overrides):
 
 
 @pytest.fixture
-def storage(monkeypatch, tmp_path):
+def storage(monkeypatch, tmp_path, coherent_provisioning_candidate):
     monkeypatch.setattr(imager.sys, "platform", "win32")
     # No storage command reaches PowerShell or Win32 in these tests.
     query = Mock(return_value=SimpleNamespace(returncode=0, stdout=json.dumps(binding()), stderr=""))
@@ -211,7 +211,7 @@ def test_worker_transports_authorized_identity_to_both_stages(monkeypatch):
     assert injection.call_args.kwargs["drive_identity"] == IDENTITY
 
 
-def test_authorized_snapshot_is_copied_before_starting_worker(monkeypatch):
+def test_authorized_snapshot_is_copied_before_starting_worker(monkeypatch, coherent_provisioning_candidate):
     api = main.Api()
     snapshot = dict(IDENTITY)
     api._drive_snapshots[99] = snapshot

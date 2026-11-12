@@ -71,7 +71,7 @@ def test_switching_dashboard_reuses_verified_archive_image_and_provenance(tmp_pa
 
 
 @pytest.mark.parametrize("architecture", ["32bit", "64bit"])
-def test_fluidd_boot_injection_carries_requested_dashboard_and_exact_bootstrap(tmp_path, monkeypatch, architecture):
+def test_fluidd_boot_injection_carries_requested_dashboard_and_exact_bootstrap(tmp_path, monkeypatch, architecture, coherent_provisioning_candidate):
     (tmp_path / "cmdline.txt").write_text('console=serial0,115200 rootwait\n')
     monkeypatch.setattr(imager, "get_boot_drive_letter", lambda *_a, **_k: str(tmp_path))
     monkeypatch.setattr(imager, "_verified_boot_volume", lambda path, *_a: path)

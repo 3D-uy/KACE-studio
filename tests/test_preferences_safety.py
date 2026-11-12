@@ -13,6 +13,7 @@ def test_preferences_are_filtered_and_atomically_published(tmp_path):
         "form_state": {
             "hostname-input": "printer-one",
             "wifi-password": "must-not-persist",
+            "skip-write-verification": True,
         },
         "unexpected": "ignored",
     })
@@ -24,6 +25,19 @@ def test_preferences_are_filtered_and_atomically_published(tmp_path):
         "form_state": {"hostname-input": "printer-one"},
     }
     assert not (tmp_path / "prefs.json.part").exists()
+
+
+def test_legacy_readback_opt_out_is_not_restored(tmp_path):
+    api = Api()
+    api._prefs_path = str(tmp_path / "prefs.json")
+    (tmp_path / "prefs.json").write_text(json.dumps({
+        "theme": "light",
+        "form_state": {"hostname-input": "printer-one", "skip-write-verification": True},
+    }), encoding="utf-8")
+
+    preferences = api.get_preferences()
+    assert preferences["theme"] == "light"
+    assert preferences["form_state"] == {"hostname-input": "printer-one"}
 
 
 def test_failed_preferences_publish_removes_partial_file(tmp_path, monkeypatch):
