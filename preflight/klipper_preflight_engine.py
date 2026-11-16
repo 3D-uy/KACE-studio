@@ -146,7 +146,11 @@ def validate_files(files, *, pin, recipe, worker, receipt_path, run=_run,
         if inspect.returncode or inspect.stdout.strip() != image:
             raise RuntimeError("provisioned image missing or identity mismatch")
         with tempfile.TemporaryDirectory(prefix="kace-preflight-") as temporary:
-            stage = Path(temporary)
+            # Keep the host-side parent private, but mount only its readable
+            # child. Container root has no DAC_OVERRIDE after --cap-drop ALL
+            # and may not share the host UID (including rootless/userns Docker).
+            stage = Path(temporary) / "input"
+            stage.mkdir()
             for name, content in files.items():
                 destination = stage / "tree" / name
                 if not destination.resolve().is_relative_to((stage / "tree").resolve()):
@@ -157,6 +161,13 @@ def validate_files(files, *, pin, recipe, worker, receipt_path, run=_run,
             manifest = {"klipper_ref": pin, "cases": [{"id": "plan", "config_path": "tree/printer.cfg",
                                                           "generation": {"status": "generated"}}]}
             (stage / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            if os.name == "posix":
+                # The reviewed tree has already rejected symlinks/special files.
+                # Normalize private copies, never source files or the 0700 parent;
+                # restrictive host umasks must not make the readonly mount unreadable.
+                for path in stage.rglob("*"):
+                    path.chmod(0o755 if path.is_dir() else 0o644)
+                stage.chmod(0o755)
             command = [docker, "run", "--rm", "--pull", "never", "--network", "none", "--cap-drop", "ALL",
                        "--security-opt", "no-new-privileges", "--read-only", "--pids-limit", "128",
                        "--memory", "512m", "--cpus", "1", "--tmpfs", "/tmp:rw,exec,nosuid,nodev",

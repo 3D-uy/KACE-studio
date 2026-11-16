@@ -26,6 +26,9 @@ uncommitted changes or current CI, packaging or physical qualification.
   Remote runtime files, installer and bootstrap have been verified by SHA-256;
   runtime_status=pinned records input identity, not CI, package or hardware
   qualification.
+- Bundle the corrected Core preflight engine: readable container input copies
+  remain under a private host-side parent without adding Docker capabilities.
+  Require the real loader and cross-project contract gate before packaging.
 - No 0.6.0-rc.1 executable or download is available from this preparation.
   Clean-runner CI, bundle/PE/native renderer checks, repeated and independent
   builds, and manual hardware E2E remain pending. Earlier unsigned-build evidence

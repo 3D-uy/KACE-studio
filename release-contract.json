@@ -35,10 +35,10 @@
   },
   "kace": {
     "repository": "https://github.com/3D-uy/KACE.git",
-    "candidate_ref": "a730518001ba257b1a510776153e1ca58b87ee59",
-    "bootstrap_ref": "9dfd170d5a50d95d33785d9a0a5394a5ac530076",
-    "bootstrap_sha256": "23219b2bc964db3dac36f77f9492dbb5d7a864adb6e8c02e5e83f65f376a6060",
-    "installer_ref": "a730518001ba257b1a510776153e1ca58b87ee59",
+    "candidate_ref": "c2da6d6bdade6ab31f88ab4ccd060cc8e59eae1a",
+    "bootstrap_ref": "a76c558fd91170af77fc146c400d73e032ee1d6f",
+    "bootstrap_sha256": "3bd809f4f08011acc669e726b90a86f7a44526a550d728bdf2d0921da76afa7d",
+    "installer_ref": "c2da6d6bdade6ab31f88ab4ccd060cc8e59eae1a",
     "installer_sha256": "8321a6c9706e459dbcd8e6e29b7f8a847e2cac2c9ffd5401f6ffe268281da452",
     "runtime_status": "pinned",
     "required_runtime_files": {
@@ -85,7 +85,7 @@
       "core/hotend_fan.py": "2ce8dec9b272970c653d390b365be4604f22687ffed1d5ff5a7c2c5d2e23b94b",
       "core/klipper_preflight.Dockerfile": "69ae81904220bd00a47e2c6c6669b942ce5b74566a18acbfe30149a3c11a2c7c",
       "core/klipper_preflight.py": "60ff09b37342468e7cc0fae3587719f15f22c04134c79af5ea6b4c077209e053",
-      "core/klipper_preflight_engine.py": "dde508139644607d09f289b1fafac587df405f9f0a5ab1ca2cedf60b188cbacc",
+      "core/klipper_preflight_engine.py": "2abd748ae12779272f367d89a5d2ac37310f38b8be328db7d9aecfca68ed7e95",
       "core/klipper_preflight_worker.py": "c3f83e44a0b0a11daa0663a2679bb926259aca5cd6641f72755925bff561490e",
       "core/known_hosts.py": "5f5795aa006f6c7da52571a6262e1c3fbc3eb63fd8bb686d04c123f99e44281d",
       "core/leveling.py": "bdc2d72ef0067cd2f21ae85bd0ec21d02564b42b0d8ecbd6ef5f2b262fa1b112",

@@ -274,6 +274,11 @@ and producer tested. SSH transport remains simulated; ARMv7, Windows packaging
 and physical printer behavior require separate qualification. Docker runs only
 on the CI host, never on a Pi.
 
+The bundled engine mounts readable input copies beneath a private host-side
+temporary parent. POSIX permissions are applied only to those copies; Windows
+keeps its ACL behavior. The parent remains private and the container retains
+readonly mounts, no network, dropped capabilities and its existing limits.
+
 This preserves the bounded loader proof (object load and fan references). It
 does not attest destination extensions, another Klipper version, MCU, wiring,
 movement, heaters or physical safety.
