@@ -174,6 +174,8 @@ ensure_pinned_git_checkout() {
     local expected_ref="$3"
     local target="$4"
     local actual_ref=""
+    local actual_origin=""
+    local worktree_status=""
     local staging=""
 
     if [ -e "$target" ]; then
@@ -186,6 +188,19 @@ ensure_pinned_git_checkout() {
             return 1
         fi
         if [ "$actual_ref" = "$expected_ref" ]; then
+            if ! actual_origin=$(run_as_printer git -C "$target" remote get-url origin) ||
+               [ "$actual_origin" != "$repository" ]; then
+                log_err "$label origin differs from its reviewed repository; existing files were preserved."
+                return 1
+            fi
+            # HEAD alone does not identify executable bytes. Preserve local
+            # extensions/edits for an explicit review, never reset or clean them.
+            # Git-ignored build outputs remain allowed by the upstream policy.
+            if ! worktree_status=$(run_as_printer git -C "$target" status --porcelain --untracked-files=all) ||
+               [ -n "$worktree_status" ]; then
+                log_err "$label has local changes or could not be verified; review the checkout before retrying."
+                return 1
+            fi
             log_ok "$label already matches pinned revision $expected_ref."
             return 0
         fi
@@ -513,7 +528,9 @@ PY
     POWER_INITIAL_STATE="${fields[6]}"
     POWER_OFF_WHEN_SHUTDOWN="${fields[7]}"
     validate_power_relay_settings || return 1
-    verify_requested_power_relay "$config_path" || return 1
+    # Historical receipts authorize verification/preservation, not an implicit
+    # policy migration. Explicit new reconciliation adds the print lock.
+    POWER_RELAY_RESTORED=1 verify_requested_power_relay "$config_path" || return 1
     POWER_RELAY_RESTORED=1
     log_ok "Preserving verified GPIO relay settings from power.json."
 }
@@ -678,6 +695,7 @@ expected = [
     f"restart_klipper_when_powered: {sys.argv[7]}" if enabled else None,
     f"initial_state: {sys.argv[8]}" if enabled else None,
     f"off_when_shutdown: {sys.argv[9]}" if enabled else None,
+    "locked_while_printing: True" if enabled else None,
 ]
 expected = [line for line in expected if line is not None]
 begin_marker = "# BEGIN KACE MANAGED: power"
@@ -688,7 +706,7 @@ newline = "\r\n" if "\r\n" in content else "\n"
 lines = content.splitlines()
 section_re = re.compile(r"^\s*\[\s*([^\]]+?)\s*\]\s*(?:[#;].*)?$", re.IGNORECASE)
 managed_option_re = re.compile(
-    r"^\s*(type|pin|restart_klipper_when_powered|initial_state|off_when_shutdown)\s*[:=]",
+    r"^\s*(type|pin|restart_klipper_when_powered|initial_state|off_when_shutdown|locked_while_printing)\s*[:=]",
     re.IGNORECASE,
 )
 
@@ -816,7 +834,7 @@ verify_power_relay_section() {
     local state_path="${POWER_CONFIG_PATH:-${PRINTER_HOME:+$PRINTER_HOME/.config/kace/power.json}}"
     python3 - "$config_path" "$state_path" "$POWER_RELAY" "$POWER_DEVICE" "$POWER_GPIO" \
         "$POWER_ACTIVE_LOW" "$POWER_RESTART_KLIPPER" "$POWER_INITIAL_STATE" \
-        "$POWER_OFF_WHEN_SHUTDOWN" <<'PY'
+        "$POWER_OFF_WHEN_SHUTDOWN" "${POWER_RELAY_RESTORED:-0}" <<'PY'
 import json
 from pathlib import Path
 import re
@@ -836,6 +854,8 @@ expected = {
     "initial_state": sys.argv[8],
     "off_when_shutdown": sys.argv[9],
 } if enabled else {}
+if enabled and sys.argv[10] != "1":
+    expected["locked_while_printing"] = "true"
 previous_device = None
 if state_path and state_path.exists():
     previous = json.loads(state_path.read_text(encoding="utf-8"))
@@ -1492,6 +1512,220 @@ EOF
     fi
 }
 
+publish_nginx_configuration() {
+    # Root publishes only this reviewed set; no installed KACE imports required.
+    $SUDO python3 - "$1" "${2:-/etc/nginx}" "$3" <<'PY'
+"""Embedded bootstrap publisher: no package imports and no runtime downloads."""
+import base64
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+
+MARKER = b'# KACE managed: printer dashboard\n'
+ALLOWED = {'sites-available/kace-printer', 'sites-enabled/default',
+           'sites-enabled/kace-printer', 'sites-enabled/mainsail'}
+candidate, root = Path(sys.argv[1]), Path(sys.argv[2]).resolve()
+remove_mainsail = sys.argv[3] == 'true'
+journal = root / '.kace-nginx-transaction.json'
+
+
+def sync_dir(path):
+    if os.name != 'nt':
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def capture(path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return {'kind': 'absent'}
+    common = {'mode': stat.S_IMODE(info.st_mode), 'uid': info.st_uid, 'gid': info.st_gid}
+    if stat.S_ISLNK(info.st_mode):
+        return dict(common, kind='link', target=os.readlink(path))
+    if stat.S_ISREG(info.st_mode):
+        return dict(common, kind='file', data=base64.b64encode(path.read_bytes()).decode('ascii'))
+    raise RuntimeError('unsupported Nginx path type: ' + str(path))
+
+
+def publish(path, value):
+    if value['kind'] == 'absent':
+        if path.exists() or path.is_symlink():
+            path.unlink()
+        sync_dir(path.parent)
+        return
+    fd, temporary = tempfile.mkstemp(prefix='.kace-nginx-', dir=path.parent)
+    temp = Path(temporary)
+    try:
+        if value['kind'] == 'file':
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(base64.b64decode(value['data'], validate=True))
+                stream.flush()
+                if os.name != 'nt':
+                    os.fchown(stream.fileno(), value['uid'], value['gid'])
+                    os.fchmod(stream.fileno(), value['mode'])
+                else:
+                    os.chmod(temp, value['mode'])
+                os.fsync(stream.fileno())
+        elif value['kind'] == 'link':
+            os.close(fd)
+            temp.unlink()
+            temp.symlink_to(value['target'])
+            if os.name != 'nt':
+                os.chown(temp, value['uid'], value['gid'], follow_symlinks=False)
+        else:
+            os.close(fd)
+            raise RuntimeError('invalid recovery file type')
+        os.replace(temp, path)
+        sync_dir(path.parent)
+    finally:
+        if temp.exists() or temp.is_symlink():
+            temp.unlink()
+
+
+def save(record):
+    data = json.dumps(record, sort_keys=True).encode()
+    publish(journal, {'kind': 'file', 'data': base64.b64encode(data).decode(),
+                      'mode': 0o600, 'uid': os.getuid() if os.name != 'nt' else 0,
+                      'gid': os.getgid() if os.name != 'nt' else 0})
+
+
+def clear():
+    journal.unlink()
+    sync_dir(root)
+
+
+def restore(record):
+    changes = record.get('changes')
+    if (record.get('schema') != 1 or not isinstance(changes, dict)
+            or not changes or not set(changes).issubset(ALLOWED)):
+        raise RuntimeError('invalid Nginx recovery journal')
+    # Check the complete set before restoring any path, including absent ones.
+    for name, states in changes.items():
+        if capture(root / name) not in (states['before'], states['after']):
+            raise RuntimeError('external Nginx edit; manual recovery required: ' + name)
+    for name, states in reversed(list(changes.items())):
+        actual = capture(root / name)
+        if actual == states['before']:
+            continue
+        if actual != states['after']:
+            raise RuntimeError('external Nginx edit during recovery: ' + name)
+        publish(root / name, states['before'])
+    clear()
+
+
+def validate_staged(new_data, remove_vendor):
+    """Keep the real main config and other enabled sites, replace only our set.
+
+    The temporary main file stays beside nginx.conf so relative includes keep
+    their original base. Unknown include layouts are rejected before publication.
+    """
+    main = root / 'nginx.conf'
+    main_text = main.read_text(encoding='utf-8')
+    include = re.compile(r'(?m)^(\s*include\s+)(?:"?'+re.escape(str(root))+
+                         r'/sites-enabled/\*"?|"?sites-enabled/\*"?)(\s*;)')
+    if len(include.findall(main_text)) != 1:
+        raise RuntimeError('Nginx sites-enabled include layout is not supported; files preserved')
+    with tempfile.TemporaryDirectory(prefix='.kace-nginx-stage.', dir=root) as folder:
+        stage = Path(folder)
+        staged_site = stage / 'kace-printer'
+        staged_site.write_bytes(new_data)
+        enabled = stage / 'enabled'
+        enabled.mkdir()
+        for path in (root / 'sites-enabled').iterdir():
+            if path.name in ('default', 'kace-printer') or (remove_vendor and path.name == 'mainsail'):
+                continue
+            # Link through the existing entry; relative/broken links retain their
+            # actual semantics, and nginx rejects unreadable inputs itself.
+            (enabled / path.name).symlink_to(path)
+        (enabled / 'kace-printer').symlink_to(staged_site)
+        text = include.sub(lambda match: match[1] + str(enabled / '*') + match[2], main_text)
+        fd, config = tempfile.mkstemp(prefix='.kace-nginx-main.', dir=root)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                stream.write(text)
+            if subprocess.run(['nginx', '-t', '-c', config], check=False).returncode:
+                raise RuntimeError('Nginx staged configuration test failed; active files preserved')
+        finally:
+            Path(config).unlink()
+
+
+def main():
+    for directory in (root / 'sites-enabled', root / 'sites-available'):
+        if directory.is_symlink() or not directory.is_dir():
+            raise RuntimeError('unexpected Nginx configuration directory: ' + str(directory))
+    if journal.is_symlink():
+        raise RuntimeError('unexpected Nginx journal symlink')
+    if journal.exists():
+        restore(json.loads(journal.read_text(encoding='utf-8')))
+    desired = candidate.read_bytes()
+    if not desired.startswith(MARKER):
+        raise RuntimeError('candidate is not a KACE dashboard configuration')
+    names = ['sites-available/kace-printer', 'sites-enabled/default', 'sites-enabled/kace-printer']
+    if remove_mainsail:
+        names.append('sites-enabled/mainsail')
+    before = {name: capture(root / name) for name in names}
+    available = before[names[0]]
+    if available['kind'] != 'absent' and (available['kind'] != 'file' or not
+            base64.b64decode(available['data'], validate=True).startswith(MARKER)):
+        raise RuntimeError('unmanaged kace-printer configuration; explicit review required, files preserved')
+    if remove_mainsail:
+        vendor = before['sites-enabled/mainsail']
+        if vendor['kind'] != 'absent' and (vendor['kind'] != 'link' or
+                (root / 'sites-enabled' / vendor['target']).resolve() != (root / 'sites-available/mainsail').resolve()):
+            raise RuntimeError('unexpected Mainsail site; files preserved')
+    validate_staged(desired, remove_mainsail)
+    owner = {'mode': available.get('mode', 0o644),
+             'uid': available.get('uid', os.getuid() if os.name != 'nt' else 0),
+             'gid': available.get('gid', os.getgid() if os.name != 'nt' else 0)}
+    link_owner = {'mode': 0o777, 'uid': os.getuid() if os.name != 'nt' else 0,
+                  'gid': os.getgid() if os.name != 'nt' else 0}
+    after = {name: {'kind': 'absent'} for name in names}
+    after[names[0]] = dict(owner, kind='file', data=base64.b64encode(desired).decode())
+    after['sites-enabled/kace-printer'] = dict(link_owner, kind='link', target=str(root / names[0]))
+    record = {'schema': 1, 'changes': {name: {'before': before[name], 'after': after[name]} for name in names}}
+    # Snapshot is durable before any active path changes.
+    save(record)
+    try:
+        for name, states in record['changes'].items():
+            if capture(root / name) != states['before']:
+                raise RuntimeError('external Nginx edit before publication: ' + name)
+            publish(root / name, states['after'])
+        if subprocess.run(['nginx', '-t'], check=False).returncode:
+            raise RuntimeError('Nginx effective configuration test failed')
+        if subprocess.run(['systemctl', 'restart', 'nginx'], check=False).returncode:
+            raise RuntimeError('Nginx restart failed; previous files will be restored')
+    except (OSError, RuntimeError):
+        restore(record)
+        raise
+    clear()
+
+
+try:
+    # Serialize only KACE publishers. External editors are guarded by exact
+    # before/after comparisons, but are not participants in this advisory lock.
+    with (root / '.kace-nginx.lock').open('a+b') as lock:
+        if os.name != 'nt':
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        main()
+except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+    print('Nginx publication failed: ' + str(exc), file=sys.stderr)
+    if journal.exists():
+        print('Recovery evidence retained at ' + str(journal), file=sys.stderr)
+    raise SystemExit(1)
+
+PY
+}
+
 if [ "${KACE_BOOTSTRAP_LIB_ONLY:-}" = "1" ]; then
     return 0 2>/dev/null || exit 0
 fi
@@ -2076,7 +2310,7 @@ else
             exit 1
         fi
     done
-    NGINX_CONF="/etc/nginx/sites-available/kace-printer"
+    NGINX_CANDIDATE=$(mktemp)
     MAINSAIL_WEB_ROOT="/var/www/mainsail"
     if [ "$PREBAKED" = "true" ]; then
         MAINSAIL_WEB_ROOT="$PRINTER_HOME/mainsail"
@@ -2092,7 +2326,8 @@ else
     
     if [ "$DEFAULT_UI" = "both" ]; then
         # Configure Nginx for both: Mainsail on port 80, Fluidd on port 81
-        $SUDO tee "$NGINX_CONF" > /dev/null <<EOF
+        cat > "$NGINX_CANDIDATE" <<EOF
+# KACE managed: printer dashboard
 server {
     listen 80 default_server;
     $listen_ipv6
@@ -2171,7 +2406,8 @@ EOF
             TEMP_UI="mainsail"
         fi
 
-        $SUDO tee "$NGINX_CONF" > /dev/null <<EOF
+        cat > "$NGINX_CANDIDATE" <<EOF
+# KACE managed: printer dashboard
 server {
     listen 80 default_server;
     $listen_ipv6
@@ -2212,37 +2448,12 @@ upstream kace_apiserver {
 EOF
     fi
 
-    # The reviewed MainsailOS image enables this vendor site on port 80.
-    # Keep the vendor configuration and restore its link if validation fails.
-    MAINSAIL_SITE="/etc/nginx/sites-enabled/mainsail"
-    MAINSAIL_SITE_TARGET=""
-    if [ "$PREBAKED" = "true" ] && { [ -e "$MAINSAIL_SITE" ] || [ -L "$MAINSAIL_SITE" ]; }; then
-        if [ ! -L "$MAINSAIL_SITE" ] || \
-           [ "$(readlink "$MAINSAIL_SITE")" != "/etc/nginx/sites-available/mainsail" ]; then
-            log_err "Unexpected Mainsail site; refusing to replace an unmanaged Nginx configuration."
-            exit 1
-        fi
-        MAINSAIL_SITE_TARGET=$(readlink "$MAINSAIL_SITE")
-        $SUDO rm "$MAINSAIL_SITE"
-    fi
-
-    # Link the new configuration and remove the default/conflicting configurations
-    $SUDO rm -f /etc/nginx/sites-enabled/default
-    $SUDO rm -f /etc/nginx/sites-enabled/kace-printer
-    $SUDO ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
-
-    # Test the final configuration (which now includes kace-printer and excludes default)
-    if ! $SUDO nginx -t 2>&1; then
-        log_err "Nginx configuration test failed. Aborting."
-        # Rollback symlink on failure to avoid leaving nginx in a broken state
-        $SUDO rm -f /etc/nginx/sites-enabled/kace-printer
-        if [ -n "$MAINSAIL_SITE_TARGET" ]; then
-            $SUDO ln -s "$MAINSAIL_SITE_TARGET" "$MAINSAIL_SITE"
-        fi
+    if ! publish_nginx_configuration "$NGINX_CANDIDATE" "/etc/nginx" "$PREBAKED"; then
+        rm -f -- "$NGINX_CANDIDATE"
+        log_err "Nginx configuration publication failed; inspect recovery diagnostics before retrying."
         exit 1
     fi
-
-    $SUDO systemctl restart nginx
+    rm -f -- "$NGINX_CANDIDATE"
     log_ok "Nginx configured and running."
 fi
 
@@ -2421,6 +2632,14 @@ if [ "$INSTALL_OK" -ne 1 ]; then
     # The installer also returns the wizard outcome. A durable, valid checkpoint
     # distinguishes an installed agent awaiting recovery from installation loss.
     if [ -x "$PRINTER_HOME/kace/venv/bin/python" ] && (
+        # Diagnostic imports must cooperate with runtime publication too. Open
+        # read-only so a root bootstrap never creates a printer-user lock file.
+        exec 8<"$PRINTER_HOME/.kace-install.lock" || exit 1
+        flock -s -n 8 || exit 1
+        if [ -e "$PRINTER_HOME/.kace-runtime-transaction.json" ] || \
+                [ -L "$PRINTER_HOME/.kace-runtime-transaction.json" ]; then
+            exit 1
+        fi
         cd "$PRINTER_HOME/kace" && ./venv/bin/python -c '
 from core.firmware_workflow import load_checkpoint
 c = load_checkpoint("firmware-workflow.json", verify_artifact=True)

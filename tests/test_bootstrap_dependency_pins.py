@@ -78,6 +78,16 @@ command="$1"
 shift
 case "$command" in
     remote)
+        if [[ "$1" == "add" && "$2" == "origin" ]]; then
+            printf '%s\\n' "$3" > "$directory/.git/kace-origin"
+        elif [[ "$1" == "get-url" && "$2" == "origin" ]]; then
+            cat "$directory/.git/kace-origin"
+        else
+            exit 64
+        fi
+        ;;
+    status)
+        # The fixture contains no local edits; HEAD alone no longer suffices.
         exit 0
         ;;
     fetch)
