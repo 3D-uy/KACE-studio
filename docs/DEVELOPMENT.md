@@ -279,6 +279,12 @@ temporary parent. POSIX permissions are applied only to those copies; Windows
 keeps its ACL behavior. The parent remains private and the container retains
 readonly mounts, no network, dropped capabilities and its existing limits.
 
+The existing required Windows build check runs its dependency guard even when a
+source or integration job fails. Only success from both gates allows checkout and
+packaging; failure, cancellation or omission reports a failed required check.
+Depending on a failed job without this guard would skip the build, and GitHub
+accepts skipped required checks. This does not modify repository protection rules.
+
 This preserves the bounded loader proof (object load and fan references). It
 does not attest destination extensions, another Klipper version, MCU, wiring,
 movement, heaters or physical safety.
