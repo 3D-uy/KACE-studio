@@ -8,6 +8,8 @@ Prioridades deste código, sem datas prometidas ou afirmações de qualificaçã
 
 Existem imagem guiada, primeira inicialização, Discovery, SSH/SFTP, progresso do bootstrap e recuperação do checkpoint KACE. Python mantém a autoridade; o frontend deve respeitar validações, identidades de operação e resultados terminais.
 
+As correções no código acrescentam busca remota explícita de operações após reabrir, publicação SFTP ligada à identidade, requisições Moonraker limitadas e desligamento normal revisado com ação separada de parada de emergência Klipper. Reconexão nunca retoma automaticamente; parada de emergência não é isolamento elétrico. A autorização persistente de IP está alinhada em EN/ES/PT. Essas alterações locais não qualificam WebView2 nativo, o EXE histórico, primeiro boot nem comportamento físico da energia. Faltam gates de runner limpo, pacote imutável e E2E manuais.
+
 ## 🧭 Prioridades
 
 A ajuda do Crowsnest esclarece que desmarcar a opção preserva uma instalação existente. Verificar essa explicação em EN/ES/PT e WebView2 nativo, e testar uma imagem limpa e outra com Crowsnest presente durante a qualificação controlada do primeiro boot; esta alteração de código não qualifica um pacote.
@@ -24,3 +26,5 @@ A ajuda do Crowsnest esclarece que desmarcar a opção preserva uma instalação
 Testes no Linux não equivalem a suporte ao desktop/writer no Linux. Novos targets de firmware e decisões de segurança da impressora pertencem ao KACE. Plataformas ou fluxos adicionais exigem escopo e validação separados.
 
 [Voltar ao README](README.md)
+
+As ações oficiais de retomada e configuração agora recusam importar ou executar KACE durante uma atualização do runtime ou enquanto seu journal continuar pendente. Após uma atualização interrompida, concluir a recuperação com o instalador verificado antes de retomar. Essa proteção no código não qualifica o executável histórico.

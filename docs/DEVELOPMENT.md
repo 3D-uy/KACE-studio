@@ -152,8 +152,15 @@ configuration** reads that operation's result; an already-complete result is
 reported read-only. Otherwise a fresh PC bridge invokes `--resume-configuration`
 bound to both checkpoint and result hashes. KACE rechecks them under its lock
 and requires fresh preflight/review. No reconnection automatically resumes or
-publishes. Discovery of operations after restarting Studio itself is not yet
-implemented; retain the operation ID and evidence before closing the app.
+publishes. After reopening Studio, **Search pending configurations** explicitly
+reads the remote operation inventory. It validates receipt/checkpoint identity,
+schema, generated-file manifest and hashes; unreadable or incomplete entries
+remain read-only diagnostics. Several operations require explicit selection.
+Continue binds the selected result digest to the current SSH session and fresh
+preflight; neither local browser storage nor reconnect grants resume authority.
+Inventory limits are 128 entries, 64 valid operations, 32 KiB per JSON file and
+a ten-second dedicated SFTP channel deadline. Native reopening and physical
+recovery still require qualification on the exact distributed candidate.
 
 Exercise `test_studio_configuration.py`, `test_studio_configuration_frontend.py`
 and `test_studio_configuration_shell.py` with the existing resume, preflight,
@@ -553,3 +560,54 @@ the generic login-error path. Manual login failures retain their existing error 
 Coverage: `tests/test_ssh_stream_liveness.py`, `tests/test_power_session_identity.py`
 and `tests/test_bootstrap_frontend_session.py`. These simulated failures do not
 establish the cause of a Raspberry Pi kernel lockup or qualify printer hardware.
+
+
+## Audit remediation contracts (source, qualification pending)
+
+Discovery validates each Moonraker result independently; one malformed result
+must not discard healthy hosts. SFTP downloads transfer to a local temporary file
+and publish only while the originating SSH identity is still current. Network
+transfer and fsync stay outside the short publication lock.
+
+Moonraker HTTP has a total request budget, including response reads, bounded
+resolver workers and a 1 MiB response/error body limit. It rejects redirects and
+unsupported HTTPS proxy routes rather than bypassing the deadline. Timeout or
+cancellation does not retry a power POST. These limits do not apply to image
+transfers, which have a separate transport policy.
+
+Normal power-off requires fresh locked_while_printing=true, a permitted idle
+print state, finite heater readings and zero targets. The operator reviews the
+device, temperatures, wiring and cooling before a single-use, session-bound
+confirmation. Revalidation rejects changed or warmer state; no universal safe
+cooling threshold is inferred. The separate emergency action requests Klipper
+emergency_stop and is explicitly not an electrical disconnect or proof of actual
+hardware shutdown. It remains independent of a blocked normal power request.
+Persistent IP authorization explains its effect in EN/ES/PT.
+
+The development requirement and hashed lock select setuptools 84.1.0 for
+GHSA-xmj3-9gf7-h52w. Existing environments are not upgraded automatically. A clean
+lock installation, build, independent reproduction and source/frozen identity
+checks remain required; the historical EXE and release contract are not relabelled
+as this source tree.
+
+Imager unit tests explicitly isolate boot-storage refresh; a fail-closed guard
+rejects unmocked refresh even if production catches the exception. Discovery
+socket tests use fakes or loopback servers. This is test safety, not evidence of
+real disk writing, native WebView2, first boot or physical qualification.
+
+
+### Runtime updates and official resume actions
+
+Both official runtime launch commands acquire the installer's shared
+`$HOME/.kace-install.lock` before reading commit/checkpoint identity or importing
+runtime modules. They reject the pending transaction journal, including a dangling
+symlink, and keep the lock until the CLI and final result verification finish.
+Failure does not emit workflow_started or completion. Native Windows Bash tests
+use an explicit flock argument-checking double because Git Bash lacks flock;
+separate Linux regressions prove real exclusion and lock lifetime.
+
+Core requests an explicit read-only review of the generated printable area for
+configuration-only generation/resume, including legacy checkpoints. Studio must
+preserve that interactive terminal step; reconnection or a previous installation
+COMPLETE does not answer it. Changing geometry requires a separately reviewed
+generation flow, not modifying a frozen recovery artifact.
