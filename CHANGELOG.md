@@ -6,7 +6,30 @@ uncommitted changes or current CI, packaging or physical qualification.
 
 [README](README.md) covers current usage; [ROADMAP](ROADMAP.md) covers pending work.
 
-## Unreleased
+## [0.6.0-rc.1] - 2026-11-16 (preparation; unpublished)
+
+- Add explicit configuration-only launch and bounded discovery/recovery of
+  interrupted operations. Reconnection alone never resumes or completes them.
+- Acquire the runtime update lock before official Core launches, identity reads
+  and result verification; reject a pending update journal.
+- Publish SFTP downloads only for the originating session, preserve destination
+  files on failure, and isolate malformed discovery responses.
+- Bound Moonraker requests and response bodies; reject redirects and never retry
+  a power POST automatically. Normal OFF requires fresh device protection,
+  permitted printer state, finite temperatures, zero targets and a one-use
+  confirmation. Emergency stop remains a logical Klipper request, not proof of
+  electrical disconnection. Explain persistent IP authorization in EN/ES/PT.
+- Select setuptools 84.1.0 in the development requirement and hashed lock.
+  Existing environments are not upgraded; clean installation and rebuild remain
+  pending. Keep storage refresh and network probes isolated in unit tests.
+- Pin Core 0.10.0-rc.1 runtime and bootstrap to published immutable commits.
+  Remote runtime files, installer and bootstrap have been verified by SHA-256;
+  runtime_status=pinned records input identity, not CI, package or hardware
+  qualification.
+- No 0.6.0-rc.1 executable or download is available from this preparation.
+  Clean-runner CI, bundle/PE/native renderer checks, repeated and independent
+  builds, and manual hardware E2E remain pending. Earlier unsigned-build evidence
+  does not attest this candidate.
 
 - Stage new SSH host keys in memory and publish trust through the locked atomic
   writer, preserving previous keys on temporary-write or replacement failure.

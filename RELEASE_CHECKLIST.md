@@ -6,6 +6,11 @@ signature**, with independently reproduced build evidence. Signing is deferred
 for this unsigned distribution, not reported as passed.
 Following this checklist does not itself publish, tag, sign, or release anything.
 
+The `0.6.0-rc.1` source candidate is in preparation. It has no qualified
+package or distribution authorization from this preparation. The historical
+`0.5.0-rc.3` policy and evidence below must not be attributed to the new candidate;
+its version selection alone does not satisfy any publication gate.
+
 ## Current unsigned distribution policy
 
 The unsigned distribution must pass source tests, immutable input verification,
