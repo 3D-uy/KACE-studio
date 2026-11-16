@@ -5,17 +5,28 @@ from main import Api
 
 
 @pytest.mark.parametrize('filename', ['Robin_nano.bin', 'Robin_nano35.bin', 'Robin_nano43.bin'])
-def test_robin_download_preserves_final_name_and_session(filename):
+def test_robin_download_preserves_final_name_and_session(filename, tmp_path):
     api = Api()
     api._ssh_gen = 7
     api._ssh = Mock()
-    api._ssh.download_file.return_value = True
+    api._ssh.is_connected.return_value = True
+    destination = tmp_path / filename
+    payload = b'unchanged synthetic Robin firmware'
+    def transfer(remote_path, local_path, *, publish):
+        assert remote_path == remote
+        assert local_path == str(destination)
+        staged = tmp_path / 'received.part'
+        staged.write_bytes(payload)
+        return publish(str(staged), local_path)
+    api._ssh.download_file.side_effect = transfer
     api._window = Mock()
-    api._window.create_file_dialog.return_value = ('C:/downloads/' + filename,)
+    api._window.create_file_dialog.return_value = (str(destination),)
     remote = '/home/kace/kace/deploy/reviewed/' + filename
     assert api.download_file(remote, 7)
     assert api._window.create_file_dialog.call_args.kwargs['save_filename'] == filename
-    api._ssh.download_file.assert_called_once_with(remote, 'C:/downloads/' + filename)
+    api._ssh.download_file.assert_called_once()
+    assert destination.read_bytes() == payload
+    assert not (tmp_path / 'received.part').exists()
 
 
 def test_robin_download_does_not_cross_session_or_cancelled_dialog():

@@ -67,10 +67,16 @@ def rig(monkeypatch):
             clients.append(self)
 
         def get(self, path):
+            if "print_stats" in path:
+                return {"result": {"status": {"print_stats": {"state": "standby"},
+                    "heaters": {"available_heaters": ["extruder"]},
+                    "extruder": {"temperature": 25, "target": 0}}}}
+            if "extruder" in path:
+                return {"result": {"status": {"extruder": {"temperature": 25, "target": 0}}}}
             assert path == "/machine/device_power/devices"
             if self.get_hook:
                 self.get_hook()
-            return {"result": {"devices": [{"device": self.device, "status": self.state}]}}
+            return {"result": {"devices": [{"device": self.device, "status": self.state, "locked_while_printing": True}]}}
 
         def post(self, path, payload):
             posts.append((self.host, path, payload))
@@ -172,7 +178,8 @@ def test_same_device_on_off_and_active_low_semantics_unchanged(rig, active_low):
     assert api.get_power_status("A.local", "ignored", context)["status"] == "off"
     assert api.power_on("A.local", "ignored", context)["status"] == "on"
     assert api.wait_power_ready("A.local", "ignored", context)["status"] == "on"
-    assert api.power_off("A.local", "ignored", context)["status"] == "off"
+    review = api.inspect_power_off("A.local", "ignored", context)
+    assert api.power_off("A.local", "ignored", context, review["approval_token"])["status"] == "off"
     assert [payload for _, _, payload in posts] == [
         {"device": "shared_relay", "action": "on"},
         {"device": "shared_relay", "action": "off"},

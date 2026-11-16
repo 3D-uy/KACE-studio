@@ -45,6 +45,9 @@ const api = {
     get_power_status: (...args) => queue('status', args),
     power_on: (...args) => queue('command', args),
     power_off: (...args) => queue('command', args),
+    inspect_power_off: (host, device, context) => Promise.resolve({ok: true, device,
+        power_context: context, approval_token: 'fixture',
+        review: {state: 'standby', heaters: {extruder: {temperature: 25, target: 0}}}}),
     get_remote_power_config: (...args) => queue('authority', args),
     connect_ssh: (...args) => queue('login', args),
     disconnect_ssh: () => Promise.resolve(true),
@@ -52,7 +55,8 @@ const api = {
     get_firmware_deployment_manifest: () => Promise.resolve({}),
     get_firmware_workflow_checkpoint: () => Promise.resolve({}),
 };
-const window = {pywebview: {api}, setInterval() {return 1;}, clearInterval() {}};
+const window = {pywebview: {api}, setInterval() {return 1;}, clearInterval() {},
+    confirm() {return true;}, alert() {}};
 window.updateDeviceState = () => {};
 const setTimeout = () => 0;
 const BOOTSTRAP_STAGES = [];
@@ -60,6 +64,7 @@ const bootstrapEventCursors = new Map();
 let bootstrapActive = false, bootstrapAuthoritativeSeen = false, bootstrapFailureHandled = false;
 let bootstrapBuffer = '';
 let firmwareGeneration = null;
+let configurationOperation = null;
 function updateConnectionStatus(connected) {sshConnected = connected;}
 function promptTerminalLogin() {}
 function restoreKaceDeploymentManifest() {}
@@ -129,8 +134,10 @@ CASES = {
             const polls = requests.status.length;
             const commands = requests.command.length;
             const toggle = togglePrinterPower();
+            await tick();
             assert.equal(actions.at(-1), action);
-            assert.deepEqual(requests.command.at(-1).args, ['a.local', 'shared_relay', a]);
+            assert.deepEqual(requests.command.at(-1).args,
+                action === 'power_off' ? ['a.local', 'shared_relay', a, 'fixture'] : ['a.local', 'shared_relay', a]);
             assert.equal(button.disabled, true);
             assert.equal(label.textContent, studioText('powerState_init'));
             await togglePrinterPower();

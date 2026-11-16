@@ -90,14 +90,27 @@ def test_confirmed_archive_event_retains_cursor_across_fragmented_delivery():
     assert parser.workflows["flow-a"].event == event
 
 
-def test_done_is_delivered_as_the_only_success_state():
+def test_success_states_preserve_legacy_done_but_require_configuration_complete():
     parser = KaceWorkflowEventParser()
     line, event = marker(sequence=20, state="DONE", detail="deployment validated")
 
     assert parser.feed(line) == [event]
-    app_js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
-    assert "const isDone = view.state === 'DONE'" in app_js
-    assert "view.state === 'FLASHED'" not in app_js
+    from tests.test_installation_recovery import APP, HARNESS, run_js
+    workflow = APP[APP.index('const KACE_INSTALLATION_STEPS'):APP.index('function restoreKaceDeploymentManifest')]
+    observer = APP[APP.index('let checkpointWatchToken'):APP.index('let firstBootDiscovery')]
+    run_js(HARNESS + workflow + observer + r'''
+firmwareGeneration = 7;
+for (const [kind,state,completed] of [
+    ['installation','DONE',true], ['installation','FLASHED',false],
+    ['firmware_deployment','COMPLETE',true], ['firmware_deployment','FLASHED',false],
+    ['configuration','COMPLETE',true], ['configuration','DONE',false],
+    ['configuration','PENDING_ACTIVATION',false], ['configuration','FAILED',false]
+]) {
+    const view = {workflowId:'fixture',sequence:1,kind,state,generation:7,data:{language:'English'}};
+    renderKaceWorkflow(view);
+    assert.equal(nodes.get('kace-workflow-status').textContent === workflowText('completed',view), completed, kind+':'+state);
+}
+''')
 
 
 @pytest.mark.parametrize("state", [

@@ -958,7 +958,7 @@ class SSHSession:
                     # LOW-06 FIX: Log instead of silently swallowing to surface channel leaks.
                     print(f"Warning: SFTP list_directory channel close error: {close_err}")
 
-    def download_file(self, remote_path: str, local_path: str) -> bool:
+    def download_file(self, remote_path: str, local_path: str, *, publish=None) -> bool:
         """Downloads a file from the Pi to local_path. Returns True on success."""
         sftp = self.get_sftp()
         if not sftp:
@@ -977,7 +977,13 @@ class SSHSession:
             sftp.get(remote_path, temporary_path)
             with open(temporary_path, "r+b") as temporary:
                 os.fsync(temporary.fileno())
-            os.replace(temporary_path, local_path)
+            if publish is not None:
+                # The bridge checks and publishes under its session lock. Network
+                # transfer and fsync deliberately happen outside that lock.
+                if not publish(temporary_path, local_path):
+                    return False
+            else:
+                os.replace(temporary_path, local_path)
             temporary_path = None
             return True
         except Exception as e:

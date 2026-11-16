@@ -31,6 +31,7 @@ let powerStatusRequest = null;
 let powerAuthorityRequest = 0;
 let pendingTerminalData = [];
 let pendingTerminalClosedGeneration = null;
+let configurationRecovery = null;
 
 let userPreferences = { theme: 'dark', kace_auto_scan: true, form_state: {} };
 
@@ -2289,6 +2290,17 @@ function renderKaceWorkflow(view) {
             (!pending && (Boolean(view.connectionLost) || view.generation !== firmwareGeneration));
     }
 
+    const discoverConfiguration = document.getElementById('kace-discover-configurations');
+    if (discoverConfiguration) {
+        const available = view.kind === 'firmware_deployment' && view.state === 'COMPLETE' &&
+            view.data?.firmware_authority === 'durable_checkpoint';
+        discoverConfiguration.style.display = available ? 'inline-flex' : 'none';
+        discoverConfiguration.textContent = studioText('configurationDiscover');
+        discoverConfiguration.dataset.workflowId = available ? view.workflowId : '';
+        discoverConfiguration.disabled = !available || bootstrapActive || !sshConnected ||
+            Boolean(view.connectionLost) || view.generation !== firmwareGeneration || Boolean(configurationRecovery?.loading);
+    }
+
     steps.replaceChildren();
     definition.steps.forEach((label, index) => {
         const item = document.createElement('li');
@@ -2819,6 +2831,8 @@ function updateConnectionStatus(connected, { newSession = false, preserveWorkflo
 }
 
 function renderPrinterPower(result) {
+    const emergency = document.getElementById('printer-emergency-btn');
+    if (emergency) emergency.disabled = !currentPowerContext(powerContext) || emergencyStopRequestActive;
     const button = document.getElementById('printer-power-btn');
     const stateLabel = document.getElementById('printer-power-state');
     if (!button || !stateLabel) return;
@@ -2841,6 +2855,10 @@ function renderPrinterPower(result) {
 }
 
 function resetPowerTarget(host) {
+    configurationRecovery = null;
+    const recoveryPanel = document.getElementById('kace-configuration-recovery');
+    if (recoveryPanel) recoveryPanel.hidden = true;
+    emergencyStopRequestActive = false;
     firmwareGeneration = null;
     pendingTerminalData = [];
     pendingTerminalClosedGeneration = null;
@@ -2889,6 +2907,10 @@ window.invalidatePowerSession = function(context) {
         powerContext = null;
         remotePowerAuthority = null;
         printerPowerRequestActive = false;
+        emergencyStopRequestActive = false;
+        configurationRecovery = null;
+        const recoveryPanel = document.getElementById('kace-configuration-recovery');
+        if (recoveryPanel) recoveryPanel.hidden = true;
         renderPrinterPower({ available: false, status: 'unknown', detailKey: 'powerUnknownHint' });
     }
 };
@@ -2916,23 +2938,20 @@ async function authorizeMoonrakerAccess() {
         const candidate = await window.pywebview.api.inspect_moonraker_client(context);
         if (!currentPowerContext(context)) return;
         if (!candidate.ok || !samePowerContext(candidate.power_context, context)) {
-            throw new Error(candidate.detail || 'Could not verify this computer’s IP');
+            throw new Error(candidate.detail || studioText('moonrakerVerifyIpFailed'));
         }
-        if (!window.confirm(`Allow ${candidate.ip} to control Moonraker on ${context.host}?\n\n` +
-            'This grants persistent access from that IP, including Mainsail and printer power. ' +
-            'Moonraker will restart if the configuration changes. ' +
-            'Run bootstrap first if Moonraker is not installed.')) return;
+        if (!window.confirm(studioText('moonrakerAuthorizeConfirm')
+            .replace('{ip}', () => candidate.ip).replace('{host}', () => context.host))) return;
         if (!currentPowerContext(context)) return;
         const result = await window.pywebview.api.authorize_moonraker_client(candidate.ip, context);
         if (!currentPowerContext(context)) return;
         if (!result.ok || !samePowerContext(result.power_context, context)) {
-            throw new Error(result.detail || 'Moonraker authorization failed');
+            throw new Error(result.detail || studioText('moonrakerAuthorizeFailed'));
         }
-        window.alert(result.changed ? 'Moonraker access authorized. Mainsail can now connect from this IP.'
-            : 'This IP is already authorized in moonraker.conf.');
+        window.alert(studioText(result.changed ? 'moonrakerAuthorized' : 'moonrakerAlreadyAuthorized'));
         refreshPrinterPower();
     } catch (error) {
-        if (currentPowerContext(context)) window.alert(`Moonraker access: ${error.message || error}`);
+        if (currentPowerContext(context)) window.alert(`${studioText('moonrakerAccess')}: ${error.message || error}`);
     } finally {
         if (currentPowerContext(context)) button.disabled = !sshConnected;
     }
@@ -3026,12 +3045,30 @@ async function togglePrinterPower() {
     const context = powerContext;
     powerRequestSequence += 1;
     const action = printerPowerStatus === 'on' ? 'power_off' : 'power_on';
-    renderPrinterPower({ available: true, status: 'init', detail: 'Waiting for Moonraker confirmation…' });
+    renderPrinterPower({ available: true, status: 'init', detail: studioText('powerWaiting') });
     try {
-        await window.pywebview.api[action](context.host, powerDevice, context);
+        if (action === 'power_off') {
+            const review = await window.pywebview.api.inspect_power_off(context.host, powerDevice, context);
+            if (!currentPowerContext(context)) return;
+            if (!review?.ok || !samePowerContext(review.power_context, context) || review.device !== powerDevice) {
+                throw new Error(studioText(review?.code) || studioText('powerOffUnknown'));
+            }
+            const readings = Object.entries(review.review.heaters).map(([name, value]) =>
+                `${name}: ${value.temperature} °C (${studioText('powerTarget')} ${value.target} °C)`).join('\n');
+            const message = studioText('powerOffConfirm').replace('{host}', () => context.host)
+                .replace('{device}', () => powerDevice).replace('{state}', () => review.review.state)
+                .replace('{readings}', () => readings);
+            if (!window.confirm(message) || !currentPowerContext(context)) return;
+            const result = await window.pywebview.api.power_off(context.host, powerDevice, context, review.approval_token);
+            if (!currentPowerContext(context)) return;
+            if (!result?.ok) throw new Error(studioText(result?.code) || studioText('powerActionFailed'));
+        } else {
+            await window.pywebview.api[action](context.host, powerDevice, context);
+        }
     } catch (error) {
         if (currentPowerContext(context)) {
             renderPrinterPower({ available: false, status: 'error', detail: String(error) });
+            if (action === 'power_off') window.alert(error.message || String(error));
         }
     } finally {
         if (currentPowerContext(context)) {
@@ -3039,6 +3076,31 @@ async function togglePrinterPower() {
             // The command response is not UI state. Re-read the same Moonraker
             // power device that Mainsail observes and render only that result.
             await refreshPrinterPower();
+        }
+    }
+}
+
+let emergencyStopRequestActive = false;
+async function requestLogicalEmergencyStop() {
+    const context = powerContext ? {...powerContext} : null;
+    if (!currentPowerContext(context) || emergencyStopRequestActive || !window.pywebview?.api) return;
+    if (!window.confirm(studioText('emergencyConfirm').replace('{host}', () => context.host)) ||
+        !currentPowerContext(context)) return;
+    emergencyStopRequestActive = true;
+    const button = document.getElementById('printer-emergency-btn');
+    if (button) button.disabled = true;
+    try {
+        const result = await window.pywebview.api.emergency_stop(context.host, context);
+        if (!currentPowerContext(context)) return;
+        const acknowledged = result?.ok && result.status === 'requested' &&
+            samePowerContext(result.power_context, context);
+        window.alert(studioText(acknowledged ? 'emergencyRequested' : 'emergencyUnknown'));
+    } catch (_) {
+        if (currentPowerContext(context)) window.alert(studioText('emergencyUnknown'));
+    } finally {
+        if (currentPowerContext(context)) {
+            emergencyStopRequestActive = false;
+            if (button) button.disabled = false;
         }
     }
 }
@@ -3097,6 +3159,85 @@ async function resumeKaceInstallation() {
     }
 }
 
+async function discoverKaceConfigurations() {
+    const button = document.getElementById('kace-discover-configurations');
+    const source = kaceWorkflowViews.get(button?.dataset.workflowId);
+    const context = powerContext ? {...powerContext} : null;
+    if (!source || button.disabled || bootstrapActive || !currentSshContext(context) || !window.pywebview?.api) return;
+    const request = {source, context, loading: true, operations: []};
+    configurationRecovery = request;
+    button.disabled = true;
+    const panel = document.getElementById('kace-configuration-recovery');
+    const status = document.getElementById('kace-configuration-recovery-status');
+    const select = document.getElementById('kace-configuration-recovery-select');
+    panel.hidden = false;
+    select.replaceChildren();
+    select.disabled = true;
+    document.getElementById('kace-configuration-recovery-choose').disabled = true;
+    status.textContent = studioText('configurationDiscovering');
+    try {
+        const reply = await window.pywebview.api.inspect_kace_configurations(
+            source.workflowId, source.sequence, firmwareGeneration, context);
+        if (configurationRecovery !== request || !currentSshContext(context)) return;
+        if (reply?.status !== 'ok' || !samePowerContext(reply.power_context, context) ||
+            reply.generation !== firmwareGeneration || !Array.isArray(reply.operations)) {
+            throw new Error(reply?.message || studioText('configurationDiscoveryFailed'));
+        }
+        request.operations = reply.operations;
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = studioText('configurationSelect');
+        select.appendChild(placeholder);
+        reply.operations.forEach(operation => {
+            const option = document.createElement('option');
+            option.value = operation.operation_id;
+            option.disabled = operation.recoverable !== true;
+            const reason = operation.reason === 'complete' ? studioText('configurationReadOnly') :
+                operation.reason ? studioText('configurationIncomplete') : '';
+            option.textContent = `${operation.operation_id} · ${operation.state}${reason ? ' · ' + reason : ''}`;
+            select.appendChild(option);
+        });
+        select.value = '';
+        select.disabled = !reply.operations.some(operation => operation.recoverable === true);
+        status.textContent = studioText('configurationInventory').replace('{host}', () => context.host)
+            .replace('{count}', () => String(reply.operations.length)).replace('{rejected}', () => String(reply.rejected || 0)) +
+            (reply.truncated ? '\n' + studioText('configurationTruncated') : '');
+    } catch (error) {
+        if (configurationRecovery === request && currentSshContext(context)) status.textContent = error.message || studioText('configurationDiscoveryFailed');
+    } finally {
+        if (configurationRecovery === request && currentSshContext(context)) {
+            request.loading = false;
+            button.disabled = bootstrapActive;
+        }
+    }
+}
+
+function updateConfigurationRecoverySelection() {
+    const recovery = configurationRecovery;
+    const identity = document.getElementById('kace-configuration-recovery-select').value;
+    document.getElementById('kace-configuration-recovery-choose').disabled = !recovery || recovery.loading ||
+        bootstrapActive || !currentSshContext(recovery.context) ||
+        !recovery.operations.some(operation => operation.operation_id === identity && operation.recoverable === true);
+}
+
+function chooseConfigurationRecovery() {
+    const recovery = configurationRecovery;
+    const identity = document.getElementById('kace-configuration-recovery-select').value;
+    if (!recovery || recovery.loading || bootstrapActive || !currentSshContext(recovery.context)) return;
+    const operation = recovery.operations.find(item => item.operation_id === identity && item.recoverable === true);
+    if (!operation || !/^[0-9a-f]{32}$/.test(identity) || !/^[0-9a-f]{64}$/.test(operation.result_sha256)) return;
+    configurationOperation = {selection: powerSelection, host: recovery.context.host, source: recovery.source,
+        operationId: identity, resultSha256: operation.result_sha256};
+    const workflowId = 'configuration-' + identity;
+    kaceWorkflowViews.delete(workflowId);
+    window.updateKaceWorkflowEvent({schema: 1, workflow_kind: 'configuration', workflow_id: workflowId,
+        sequence: operation.sequence, state: operation.state,
+        detail: studioText('configurationSelected').replace('{host}', () => recovery.context.host).replace('{id}', () => identity)}, firmwareGeneration, true);
+    document.getElementById('kace-configuration-recovery').hidden = true;
+    configurationRecovery = null;
+    // Selection restores a projection only. Continue remains a separate click.
+}
+
 async function startKaceConfiguration() {
     const button = document.getElementById('kace-new-configuration');
     const view = kaceWorkflowViews.get(button?.dataset.workflowId);
@@ -3116,7 +3257,7 @@ async function startKaceConfiguration() {
     try {
         const args = [source.workflowId, source.sequence, firmwareGeneration, context];
         const result = existing?.operationId
-            ? await window.pywebview.api.resume_kace_configuration(existing.operationId, ...args)
+            ? await window.pywebview.api.resume_kace_configuration(existing.operationId, ...args, existing.resultSha256 || null)
             : await window.pywebview.api.start_kace_configuration(...args);
         if (!currentSshContext(context)) return;
         if (existing?.operationId && result?.status === 'complete' && result.operation_id === existing.operationId) {
@@ -3129,6 +3270,7 @@ async function startKaceConfiguration() {
         }
         if (!result || result.status !== 'started') throw new Error(result?.message || workflowText('configurationPending', view));
         configurationOperation.operationId = result.operation_id;
+        configurationOperation.resultSha256 = null;
         if (status) status.textContent = workflowText('configurationHint', view);
     } catch (error) {
         if (!currentSshContext(context)) return;
@@ -4135,6 +4277,37 @@ const STUDIO_INSTALLATION_TEXT = {
         "remoteFiles": "Remote files",
         "prebakedFamily": "Pre-baked Klipper image",
         "powerLabel": "Power",
+        "configurationDiscover": "Find saved configurations",
+        "configurationDiscovering": "Reading saved operation receipts… No recovery is being started.",
+        "configurationSelect": "Select a saved operation",
+        "configurationChoose": "Review selected operation",
+        "configurationReadOnly": "Completed, read only",
+        "configurationIncomplete": "Generated manifest unavailable or invalid; recovery blocked",
+        "configurationInventory": "Host: {host}. Valid receipts: {count}; rejected entries: {rejected}. Select an operation to review it; Continue requires a separate click. Generated file contents will be checked by KACE before recovery.",
+        "configurationTruncated": "The inventory reached its size limit. Other operations may exist and are not shown. No operation was selected automatically.",
+        "configurationDiscoveryFailed": "Saved configuration operations could not be verified.",
+        "configurationSelected": "Saved operation {id} on {host}. Review this identity and click Continue to request recovery; nothing has been resumed yet.",
+        "powerWaiting": "Waiting for Moonraker…",
+        "powerTarget": "target",
+        "powerOffConfirm": "Normal electrical power OFF\nHost: {host}\nDevice: {device}\nPrint state: {state}\nObserved heaters:\n{readings}\n\nThese readings do not prove that cutting power is safe. Confirm that you know what this relay powers and that the printer has cooled sufficiently for its wiring and cooling requirements. Cut power now?",
+        "powerOffProtection": "Normal OFF is blocked: Moonraker printing protection is not verified. Review and update the power configuration first.",
+        "powerOffChanged": "Conditions changed. Review the destination and printer state again before normal OFF.",
+        "powerOffUnknown": "Normal OFF is blocked because printer or heater information is unavailable.",
+        "powerOffJob": "Normal OFF is blocked while printing, paused, or in an unknown/error state.",
+        "powerOffHeating": "Normal OFF is blocked while any heater target is active. Disable heating and allow the required cooling first.",
+        "powerOffConfirmation": "Normal OFF needs a new confirmation; the previous review is missing, expired or already used.",
+        "powerActionFailed": "The power action could not be confirmed. Its outcome may be unknown. Check the observed state before another action.",
+        "emergencyLabel": "Logical emergency stop",
+        "emergencyHint": "Request a Klipper emergency stop. This does not cut electrical power.",
+        "emergencyConfirm": "Request Klipper emergency stop on {host}?\n\nThis is a logical stop, NOT an electrical power cutoff. It does not rely on a normal OFF review. If the network or host is unavailable, use the physical emergency stop procedure for this printer.",
+        "emergencyRequested": "Klipper acknowledged the logical emergency request. Studio did not send a relay cutoff command. Verify actual power and printer state physically, then follow its recovery procedure.",
+        "emergencyUnknown": "The logical emergency request could not be confirmed. Its outcome is unknown and it will not be retried automatically. Studio did not send a relay cutoff command. Use the physical emergency procedure if necessary and verify actual power state.",
+        "moonrakerAccess": "Moonraker access",
+        "moonrakerVerifyIpFailed": "Could not verify this computer’s IP.",
+        "moonrakerAuthorizeFailed": "Moonraker authorization failed.",
+        "moonrakerAuthorizeConfirm": "Allow {ip} to control Moonraker on {host}?\n\nThis grants persistent access from that IP, including Mainsail and printer power. Moonraker will restart if the configuration changes. Run bootstrap first if Moonraker is not installed.",
+        "moonrakerAuthorized": "Moonraker access authorized. Mainsail can now connect from this IP.",
+        "moonrakerAlreadyAuthorized": "This IP is already authorized in moonraker.conf.",
         "ssidPlaceholder": "Network name / SSID"
     },
     "Español": {
@@ -4370,6 +4543,37 @@ const STUDIO_INSTALLATION_TEXT = {
         "remoteFiles": "Archivos remotos",
         "prebakedFamily": "Imagen con Klipper preinstalado",
         "powerLabel": "Energía",
+        "configurationDiscover": "Buscar configuraciones guardadas",
+        "configurationDiscovering": "Leyendo recibos de operaciones guardadas… No se está iniciando ninguna recuperación.",
+        "configurationSelect": "Seleccioná una operación guardada",
+        "configurationChoose": "Revisar operación seleccionada",
+        "configurationReadOnly": "Completada, sólo lectura",
+        "configurationIncomplete": "Manifiesto generado ausente o inválido; recuperación bloqueada",
+        "configurationInventory": "Host: {host}. Recibos válidos: {count}; entradas rechazadas: {rejected}. Seleccioná una operación para revisarla; Continuar requiere otro clic. KACE verificará el contenido de los archivos generados antes de recuperar.",
+        "configurationTruncated": "El inventario alcanzó su límite de tamaño. Puede haber otras operaciones que no se muestran. No se seleccionó ninguna automáticamente.",
+        "configurationDiscoveryFailed": "No se pudieron verificar las operaciones de configuración guardadas.",
+        "configurationSelected": "Operación guardada {id} en {host}. Revisá esta identidad y pulsá Continuar para solicitar la recuperación; todavía no se reanudó nada.",
+        "powerWaiting": "Esperando a Moonraker…",
+        "powerTarget": "objetivo",
+        "powerOffConfirm": "Apagado eléctrico normal\nHost: {host}\nDispositivo: {device}\nEstado de impresión: {state}\nCalentadores observados:\n{readings}\n\nEstas lecturas no demuestran que cortar la energía sea seguro. Confirmá que conocés qué alimenta este relé y que la impresora se enfrió lo suficiente según su cableado y refrigeración. ¿Cortar la energía ahora?",
+        "powerOffProtection": "Apagado normal bloqueado: no se verificó la protección de impresión de Moonraker. Revisá y actualizá primero la configuración de energía.",
+        "powerOffChanged": "Las condiciones cambiaron. Volvé a revisar el destino y el estado de la impresora antes del apagado normal.",
+        "powerOffUnknown": "Apagado normal bloqueado: falta información de la impresora o de los calentadores.",
+        "powerOffJob": "Apagado normal bloqueado durante una impresión, una pausa o un estado desconocido o de error.",
+        "powerOffHeating": "Apagado normal bloqueado mientras algún calentador tenga un objetivo activo. Desactivá el calentamiento y esperá el enfriamiento necesario.",
+        "powerOffConfirmation": "El apagado normal necesita una nueva confirmación: la revisión anterior falta, venció o ya se utilizó.",
+        "powerActionFailed": "No se pudo confirmar la operación de energía. Su resultado puede ser desconocido. Comprobá el estado observado antes de otra operación.",
+        "emergencyLabel": "Parada de emergencia lógica",
+        "emergencyHint": "Solicita una parada de emergencia de Klipper. No corta la energía eléctrica.",
+        "emergencyConfirm": "¿Solicitar una parada de emergencia de Klipper en {host}?\n\nEs una parada lógica, NO un corte de energía eléctrica. No depende de la revisión de apagado normal. Si la red o el host no están disponibles, usá el procedimiento de emergencia física de esta impresora.",
+        "emergencyRequested": "Klipper confirmó la solicitud de emergencia lógica. Studio no envió una orden de corte al relé. Verificá físicamente la energía y el estado real de la impresora, y seguí su procedimiento de recuperación.",
+        "emergencyUnknown": "No se pudo confirmar la solicitud de emergencia lógica. Su resultado es desconocido y no se reintentará automáticamente. Studio no envió una orden de corte al relé. Usá el procedimiento de emergencia física si hace falta y verificá el estado real de energía.",
+        "moonrakerAccess": "Acceso a Moonraker",
+        "moonrakerVerifyIpFailed": "No se pudo verificar la IP de esta computadora.",
+        "moonrakerAuthorizeFailed": "Falló la autorización de Moonraker.",
+        "moonrakerAuthorizeConfirm": "¿Permitir que {ip} controle Moonraker en {host}?\n\nEsto concede acceso persistente desde esa IP, incluido Mainsail y la energía de la impresora. Moonraker se reiniciará si cambia la configuración. Ejecutá bootstrap primero si Moonraker no está instalado.",
+        "moonrakerAuthorized": "Acceso a Moonraker autorizado. Mainsail ya puede conectarse desde esta IP.",
+        "moonrakerAlreadyAuthorized": "Esta IP ya está autorizada en moonraker.conf.",
         "ssidPlaceholder": "Nombre de la red / SSID"
     },
     "Português": {
@@ -4605,6 +4809,37 @@ const STUDIO_INSTALLATION_TEXT = {
         "remoteFiles": "Arquivos remotos",
         "prebakedFamily": "Imagem com Klipper pré-instalado",
         "powerLabel": "Energia",
+        "configurationDiscover": "Buscar configurações salvas",
+        "configurationDiscovering": "Lendo recibos de operações salvas… Nenhuma recuperação está sendo iniciada.",
+        "configurationSelect": "Selecione uma operação salva",
+        "configurationChoose": "Revisar operação selecionada",
+        "configurationReadOnly": "Concluída, somente leitura",
+        "configurationIncomplete": "Manifesto gerado ausente ou inválido; recuperação bloqueada",
+        "configurationInventory": "Host: {host}. Recibos válidos: {count}; entradas rejeitadas: {rejected}. Selecione uma operação para revisá-la; Continuar exige outro clique. O KACE verificará o conteúdo dos arquivos gerados antes da recuperação.",
+        "configurationTruncated": "O inventário atingiu seu limite de tamanho. Outras operações podem existir e não são mostradas. Nenhuma foi selecionada automaticamente.",
+        "configurationDiscoveryFailed": "Não foi possível verificar as operações de configuração salvas.",
+        "configurationSelected": "Operação salva {id} em {host}. Revise esta identidade e clique em Continuar para solicitar recuperação; nada foi retomado ainda.",
+        "powerWaiting": "Aguardando o Moonraker…",
+        "powerTarget": "alvo",
+        "powerOffConfirm": "Desligamento elétrico normal\nHost: {host}\nDispositivo: {device}\nEstado de impressão: {state}\nAquecedores observados:\n{readings}\n\nEstas leituras não comprovam que cortar a energia seja seguro. Confirme que sabe o que este relé alimenta e que a impressora esfriou o suficiente para sua fiação e refrigeração. Cortar a energia agora?",
+        "powerOffProtection": "Desligamento normal bloqueado: a proteção de impressão do Moonraker não foi verificada. Revise e atualize primeiro a configuração de energia.",
+        "powerOffChanged": "As condições mudaram. Revise novamente o destino e o estado da impressora antes do desligamento normal.",
+        "powerOffUnknown": "Desligamento normal bloqueado: faltam informações da impressora ou dos aquecedores.",
+        "powerOffJob": "Desligamento normal bloqueado durante impressão, pausa ou estado desconhecido ou de erro.",
+        "powerOffHeating": "Desligamento normal bloqueado enquanto algum aquecedor tiver um alvo ativo. Desative o aquecimento e aguarde o resfriamento necessário.",
+        "powerOffConfirmation": "O desligamento normal exige nova confirmação: a revisão anterior está ausente, expirou ou já foi usada.",
+        "powerActionFailed": "Não foi possível confirmar a operação de energia. O resultado pode ser desconhecido. Verifique o estado observado antes de outra operação.",
+        "emergencyLabel": "Parada de emergência lógica",
+        "emergencyHint": "Solicita uma parada de emergência do Klipper. Não corta a energia elétrica.",
+        "emergencyConfirm": "Solicitar uma parada de emergência do Klipper em {host}?\n\nÉ uma parada lógica, NÃO um corte de energia elétrica. Não depende da revisão de desligamento normal. Se a rede ou o host estiver indisponível, use o procedimento de emergência física desta impressora.",
+        "emergencyRequested": "O Klipper confirmou a solicitação de emergência lógica. O Studio não enviou um comando de corte ao relé. Verifique fisicamente a energia e o estado real da impressora, e siga seu procedimento de recuperação.",
+        "emergencyUnknown": "Não foi possível confirmar a solicitação de emergência lógica. O resultado é desconhecido e não haverá nova tentativa automática. O Studio não enviou um comando de corte ao relé. Use o procedimento de emergência física se necessário e verifique o estado real da energia.",
+        "moonrakerAccess": "Acesso ao Moonraker",
+        "moonrakerVerifyIpFailed": "Não foi possível verificar o IP deste computador.",
+        "moonrakerAuthorizeFailed": "A autorização do Moonraker falhou.",
+        "moonrakerAuthorizeConfirm": "Permitir que {ip} controle o Moonraker em {host}?\n\nIsto concede acesso persistente a partir desse IP, incluindo Mainsail e a energia da impressora. O Moonraker reiniciará se a configuração mudar. Execute o bootstrap primeiro se o Moonraker não estiver instalado.",
+        "moonrakerAuthorized": "Acesso ao Moonraker autorizado. O Mainsail já pode se conectar a partir deste IP.",
+        "moonrakerAlreadyAuthorized": "Este IP já está autorizado em moonraker.conf.",
         "ssidPlaceholder": "Nome da rede / SSID"
     }
 };

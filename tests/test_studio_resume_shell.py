@@ -43,6 +43,12 @@ else
     [ "$TEST_FAULT" != dirty ]
 fi
 ''', newline='\n')
+    if os.name == 'nt':
+        # Git Bash has no flock. Native tests cover the command boundary; real
+        # exclusion and lifetime are exercised by test_studio_runtime_lock on Linux.
+        (binaries / 'flock').write_text(
+            '#!/bin/sh\n[ "$*" = "-s -n 8" ] || exit 2\nprintf locked > "$HOME/lock-requested"\n',
+            newline='\n')
     (runtime / 'venv/bin/python').write_text('''#!/bin/sh
 if [ "$1" = ./kace.py ]; then
     printf '%s|%s|%s\\n' "$KACE_MACHINE_OUTPUT" "$KACE_STUDIO_PREFLIGHT_TOKEN" "$KACE_FIRMWARE_WORKFLOW_PATH" > "$HOME/launched"
@@ -74,6 +80,8 @@ fi
     assert 'private-fixture' not in result.stdout+result.stderr
     if launched:
         assert (tmp_path / 'launched').read_text().startswith('1|private-fixture|')
+        if os.name == 'nt':
+            assert (tmp_path / 'lock-requested').read_text() == 'locked'
     if expected == 'SUCCESS':
         check = (tmp_path / 'completion-check').read_text()
         assert 'verify_artifact=True' in check and 'COMPLETE' in check

@@ -30,13 +30,19 @@ class FakeMoonrakerHttp:
         self.posts = []
 
     def get(self, path):
+        if "print_stats" in path:
+            return {"result": {"status": {"print_stats": {"state": "standby"},
+                "heaters": {"available_heaters": ["extruder"]},
+                "extruder": {"temperature": 25, "target": 0}}}}
+        if "extruder" in path:
+            return {"result": {"status": {"extruder": {"temperature": 25, "target": 0}}}}
         assert path == "/machine/device_power/devices"
         status = self.states.pop(0) if len(self.states) > 1 else self.states[0]
         return {
             "result": {
                 "devices": [
                     {"device": "lights", "status": "off"},
-                    {"device": "main_psu", "status": status},
+                    {"device": "main_psu", "status": status, "locked_while_printing": True},
                 ]
             }
         }
@@ -69,12 +75,13 @@ def test_power_on_uses_power_api_and_confirms_final_state():
 
 
 def test_power_off_uses_power_api_and_confirms_final_state():
-    http = FakeMoonrakerHttp(["on", "off"])
+    http = FakeMoonrakerHttp(["on", "on", "on", "off"])
     power = MoonrakerPowerController(
         "192.168.1.20", "main_psu", http_client=http, poll_interval=0
     )
 
-    assert power.power_off(timeout=1) == "off"
+    review = power.inspect_power_off()
+    assert power.power_off(timeout=1, approved_review=review) == "off"
     assert http.posts == [
         (
             "/machine/device_power/device",
@@ -101,8 +108,11 @@ def test_http_client_uses_selected_host_and_moonraker_port(monkeypatch):
         def __exit__(self, *_args):
             return False
 
-        def read(self):
-            return b'{"result":{"devices":[]}}'
+        def read(self, size):
+            if getattr(self, "done", False):
+                return b""
+            self.done = True
+            return b'{"result":{"devices":[]}}'[:size]
 
     def fake_urlopen(request, timeout):
         observed.update(
@@ -283,8 +293,9 @@ def test_end_to_end_status_then_power_on_with_session_authority(monkeypatch):
         def __exit__(self, *_args):
             return False
 
-        def read(self):
-            return self._body
+        def read(self, size):
+            block, self._body = self._body[:size], self._body[size:]
+            return block
 
     def fake_urlopen(request, timeout):
         method = request.get_method()
@@ -337,8 +348,9 @@ def test_studio_on_off_and_displayed_state_share_moonraker_truth(monkeypatch):
         def __exit__(self, *_args):
             return False
 
-        def read(self):
-            return self._body
+        def read(self, size):
+            block, self._body = self._body[:size], self._body[size:]
+            return block
 
     def fake_urlopen(request, timeout):
         method = request.get_method()
@@ -347,10 +359,16 @@ def test_studio_on_off_and_displayed_state_share_moonraker_truth(monkeypatch):
         if method == "POST":
             moonraker_state[payload["device"]] = payload["action"]
             return Response({"result": {payload["device"]: payload["action"]}})
+        if "print_stats" in request.full_url:
+            return Response({"result": {"status": {"print_stats": {"state": "standby"},
+                "heaters": {"available_heaters": ["extruder"]},
+                "extruder": {"temperature": 25, "target": 0}}}})
+        if "extruder" in request.full_url:
+            return Response({"result": {"status": {"extruder": {"temperature": 25, "target": 0}}}})
         return Response({
             "result": {
                 "devices": [
-                    {"device": "printer", "status": moonraker_state["printer"]}
+                    {"device": "printer", "status": moonraker_state["printer"], "locked_while_printing": True}
                 ]
             }
         })
@@ -361,7 +379,8 @@ def test_studio_on_off_and_displayed_state_share_moonraker_truth(monkeypatch):
     context = bind_power_session(api)
     studio_on = api.power_on("192.168.1.20", "printer", context)
     mainsail_on = api.get_power_status("192.168.1.20", "printer", context)
-    studio_off = api.power_off("192.168.1.20", "printer", context)
+    review = api.inspect_power_off("192.168.1.20", "printer", context)
+    studio_off = api.power_off("192.168.1.20", "printer", context, review["approval_token"])
     mainsail_off = api.get_power_status("192.168.1.20", "printer", context)
 
     assert studio_on["status"] == mainsail_on["status"] == "on"

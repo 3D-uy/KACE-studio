@@ -10,19 +10,25 @@ from tests.test_power_frontend_identity import (
 )
 
 
-@pytest.mark.parametrize("scenario", ["approve", "cancel", "late_inspect", "late_authorize"])
-def test_explicit_enrollment_and_stale_responses(scenario):
+@pytest.mark.parametrize("language", ["English", "Español", "Português"])
+@pytest.mark.parametrize("scenario", ["approve", "cancel", "late_inspect", "late_authorize", "changed_in_confirm"])
+def test_explicit_enrollment_and_stale_responses(scenario, language):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node.js is required")
     script = HARNESS + CATALOG_JS + GLOBALS_JS + LOGIN_JS + BOOTSTRAP_JS + POWER_JS + r'''
 term = {cols: 80, rows: 24, write() {}, clear() {}};
+selectedStudioLanguage = LANGUAGE;
 (async () => {
     const inspection = deferred(), enrollment = deferred();
     const confirmations = [], notices = [], calls = [];
     api.inspect_moonraker_client = context => {calls.push(['inspect', context]); return inspection.promise;};
     api.authorize_moonraker_client = (ip, context) => {calls.push(['authorize', ip, context]); return enrollment.promise;};
-    window.confirm = message => {confirmations.push(message); return SCENARIO !== 'cancel';};
+    window.confirm = message => {
+        confirmations.push(message);
+        if (SCENARIO === 'changed_in_confirm') select('B.local');
+        return SCENARIO !== 'cancel';
+    };
     window.alert = message => notices.push(message);
     select('A.local');
     sshConnected = true;
@@ -33,11 +39,18 @@ term = {cols: 80, rows: 24, write() {}, clear() {}};
     if (SCENARIO === 'late_inspect') select('B.local');
     inspection.resolve({ok: true, ip: '192.168.1.23', power_context: a});
     await tick();
-    if (SCENARIO === 'cancel' || SCENARIO === 'late_inspect') {
+    if (confirmations.length) {
+        const expected = {English: /persistent.*restart/s, 'Español': /persistente.*reiniciar/s,
+                          'Português': /persistente.*reiniciar/s};
+        assert.match(confirmations[0], expected[LANGUAGE]);
+        assert.match(confirmations[0], /192\.168\.1\.23/);
+        assert.match(confirmations[0], /a\.local/);
+    }
+    if (['cancel', 'late_inspect', 'changed_in_confirm'].includes(SCENARIO)) {
         await clicked;
         assert.equal(calls.length, 1);
         assert.equal(notices.length, 0);
-        assert.equal(confirmations.length, SCENARIO === 'cancel' ? 1 : 0);
+        assert.equal(confirmations.length, SCENARIO === 'late_inspect' ? 0 : 1);
         return;
     }
     assert.match(confirmations[0], /192\.168\.1\.23/);
@@ -53,7 +66,7 @@ term = {cols: 80, rows: 24, write() {}, clear() {}};
     }
 })().then(() => console.log('completed')).catch(error => {console.error(error); process.exitCode = 1;});
 '''
-    script = "const SCENARIO = " + repr(scenario) + ";\n" + script
+    script = "const SCENARIO = " + repr(scenario) + "; const LANGUAGE = " + repr(language) + ";\n" + script
     result = subprocess.run([node, "-"], input=script, text=True, encoding="utf-8", capture_output=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == "completed"

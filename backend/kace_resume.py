@@ -4,6 +4,15 @@ import re
 import shlex
 
 
+def runtime_read_guard():
+    """Keep the installer's shared lock through runtime checks, CLI and outcome."""
+    return (
+        'exec 8>>"$HOME/.kace-install.lock" && flock -s -n 8 && '
+        '[ ! -e "$HOME/.kace-runtime-transaction.json" ] && '
+        '[ ! -L "$HOME/.kace-runtime-transaction.json" ] && '
+    )
+
+
 def resume_command(env_path, runtime_commit, checkpoint_sha, workflow_id):
     for value, pattern in ((runtime_commit, r'[0-9a-f]{40}'),
                            (checkpoint_sha, r'[0-9a-f]{64}'),
@@ -27,7 +36,7 @@ def resume_command(env_path, runtime_commit, checkpoint_sha, workflow_id):
     return (
         'KACE_STUDIO_LAUNCH=1; ( set +x; '
         f'if . {shlex.quote(env_path)} && rm -f -- {shlex.quote(env_path)}; then '
-        'if cd "$HOME/kace" && '
+        'if ' + runtime_read_guard() + 'cd "$HOME/kace" && '
         f'[ "$(cat .kace-runtime-commit)" = {shlex.quote(runtime_commit)} ] && '
         f'[ "$(git rev-parse HEAD)" = {shlex.quote(runtime_commit)} ] && '
         'git diff --quiet HEAD -- && '

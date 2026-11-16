@@ -46,6 +46,7 @@ const document = {getElementById(id){if(!nodes.has(id)) nodes.set(id, element())
 const window = {setTimeout(fn){timers.push(fn)}, setInterval(fn){timers.push(fn);return 1}, clearInterval(){}};
 const setTimeout = window.setTimeout;
 let fitAddon = null, sshConnected = true, bootstrapActive = false, terminalShellOpen = true;
+let powerSelection = 0, configurationRecovery = null;
 '''
 
 

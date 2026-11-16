@@ -153,7 +153,9 @@ def check_klipper(ip: str) -> bool:
     """
     try:
         data = MoonrakerHttpClient(ip, timeout=0.5).get("/printer/info")
-        if "result" in data and "state" in data["result"]:
+        result = data.get("result") if isinstance(data, dict) else None
+        state = result.get("state") if isinstance(result, dict) else None
+        if isinstance(state, str) and state.strip():
             return True
     except (MoonrakerHttpError, ValueError):
         pass

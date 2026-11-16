@@ -40,6 +40,11 @@ def test_new_operation_requires_its_own_result_and_preserves_original(tmp_path, 
         'SCHEMA="missing"' if fault == 'missing-capability' else 'SCHEMA="kace-configuration-operation/v1"')
     (tmp_path/'bin').mkdir()
     (tmp_path/'bin/git').write_text('#!/bin/sh\nif [ "$1" = rev-parse ]; then printf "%s\\n" "$TEST_COMMIT"; else [ "$TEST_FAULT" != dirty ]; fi\n', newline='\n')
+    if os.name == 'nt':
+        # Git Bash lacks flock; real locking is checked in isolated Linux.
+        (tmp_path/'bin/flock').write_text(
+            '#!/bin/sh\n[ "$*" = "-s -n 8" ] || exit 2\nprintf locked > "$HOME/lock-requested"\n',
+            newline='\n')
     interpreter = Path(sys.executable).as_posix()
     (runtime/'venv/bin/python').write_text('#!/bin/sh\nexec '+shlex.quote(interpreter)+' "$@"\n', newline='\n')
     if os.name != 'nt':
@@ -86,6 +91,8 @@ p=pathlib.Path('configuration-operations')/args[2]/'result.json';p.parent.mkdir(
     events=[json.loads(line.split('=== KACE_BOOTSTRAP_EVENT: ',1)[1].rsplit(' ===',1)[0]) for line in completed.stdout.splitlines() if line.startswith('=== KACE_BOOTSTRAP_EVENT: ')]
     assert events and events[-1]['code']==expected, completed.stdout+completed.stderr
     assert (runtime/'launched').exists()==launched
+    if launched and os.name == 'nt':
+        assert (tmp_path/'lock-requested').read_text() == 'locked'
     assert 'fixture-secret' not in completed.stdout+completed.stderr
     if fault != 'changed-original': assert (runtime/'firmware-workflow.json').read_bytes()==original
     if expected != 'CONFIGURATION_COMPLETE': assert not any(e['event']=='workflow_succeeded' for e in events)

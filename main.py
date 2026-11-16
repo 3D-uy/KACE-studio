@@ -193,6 +193,7 @@ class Api:
         self._power_session = None
         self._power_refresh_gen = 0
         self._power_action_lock = threading.Lock()
+        self._power_off_review = None
         self._ssh_lock = threading.Lock()
         self._ssh_gen = 0
         self._ssh_attempt_gen = 0
@@ -1460,17 +1461,52 @@ class Api:
         """Prepare a separate approved configuration; never overwrite installation state."""
         return self._installed_kace_operation(workflow_id, sequence, generation, power_context, configuration=True)
 
-    def resume_kace_configuration(self, operation_id, workflow_id, sequence, generation, power_context=None):
+    def inspect_kace_configurations(self, workflow_id, sequence, generation, power_context=None):
+        """Explicit read-only discovery after reopening Studio; never resume on reconnect."""
+        from backend.kace_configuration import discover_configuration_operations
+        try:
+            with self._ssh_lock:
+                session = self._ssh
+                if type(generation) is not int or generation != self._ssh_gen:
+                    raise ValueError("SSH session changed.")
+            def authorize():
+                with self._ssh_lock:
+                    if session is not self._ssh or generation != self._ssh_gen:
+                        raise ValueError("SSH session changed.")
+                    with self._power_lock:
+                        self._require_power_context_locked(power_context)
+            authorize()
+            raw = session.read_text_file("kace/firmware-workflow.json")
+            checkpoint = parse_checkpoint(raw)
+            if (checkpoint is None or checkpoint["state"] != "COMPLETE"
+                    or checkpoint["workflow_id"] != workflow_id or type(sequence) is not int
+                    or checkpoint["sequence"] != sequence):
+                raise ValueError("Installation identity changed or is unavailable.")
+            digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            inventory = discover_configuration_operations(session, digest, authorize=authorize)
+            current = session.read_text_file("kace/firmware-workflow.json")
+            if not isinstance(current, str) or hashlib.sha256(current.encode("utf-8")).hexdigest() != digest:
+                raise ValueError("Installation identity changed during discovery.")
+            authorize()
+            return {"status": "ok", **inventory, "checkpoint_sha256": digest,
+                    "power_context": dict(power_context), "generation": generation}
+        except Exception as exc:
+            return {"status": "failed", "message": self._sanitize_error(exc)}
+
+    def resume_kace_configuration(self, operation_id, workflow_id, sequence, generation, power_context=None, result_sha256=None):
         """Explicitly resume the same configuration, never the old installation."""
         if not isinstance(operation_id, str) or not re.fullmatch(r'[0-9a-f]{32}', operation_id):
             return {"status": "failed", "message": "Invalid configuration identity."}
-        return self._installed_kace_operation(workflow_id, sequence, generation, power_context, configuration=operation_id)
+        if result_sha256 is not None and (not isinstance(result_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', result_sha256)):
+            return {"status": "failed", "message": "Invalid configuration result identity."}
+        return self._installed_kace_operation(workflow_id, sequence, generation, power_context,
+                                              configuration=operation_id, result_sha256=result_sha256)
 
     def resume_kace_installation(self, workflow_id, sequence, generation, power_context=None):
         """Explicitly resume one validated pending flow with PC preflight."""
         return self._installed_kace_operation(workflow_id, sequence, generation, power_context)
 
-    def _installed_kace_operation(self, workflow_id, sequence, generation, power_context=None, configuration=False):
+    def _installed_kace_operation(self, workflow_id, sequence, generation, power_context=None, configuration=False, result_sha256=None):
         if (not isinstance(workflow_id, str) or type(sequence) is not int or sequence < 0
                 or type(generation) is not int or power_context is None):
             return {"status": "failed", "message": "Invalid recovery context."}
@@ -1501,6 +1537,9 @@ class Api:
             from backend.kace_configuration import parse_configuration_result
             try:
                 raw_result = session.read_text_file(f"kace/configuration-operations/{configuration}/result.json")
+                if result_sha256 is not None and (not isinstance(raw_result, str)
+                        or hashlib.sha256(raw_result.encode("utf-8")).hexdigest() != result_sha256):
+                    raise ValueError("Configuration receipt changed since selection. Discover its saved state again.")
                 result = parse_configuration_result(raw_result, configuration, recovery["sha256"])
                 if result is None:
                     raise ValueError("Configuration is not a validated pending operation.")
@@ -1772,7 +1811,15 @@ class Api:
         with self._ssh_lock:
             if session is not self._ssh or selected_generation != self._ssh_gen:
                 return False
-        return session.download_file(remote_path, chosen_path)
+        def publish(temporary, destination):
+            with self._ssh_lock:
+                if (session is not self._ssh or selected_generation != self._ssh_gen
+                        or not session.is_connected()):
+                    return False
+                os.replace(temporary, destination)
+                return True
+
+        return session.download_file(remote_path, chosen_path, publish=publish)
 
     def _configuration_download_snapshot(self, session, workflow_id, sequence):
         checkpoint = parse_checkpoint(session.read_text_file("kace/firmware-workflow.json"))
@@ -1967,6 +2014,7 @@ class Api:
         return {"status": "configured", "config": config, "detail": ""}
 
     def _invalidate_power_locked(self):
+        self._power_off_review = None
         self._remote_power_authority = None
         self._power_controller = None
         self._power_target = None
@@ -2046,7 +2094,7 @@ class Api:
             raise PowerControllerError("Remote KACE power configuration is disabled")
         return config.get("device")
 
-    def _run_power_action(self, host: str, device: str, action: str, power_context=None) -> dict:
+    def _run_power_action(self, host: str, device: str, action: str, power_context=None, approval_token=None) -> dict:
         """Authorize each Moonraker request against the session that supplied its config."""
         try:
             if not isinstance(host, str) or not host.strip():
@@ -2078,12 +2126,32 @@ class Api:
                         )
                         self._power_target = target
                     controller = self._power_controller
+                if action == "review_off":
+                    with self._power_lock:
+                        self._power_off_review = None
+                    review = controller.inspect_power_off()
+                    authorize()
+                    token = secrets.token_urlsafe(32)
+                    with self._power_lock:
+                        self._require_power_context_locked(context, host)
+                        if refresh_gen != self._power_refresh_gen:
+                            raise PowerControllerError("Power authority was superseded")
+                        self._power_off_review = {"token": token, "target": target,
+                                                  "review": review, "expires": time.monotonic() + 60}
+                    return {"ok": True, "review": review, "approval_token": token,
+                            "device": resolved_device, "power_context": context}
                 if action == "status":
                     status = controller.get_status()
                 elif action == "on":
                     status = controller.power_on()
                 elif action == "off":
-                    status = controller.power_off()
+                    with self._power_lock:
+                        approved, self._power_off_review = self._power_off_review, None
+                    if (not approved or not isinstance(approval_token, str)
+                            or not secrets.compare_digest(approval_token, approved["token"])
+                            or approved["target"] != target or time.monotonic() >= approved["expires"]):
+                        raise PowerControllerError("Normal OFF requires a fresh confirmation", "powerOffConfirmation")
+                    status = controller.power_off(approved_review=approved["review"], approved_until=approved["expires"])
                 elif action == "wait":
                     status = controller.wait_until_ready()
                 else:
@@ -2115,6 +2183,7 @@ class Api:
                 "device": device if isinstance(device, str) else None,
                 "status": "error",
                 "detail": str(exc),
+                "code": getattr(exc, "code", "powerActionFailed"),
                 "power_context": power_context,
             }
 
@@ -2124,8 +2193,31 @@ class Api:
     def power_on(self, host: str, device: str, power_context=None) -> dict:
         return self._run_power_action(host, device, "on", power_context)
 
-    def power_off(self, host: str, device: str, power_context=None) -> dict:
-        return self._run_power_action(host, device, "off", power_context)
+    def inspect_power_off(self, host: str, device: str, power_context=None) -> dict:
+        return self._run_power_action(host, device, "review_off", power_context)
+
+    def power_off(self, host: str, device: str, power_context=None, approval_token=None) -> dict:
+        return self._run_power_action(host, device, "off", power_context, approval_token)
+
+    def emergency_stop(self, host: str, power_context=None) -> dict:
+        # Logical emergency must not queue behind normal OFF polling/review or
+        # depend on relay configuration, printing state or temperature readings.
+        try:
+            with self._power_lock:
+                self._require_power_context_locked(power_context, host)
+                context = dict(power_context)
+                self._power_off_review = None
+                self._power_refresh_gen += 1  # Supersede queued normal actions.
+            def authorize():
+                with self._power_lock:
+                    self._require_power_context_locked(context, host)
+            controller = MoonrakerPowerController(host, "logical_emergency", authorize=authorize)
+            controller.emergency_stop()
+            authorize()
+            return {"ok": True, "status": "requested", "power_context": context}
+        except (PowerControllerError, TypeError, ValueError) as exc:
+            return {"ok": False, "status": "unknown", "code": "emergencyUnknown",
+                    "detail": str(exc), "power_context": power_context}
 
     def wait_power_ready(self, host: str, device: str, power_context=None) -> dict:
         return self._run_power_action(host, device, "wait", power_context)

@@ -75,6 +75,11 @@
                     <span class="power-control-label" data-ui-text="powerLabel">Power</span>
                     <span id="printer-power-state" class="power-control-state">init</span>
                 </button>
+                <button id="printer-emergency-btn" class="btn btn-secondary btn-sm" type="button"
+                        onclick="requestLogicalEmergencyStop()" disabled data-ui-text="emergencyLabel"
+                        data-ui-label="emergencyHint" title="Requests Klipper emergency stop; does not cut electrical power.">
+                    Logical emergency stop
+                </button>
             </div>
 
         </aside>
@@ -608,11 +613,20 @@
                                     style="display: none;" onclick="resumeKaceInstallation()" disabled>Resume installation</button>
                                 <button id="kace-new-configuration" class="btn btn-secondary btn-sm" type="button"
                                     style="display: none;" onclick="startKaceConfiguration()" disabled>New configuration</button>
+                                <button id="kace-discover-configurations" class="btn btn-secondary btn-sm" type="button"
+                                    style="display: none;" onclick="discoverKaceConfigurations()" disabled>Find saved configurations</button>
                                 <span id="kace-workflow-status" class="kace-workflow-status">In progress</span>
                             </div>
                         </div>
                         <div id="kace-configuration-download-status" class="kace-workflow-detail" role="status" hidden></div>
                         <div id="kace-resume-status" class="kace-workflow-detail" role="status" hidden></div>
+                        <div id="kace-configuration-recovery" class="kace-workflow-detail" hidden>
+                            <p id="kace-configuration-recovery-status" role="status"></p>
+                            <label for="kace-configuration-recovery-select" data-ui-text="configurationSelect">Select a saved operation</label>
+                            <select id="kace-configuration-recovery-select" onchange="updateConfigurationRecoverySelection()" disabled></select>
+                            <button id="kace-configuration-recovery-choose" class="btn btn-secondary btn-sm" type="button"
+                                data-ui-text="configurationChoose" onclick="chooseConfigurationRecovery()" disabled>Review selected operation</button>
+                        </div>
                         <div id="kace-workflow-detail" class="kace-workflow-detail"></div>
                         <details id="kace-workflow-history" class="kace-workflow-history" ontoggle="if (fitAddon) fitAddon.fit()">
                             <summary id="kace-workflow-history-label" data-ui-text="workflowHistory">Stages and technical details</summary>
