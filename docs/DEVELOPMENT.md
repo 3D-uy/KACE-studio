@@ -259,6 +259,21 @@ Focused tests: `tests/test_studio_preflight*.py`. The opt-in integration
 to an explicitly provisioned PC receipt. It uses the real Docker loader and a
 simulated forwarded transport; native Pi/Studio qualification is separate.
 
+CI's `preflight-integration` job provisions the real amd64 Docker loader in an
+ephemeral Ubuntu runner and requires all 16 Core and six Studio integration
+cases, plus 31 sibling-dependent contract cases, to pass without skips before
+the Windows build. Studio is checked out at the workflow SHA; sibling Core uses
+`release-contract.json`'s `bootstrap_ref`, retaining the `candidate_ref` Git
+objects. Before provisioning, both commits' runtime inventories and the working
+runtime bytes must match the candidate contract, and the bootstrap producer must
+match Studio's bundled bytes. Bundled preflight resources are checked without
+rewriting them. These Core commits must already be published and accessible;
+an unavailable pin fails this gate. Separate locked virtual environments,
+receipts, image IDs, source hashes and JUnit evidence identify the actual runtime
+and producer tested. SSH transport remains simulated; ARMv7, Windows packaging
+and physical printer behavior require separate qualification. Docker runs only
+on the CI host, never on a Pi.
+
 This preserves the bounded loader proof (object load and fan references). It
 does not attest destination extensions, another Klipper version, MCU, wiring,
 movement, heaters or physical safety.
