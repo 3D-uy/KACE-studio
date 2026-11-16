@@ -132,6 +132,36 @@ launch gates and EN/ES/PT frontend behavior with `test_studio_resume.py`,
 `test_studio_resume_shell.py` and `test_studio_resume_frontend.py`. These automated
 fixtures do not qualify native EXE rendering, the Pi or physical firmware flashing.
 
+The explicit **New configuration** action is available from a validated COMPLETE
+installation. It reuses the guarded PC preflight/session launch, but invokes the
+pinned installed runtime with `--new-configuration` and a unique operation ID,
+without bootstrap, installation, automatic questionnaire answers or publication
+approval. The launcher requires the `core.configuration_operation.SCHEMA`
+capability and binds the original checkpoint SHA256. An older pinned runtime
+fails closed; source changes do not upgrade an existing EXE or Pi.
+
+The installation checkpoint is read-only. KACE owns a separate
+`configuration-operations/<id>/result.json` and emits schema1 events with kind
+`configuration`. Studio never uses the historical installation COMPLETE to
+complete that operation. Success requires the matching operation, original
+checkpoint digest, terminal COMPLETE with exit0 and an unchanged installation
+checkpoint after CLI exit. Transaction DONE is intermediate, not COMPLETE.
+The GUI keeps the operation ID across SSH reconnects within this application
+session and suppresses historical installation projections. Explicit **Continue
+configuration** reads that operation's result; an already-complete result is
+reported read-only. Otherwise a fresh PC bridge invokes `--resume-configuration`
+bound to both checkpoint and result hashes. KACE rechecks them under its lock
+and requires fresh preflight/review. No reconnection automatically resumes or
+publishes. Discovery of operations after restarting Studio itself is not yet
+implemented; retain the operation ID and evidence before closing the app.
+
+Exercise `test_studio_configuration.py`, `test_studio_configuration_frontend.py`
+and `test_studio_configuration_shell.py` with the existing resume, preflight,
+event and recovery tests. Shell tests execute Bash and the real Python result
+verifier against fixtures; they do not execute the Pi runtime, Docker preflight,
+native WebView2 or a physical E2E. Immutable release alignment and separately
+authorized delivery remain necessary before a native E2E.
+
 Release input and bundle verification also reject a bootstrap that lacks the
 audited Studio-PC preflight context framing across the sudo boundary. This
 structural check excludes comments, checks explicit context selection, all three

@@ -1456,8 +1456,21 @@ class Api:
             return {"ok": False, "detail": "A client IP must be explicitly approved"}
         return self._moonraker_access(power_context, approved_ip)
 
+    def start_kace_configuration(self, workflow_id, sequence, generation, power_context=None):
+        """Prepare a separate approved configuration; never overwrite installation state."""
+        return self._installed_kace_operation(workflow_id, sequence, generation, power_context, configuration=True)
+
+    def resume_kace_configuration(self, operation_id, workflow_id, sequence, generation, power_context=None):
+        """Explicitly resume the same configuration, never the old installation."""
+        if not isinstance(operation_id, str) or not re.fullmatch(r'[0-9a-f]{32}', operation_id):
+            return {"status": "failed", "message": "Invalid configuration identity."}
+        return self._installed_kace_operation(workflow_id, sequence, generation, power_context, configuration=operation_id)
+
     def resume_kace_installation(self, workflow_id, sequence, generation, power_context=None):
         """Explicitly resume one validated pending flow with PC preflight."""
+        return self._installed_kace_operation(workflow_id, sequence, generation, power_context)
+
+    def _installed_kace_operation(self, workflow_id, sequence, generation, power_context=None, configuration=False):
         if (not isinstance(workflow_id, str) or type(sequence) is not int or sequence < 0
                 or type(generation) is not int or power_context is None):
             return {"status": "failed", "message": "Invalid recovery context."}
@@ -1478,11 +1491,32 @@ class Api:
         except Exception as exc:
             return {"status": "failed", "message": "Pending installation could not be read: " + self._sanitize_error(exc)}
         checkpoint = parse_checkpoint(raw)
-        if (checkpoint is None or checkpoint["state"] == "COMPLETE"
+        if (checkpoint is None or (checkpoint["state"] != "COMPLETE" if configuration else checkpoint["state"] == "COMPLETE")
                 or checkpoint["workflow_id"] != workflow_id or checkpoint["sequence"] != sequence):
             return {"status": "failed", "message": "Pending installation changed or is unavailable. Refresh its saved state."}
         recovery = {"session": session, "generation": generation,
-                    "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest()}
+                    "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                    "configuration_id": (uuid.uuid4().hex if configuration is True else configuration) or None}
+        if isinstance(configuration, str):
+            from backend.kace_configuration import parse_configuration_result
+            try:
+                raw_result = session.read_text_file(f"kace/configuration-operations/{configuration}/result.json")
+                result = parse_configuration_result(raw_result, configuration, recovery["sha256"])
+                if result is None:
+                    raise ValueError("Configuration is not a validated pending operation.")
+                if result["state"] == "COMPLETE":
+                    current = session.read_text_file("kace/firmware-workflow.json")
+                    if hashlib.sha256(current.encode("utf-8")).hexdigest() != recovery["sha256"]:
+                        raise ValueError("Installation identity changed while reading configuration evidence.")
+                    with self._ssh_lock:
+                        if session is not self._ssh or generation != self._ssh_gen:
+                            raise ValueError("SSH session changed.")
+                        with self._power_lock:
+                            self._require_power_context_locked(power_context)
+                    return {"status": "complete", "operation_id": configuration, "result": result}
+                recovery["result_sha256"] = hashlib.sha256(raw_result.encode("utf-8")).hexdigest()
+            except Exception as exc:
+                return {"status": "failed", "message": self._sanitize_error(exc)}
         return self._start_kace_workflow("mainsail", power_context, recovery)
 
     def start_bootstrap(self, dashboard_ui: str, power_context=None) -> dict:
@@ -1596,7 +1630,12 @@ class Api:
                 if (not isinstance(current, str)
                         or hashlib.sha256(current.encode("utf-8")).hexdigest() != recovery["sha256"]):
                     raise RuntimeError("Pending installation changed during validation preparation.")
-                command = resume_command(env_path, runtime_commit, recovery["sha256"], workflow_id)
+                if recovery.get("configuration_id"):
+                    from backend.kace_configuration import configuration_command
+                    command = configuration_command(env_path, runtime_commit, recovery["sha256"], workflow_id,
+                                                    recovery["configuration_id"], recovery.get("result_sha256"))
+                else:
+                    command = resume_command(env_path, runtime_commit, recovery["sha256"], workflow_id)
             except Exception as exc:
                 release_start()
                 return {"status": "failed", "message": self._sanitize_error(exc)}
@@ -1619,7 +1658,7 @@ class Api:
             if interrupted:
                 release_start()
                 return {"status": "failed", "message": "Bootstrap preparation was interrupted."}
-            self.set_device_state("BOOTSTRAPPING", 0, "Resuming KACE installation." if recovery else "Starting KACE bootstrap.")
+            self.set_device_state("BOOTSTRAPPING", 0, "Preparing a new KACE configuration." if recovery and recovery.get("configuration_id") else "Resuming KACE installation." if recovery else "Starting KACE bootstrap.")
             try:
                 sent = session.send_resume_command(command) if recovery else session.send_input(command)
             except Exception:
@@ -1632,7 +1671,8 @@ class Api:
                     return {"status": "failed", "code": "RESUME_RECONNECT_REQUIRED",
                             "message": "Reconnect SSH before resuming; the terminal changed or received input."}
                 return {"status": "failed", "message": "SSH terminal is not ready."}
-        return {"status": "started", "workflow_id": workflow_id}
+        return {"status": "started", "workflow_id": workflow_id,
+                **({"operation_id": recovery["configuration_id"]} if recovery and recovery.get("configuration_id") else {})}
 
     def send_ssh_input(self, data: str):
         """

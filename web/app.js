@@ -1694,6 +1694,10 @@ window.restoreSshAfterReconnect = function (result, selection, checkpoint, waiti
     flushPendingTerminalData();
     loginState = 'DISCONNECTED';
     term.write(`\r\n\x1b[97m${studioText('recoveryConnected')}\x1b[0m\r\n`);
+    if (restoreConfigurationProjection()) {
+        term.write(`\r\n${workflowText('configurationPending', {})}\r\n`);
+        return;
+    }
     const incomingId = checkpoint?.event?.workflow_id;
     const activeId = document.getElementById('kace-workflow-tracker')?.dataset.workflowId;
     // A delayed initial read of a known historical flow cannot replace or
@@ -1765,6 +1769,7 @@ function performSshLogin(username, password) {
                 }, selection);
                 flushPendingTerminalData();
                 loginState = 'DISCONNECTED';
+                restoreConfigurationProjection();
 
                 // Synchronize terminal dimensions with the remote PTY
                 if (window.pywebview && window.pywebview.api) {
@@ -2061,7 +2066,7 @@ const KACE_FIRMWARE_DEPLOYMENT_STEPS = [
 
 const KACE_TERMINAL_ERRORS = new Set([
     'ABORTED', 'CANCELLED', 'FAILED_FLASH', 'FAILED_MONITOR', 'FAILED_UPLOAD',
-    'CONFIG_ERROR', 'FAILED_PRECONDITION', 'TIMEOUT',
+    'CONFIG_ERROR', 'FAILED_PRECONDITION', 'TIMEOUT', 'FAILED',
 ]);
 
 // Presentation boundary for the validated delivery fallback, not a firmware
@@ -2073,6 +2078,12 @@ const KACE_MANIFEST_STATES = new Set([
 const kaceWorkflowViews = new Map();
 
 function kaceWorkflowDefinition(kind) {
+    if (kind === 'configuration') return {
+        steps: ['configurationPrepare', 'configurationReview', 'configurationActivate', 'configurationComplete'],
+        positions: {PREPARING: [-1, 0], PREFLIGHT: [-1, 0], REVIEWING: [0, 1], SNAPSHOT: [0, 1], BACKUP: [0, 1],
+            APPLYING_CONFIG: [1, 2], VERIFYING_UPLOAD: [1, 2], FIRMWARE_RESTART: [1, 2],
+            WAITING_MOONRAKER: [1, 2], VERIFYING_CONFIG: [1, 2], DONE: [2, 3], COMPLETE: [3, -1]},
+    };
     if (kind === 'firmware_deployment') {
         return {
             steps: KACE_FIRMWARE_DEPLOYMENT_STEPS,
@@ -2141,6 +2152,9 @@ function kaceWorkflowPosition(view, state) {
 }
 
 function renderKaceWorkflow(view) {
+    // A historical installation COMPLETE must never replace an unresolved new
+    // configuration after a poll or SSH reconnection.
+    if (configurationOperation?.selection === powerSelection && view.kind !== 'configuration') return;
     const tracker = document.getElementById('kace-workflow-tracker');
     const title = document.getElementById('kace-workflow-title');
     const status = document.getElementById('kace-workflow-status');
@@ -2180,7 +2194,7 @@ function renderKaceWorkflow(view) {
     }
     tracker.dataset.workflowId = view.workflowId;
 
-    const isDone = view.state === 'DONE' || view.state === 'COMPLETE';
+    const isDone = view.state === 'COMPLETE' || (view.kind !== 'configuration' && view.state === 'DONE');
     const isActionRequired = view.kind === 'firmware_deployment' &&
         [
             'COMPILE_REQUIRED', 'ARTIFACT_READY', 'AWAITING_USER_ACTION',
@@ -2262,6 +2276,19 @@ function renderKaceWorkflow(view) {
             Boolean(view.connectionLost || view.recoveryObserving) || view.generation !== firmwareGeneration;
     }
 
+    const newConfiguration = document.getElementById('kace-new-configuration');
+    if (newConfiguration) {
+        const pending = view.kind === 'configuration' && configurationOperation?.operationId && !isDone;
+        const available = pending || (view.kind === 'firmware_deployment' && view.state === 'COMPLETE' &&
+            view.data?.firmware_authority === 'durable_checkpoint');
+        newConfiguration.style.display = available ? 'inline-flex' : 'none';
+        newConfiguration.textContent = workflowText(pending ? 'configurationResume' : 'configurationAction', view);
+        newConfiguration.title = workflowText('configurationHint', view);
+        newConfiguration.dataset.workflowId = available ? view.workflowId : '';
+        newConfiguration.disabled = !available || bootstrapActive || !sshConnected || !terminalShellOpen ||
+            (!pending && (Boolean(view.connectionLost) || view.generation !== firmwareGeneration));
+    }
+
     steps.replaceChildren();
     definition.steps.forEach((label, index) => {
         const item = document.createElement('li');
@@ -2284,6 +2311,7 @@ function renderKaceWorkflow(view) {
 }
 
 let firmwareGeneration = null;
+let configurationOperation = null;
 window.updateKaceWorkflowEvent = function (event, generation = null, resumed = false, origin = 'event') {
     if (!event || typeof event !== 'object') return false;
     if (generation !== null && generation !== firmwareGeneration) return false;
@@ -2291,6 +2319,12 @@ window.updateKaceWorkflowEvent = function (event, generation = null, resumed = f
     const sequence = event.sequence;
     const state = event.state;
     const schema = event.schema;
+    if (event.workflow_kind === 'configuration') {
+        if (!configurationOperation || configurationOperation.selection !== powerSelection ||
+            (configurationOperation.operationId && workflowId !== 'configuration-' + configurationOperation.operationId)) return false;
+        if (!/^configuration-[0-9a-f]{32}$/.test(workflowId)) return false;
+        configurationOperation.operationId = workflowId.slice('configuration-'.length);
+    }
     if ((schema !== 1 && schema !== 2) ||
         (schema === 2 && event.workflow_kind !== 'firmware_deployment') ||
         typeof workflowId !== 'string' || !workflowId ||
@@ -2336,6 +2370,7 @@ window.updateKaceWorkflowEvent = function (event, generation = null, resumed = f
             : state,
     };
     kaceWorkflowViews.set(workflowId, view);
+    if (view.kind === 'configuration' && configurationOperation) configurationOperation.view = view;
     renderKaceWorkflow(view);
     return true;
 };
@@ -2527,6 +2562,8 @@ window.updateBootstrapEvent = function (event, context) {
     const workflowId = event.workflow_id;
     const sequence = event.sequence;
     const eventName = event.event;
+    if (configurationOperation?.selection === powerSelection &&
+        (!event.operation_id || (configurationOperation.operationId && event.operation_id !== configurationOperation.operationId))) return false;
     if (typeof workflowId !== 'string' || !workflowId ||
         !Number.isInteger(sequence) || sequence < 1 ||
         typeof eventName !== 'string') return false;
@@ -2536,6 +2573,9 @@ window.updateBootstrapEvent = function (event, context) {
     bootstrapAuthoritativeSeen = true;
 
     if (eventName === 'workflow_started') {
+        if (event.code === 'CONFIGURATION_STARTED' && configurationOperation?.selection === powerSelection) {
+            configurationOperation.operationId = event.operation_id;
+        }
         bootstrapActive = true;
         const bootstrapBtn = document.getElementById('bootstrap-btn');
         if (bootstrapBtn) bootstrapBtn.disabled = true;
@@ -2547,10 +2587,23 @@ window.updateBootstrapEvent = function (event, context) {
         return true;
     }
     if (eventName === 'workflow_succeeded') {
+        if (event.code === 'CONFIGURATION_COMPLETE') {
+            if (!configurationOperation || event.operation_id !== configurationOperation.operationId) return false;
+            bootstrapActive = false;
+            const label = document.getElementById('bootstrap-stage-label');
+            if (label) { delete label.dataset.uiText; label.textContent = workflowText('configurationComplete', {}); }
+            return true;
+        }
         completeBootstrapSuccess('Bootstrap and KACE wizard completed successfully.', context);
         return true;
     }
     if (eventName === 'workflow_cancelled') {
+        if (event.code === 'CONFIGURATION_PENDING') {
+            completeBootstrapTerminal('BOOTSTRAP_CANCELLED', workflowText('configurationPending', {}));
+            const view = kaceWorkflowViews.get('configuration-' + configurationOperation?.operationId);
+            if (view) renderKaceWorkflow(view);
+            return true;
+        }
         const pendingActivation = ['PENDING_ACTIVATION', 'RECOVERY_AVAILABLE'].includes(event.code);
         completeBootstrapTerminal(
             'BOOTSTRAP_CANCELLED',
@@ -2563,6 +2616,8 @@ window.updateBootstrapEvent = function (event, context) {
         return true;
     }
     if (eventName === 'workflow_failed') {
+        if (event.operation_id && configurationOperation?.selection === powerSelection &&
+            !kaceWorkflowViews.has('configuration-' + event.operation_id)) configurationOperation = null;
         kaceWorkflowViews.forEach(view => { if (!['COMPLETE', 'DONE'].includes(view.state)) { view.bootstrapFailed = true; renderKaceWorkflow(view); } });
         completeBootstrapTerminal(
             'BOOTSTRAP_FAILED',
@@ -3040,6 +3095,61 @@ async function resumeKaceInstallation() {
         if (status) status.textContent = workflowText('resumeFailed', view) + ' ' + String(error.message || error);
         renderKaceWorkflow(view);
     }
+}
+
+async function startKaceConfiguration() {
+    const button = document.getElementById('kace-new-configuration');
+    const view = kaceWorkflowViews.get(button?.dataset.workflowId);
+    const context = powerContext ? {...powerContext} : null;
+    if (!view || button.disabled || bootstrapActive || !sshConnected || !terminalShellOpen ||
+        !currentSshContext(context) || !window.pywebview?.api) return;
+    const existing = configurationOperation?.selection === powerSelection ? configurationOperation : null;
+    const source = existing?.source || view;
+    if (source.state !== 'COMPLETE' || source.data?.firmware_authority !== 'durable_checkpoint') return;
+    configurationOperation = existing || {selection: powerSelection, host: context.host, source, operationId: null};
+    bootstrapActive = true;
+    button.disabled = true;
+    const installButton = document.getElementById('bootstrap-btn');
+    if (installButton) installButton.disabled = true;
+    const status = document.getElementById('kace-resume-status');
+    if (status) { status.dataset.workflowId = view.workflowId; status.hidden = false; status.textContent = workflowText('resumePreparing', view); }
+    try {
+        const args = [source.workflowId, source.sequence, firmwareGeneration, context];
+        const result = existing?.operationId
+            ? await window.pywebview.api.resume_kace_configuration(existing.operationId, ...args)
+            : await window.pywebview.api.start_kace_configuration(...args);
+        if (!currentSshContext(context)) return;
+        if (existing?.operationId && result?.status === 'complete' && result.operation_id === existing.operationId) {
+            bootstrapActive = false;
+            window.updateKaceWorkflowEvent({schema: 1, workflow_kind: 'configuration',
+                workflow_id: 'configuration-' + existing.operationId, sequence: result.result.sequence,
+                state: 'COMPLETE', detail: result.result.detail || ''}, firmwareGeneration);
+            if (status) { status.hidden = false; status.textContent = workflowText('configurationComplete', view); }
+            return;
+        }
+        if (!result || result.status !== 'started') throw new Error(result?.message || workflowText('configurationPending', view));
+        configurationOperation.operationId = result.operation_id;
+        if (status) status.textContent = workflowText('configurationHint', view);
+    } catch (error) {
+        if (!currentSshContext(context)) return;
+        bootstrapActive = false;
+        if (!existing && !configurationOperation?.operationId) configurationOperation = null;
+        if (installButton) installButton.disabled = !sshConnected;
+        renderKaceWorkflow(view);
+        if (status) { status.hidden = false; status.textContent = String(error.message || error); }
+    }
+}
+
+function restoreConfigurationProjection() {
+    if (!configurationOperation || configurationOperation.host !== powerContext?.host ||
+        !configurationOperation.operationId || !configurationOperation.view) return false;
+    configurationOperation.selection = powerSelection;
+    const view = configurationOperation.view;
+    view.generation = firmwareGeneration;
+    view.connectionLost = false;
+    kaceWorkflowViews.set(view.workflowId, view);
+    renderKaceWorkflow(view);
+    return true;
 }
 
 function startBootstrap() {
@@ -3631,6 +3741,7 @@ function startFirmwareCheckpointWatch(resumedSession = false) {
 
 const WORKFLOW_TEXT = {
     English: {
+        configurationAction: 'New configuration', configurationResume: 'Continue configuration', configurationHint: 'Generate and review a new configuration. Publishing requires approval in KACE; installation history stays unchanged.', configurationPending: 'Configuration remains pending. Reconnect SSH and continue this operation; do not reinstall.', configurationComplete: 'New configuration verified and completed.', configurationPrepare: 'Generate and validate', configurationReview: 'Review and approve', configurationActivate: 'Publish and verify',
         resumeReconnect: 'Disconnect SSH, reconnect, and press Resume installation before typing in the terminal.', resumeAction: 'Resume installation', resumePreparing: 'Preparing validation on this PC…', resumeStarted: 'Request sent. Check the terminal to continue installation.', resumeFailed: 'Could not resume installation.', resumeIncomplete: 'Installation remains pending. Review the terminal before resuming.',
         phase_ARTIFACT_READY: 'Firmware ready to flash', phase_AWAITING_FLASH: 'Firmware ready to flash', phase_VERIFYING_MCU: 'Waiting for MCU verification',
         title: 'KACE installation', completed: 'Completed', recovery: 'Recovery required', failed: 'Failed', action: 'Action required', running: 'In progress',
@@ -3647,6 +3758,7 @@ const WORKFLOW_TEXT = {
         phase_ROLLING_BACK: 'Restoring the previous configuration', phase_VERIFYING_ROLLBACK: 'Verifying restoration',
     },
     'Español': {
+        configurationAction: 'Nueva configuración', configurationResume: 'Continuar configuración', configurationHint: 'Generá y revisá una nueva configuración. Publicar requiere aprobación en KACE; el historial de instalación se conserva.', configurationPending: 'La configuración sigue pendiente. Reconectá SSH y continuá esta operación; no reinstales.', configurationComplete: 'Nueva configuración verificada y completada.', configurationPrepare: 'Generar y validar', configurationReview: 'Revisar y aprobar', configurationActivate: 'Publicar y verificar',
         resumeReconnect: 'Desconectá SSH, reconectá y pulsá Continuar instalación antes de escribir en la terminal.', resumeAction: 'Continuar instalación', resumePreparing: 'Preparando la validación en esta PC…', resumeStarted: 'Solicitud enviada. Revisá la terminal para continuar la instalación.', resumeFailed: 'No se pudo continuar la instalación.', resumeIncomplete: 'La instalación sigue pendiente. Revisá la terminal antes de continuar.',
         phase_ARTIFACT_READY: 'Firmware listo para flashear', phase_AWAITING_FLASH: 'Firmware listo para flashear', phase_VERIFYING_MCU: 'Esperando verificar la MCU',
         title: 'Instalación de KACE', completed: 'Completada', recovery: 'Recuperación necesaria', failed: 'Falló', action: 'Acción requerida', running: 'En curso',
@@ -3663,6 +3775,7 @@ const WORKFLOW_TEXT = {
         phase_ROLLING_BACK: 'Restaurando la configuración anterior', phase_VERIFYING_ROLLBACK: 'Verificando la restauración',
     },
     'Português': {
+        configurationAction: 'Nova configuração', configurationResume: 'Continuar configuração', configurationHint: 'Gere e revise uma nova configuração. Publicar exige aprovação no KACE; o histórico da instalação é preservado.', configurationPending: 'A configuração continua pendente. Reconecte o SSH e continue esta operação; não reinstale.', configurationComplete: 'Nova configuração verificada e concluída.', configurationPrepare: 'Gerar e validar', configurationReview: 'Revisar e aprovar', configurationActivate: 'Publicar e verificar',
         resumeReconnect: 'Desconecte o SSH, reconecte e pressione Continuar instalação antes de digitar no terminal.', resumeAction: 'Continuar instalação', resumePreparing: 'Preparando a validação neste PC…', resumeStarted: 'Solicitação enviada. Verifique o terminal para continuar a instalação.', resumeFailed: 'Não foi possível continuar a instalação.', resumeIncomplete: 'A instalação continua pendente. Verifique o terminal antes de continuar.',
         phase_ARTIFACT_READY: 'Firmware pronto para gravar', phase_AWAITING_FLASH: 'Firmware pronto para gravar', phase_VERIFYING_MCU: 'Aguardando verificar a MCU',
         title: 'Instalação do KACE', completed: 'Concluída', recovery: 'Recuperação necessária', failed: 'Falhou', action: 'Ação necessária', running: 'Em andamento',
@@ -3680,10 +3793,18 @@ const WORKFLOW_TEXT = {
     },
 };
 function workflowText(key, view) {
+    if (view.kind === 'configuration') {
+        if (['phase_FAILED', 'phase_CANCELLED', 'phase_PENDING_ACTIVATION', 'phase_CONFIG_ERROR'].includes(key)) key = 'configurationPending';
+        if (key === 'phase_WAITING_MOONRAKER') key = 'configurationActivate';
+        key = ({title: 'configurationAction', completeDetail: 'configurationComplete',
+            continueDetail: 'configurationHint', disconnectedDetail: 'configurationPending',
+            recoveryDetail: 'configurationPending', resumeDetail: 'configurationPending'})[key] || key;
+    }
     const language = selectedStudioLanguage || (view.data && view.data.language);
     return (WORKFLOW_TEXT[language || studioLanguage()] || WORKFLOW_TEXT.English)[key];
 }
 function workflowStep(label, view) {
+    if (view.kind === 'configuration') return workflowText(label, view);
     const translations = {
         'Español': ['Hardware seleccionado', 'Firmware compilado', 'Flasheo del firmware', 'MCU verificada', 'Configuración generada', 'Preparación del despliegue', 'Verificación de la instalación', 'Instalación completada'],
         'Português': ['Hardware selecionado', 'Firmware compilado', 'Gravação do firmware', 'MCU verificada', 'Configuração gerada', 'Preparação da instalação', 'Verificação da instalação', 'Instalação concluída'],

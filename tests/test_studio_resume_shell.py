@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import uuid
 
@@ -51,6 +52,9 @@ else
     [ "$TEST_FAULT" != pending ]
 fi
 ''', newline='\n')
+    if os.name != 'nt':
+        (binaries / 'git').chmod(0o755)
+        (runtime / 'venv/bin/python').chmod(0o755)
     env_path = '/tmp/kace-studio-preflight-' + uuid.uuid4().hex + '.env'
     command = resume_command(env_path, commit, hashlib.sha256(original).hexdigest(), 'bootstrap-'+'c'*32)
     setup = (
@@ -83,3 +87,46 @@ def test_resume_command_rejects_untrusted_shell_identifiers(index, value):
     args[index] = value
     with pytest.raises(ValueError):
         resume_command(*args)
+
+
+@pytest.mark.skipif(os.name == 'nt' or not shutil.which('git'), reason='requires POSIX Git file modes')
+def test_resume_real_git_rejects_mode_and_content_changes(tmp_path):
+    runtime = tmp_path / 'kace'
+    (runtime / 'venv/bin').mkdir(parents=True)
+    script = runtime / 'kace.py'
+    script.write_text('print("trusted")\n')
+    script.chmod(0o644)
+    def git(*args):
+        return subprocess.run(['git', '-C', str(runtime), *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    git('init', '-q')
+    git('config', 'user.email', 'test@example.invalid')
+    git('config', 'user.name', 'Test')
+    git('config', 'core.filemode', 'true')
+    git('add', 'kace.py')
+    git('commit', '-qm', 'fixture')
+    commit = git('rev-parse', 'HEAD')
+    (runtime / '.kace-runtime-commit').write_text(commit + '\n')
+    checkpoint = b'{"state":"DEPLOYING"}'
+    (runtime / 'firmware-workflow.json').write_bytes(checkpoint)
+    python = runtime / 'venv/bin/python'
+    python.write_text('#!/bin/sh\nexit 0\n')
+    python.chmod(0o755)
+
+    def run():
+        env_path = '/tmp/kace-studio-preflight-' + uuid.uuid4().hex + '.env'
+        command = resume_command(env_path, commit, hashlib.sha256(checkpoint).hexdigest(),
+                                 'bootstrap-' + 'c' * 32)
+        setup = f"trap 'rm -f -- {env_path}' EXIT; printf 'true\\n' > {env_path}; "
+        result = subprocess.run(['bash', '-c', setup + command], cwd=tmp_path,
+                                env={**os.environ, 'HOME': str(tmp_path)},
+                                capture_output=True, text=True, timeout=15, check=True)
+        return result.stdout
+
+    assert 'workflow_succeeded' in run()
+    script.chmod(0o755)
+    assert 'RECOVERY_CONTRACT_MISMATCH' in run()
+    script.chmod(0o644)
+    assert 'workflow_succeeded' in run()
+    script.write_text('print("altered")\n')
+    assert 'RECOVERY_CONTRACT_MISMATCH' in run()
