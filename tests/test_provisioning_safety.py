@@ -20,6 +20,7 @@ def verified_test_boot_volume(monkeypatch):
     monkeypatch.setattr("backend.imager._verified_boot_volume", lambda path, _identity: path)
 
 
+@pytest.mark.usefixtures("isolated_boot_refresh")
 def test_disabling_ssh_removes_markers_and_disables_cloud_init(tmp_path, monkeypatch):
     (tmp_path / "ssh").touch()
     (tmp_path / "ssh.txt").touch()
@@ -97,6 +98,7 @@ def test_prebaked_headless_wifi_rejects_line_injection_before_mount(tmp_path, mo
     assert mount_called is False
 
 
+@pytest.mark.usefixtures("isolated_boot_refresh")
 def test_prebaked_ssh_disable_is_enforced_on_first_boot(tmp_path, monkeypatch):
     (tmp_path / "cmdline.txt").write_text(
         "console=tty1 root=PARTUUID=abc-02 rootwait\n", encoding="utf-8"
@@ -126,6 +128,7 @@ def test_prebaked_ssh_disable_is_enforced_on_first_boot(tmp_path, monkeypatch):
     assert not (tmp_path / "ssh.txt").exists()
 
 
+@pytest.mark.usefixtures("isolated_boot_refresh")
 def test_open_wifi_generates_passwordless_network_profiles(tmp_path, monkeypatch):
     (tmp_path / "cmdline.txt").write_text(
         "console=tty1 root=PARTUUID=abc-02 rootwait\n", encoding="utf-8"
@@ -154,6 +157,7 @@ def test_open_wifi_generates_passwordless_network_profiles(tmp_path, monkeypatch
     assert "password:" not in network
 
 
+@pytest.mark.usefixtures("isolated_boot_refresh")
 def test_raw_64_hex_wifi_psk_is_not_hashed_again(tmp_path, monkeypatch):
     monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda _disk, **_kwargs: str(tmp_path))
     raw_psk = "A1" * 32

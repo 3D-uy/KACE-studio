@@ -5,6 +5,33 @@ from __future__ import annotations
 import pytest
 
 
+class GuardedImagerSubprocess:
+    """Local proxy: an unmocked boot refresh must never reach host storage."""
+
+    def __init__(self, delegate, attempted):
+        self.delegate = delegate
+        self.attempted = attempted
+
+    def __getattr__(self, name):
+        return getattr(self.delegate, name)
+
+    def run(self, args, **kwargs):
+        if "update-hoststoragecache" in str(args).lower():
+            self.attempted.append((args, kwargs))
+            raise AssertionError("Boot refresh requires explicit storage isolation")
+        return self.delegate.run(args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def reject_unisolated_boot_refresh(monkeypatch):
+    from backend import imager
+    attempted = []
+    monkeypatch.setattr(imager, "subprocess", GuardedImagerSubprocess(imager.subprocess, attempted))
+    yield
+    # inject_config catches refresh errors; teardown must still fail the test.
+    assert attempted == [], "Unisolated host-storage refresh attempted: " + repr(attempted)
+
+
 @pytest.fixture(autouse=True)
 def isolate_local_application_data(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
@@ -61,7 +88,7 @@ def coherent_provisioning_candidate(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture
-def isolated_boot_refresh(monkeypatch):
+def isolated_boot_refresh(monkeypatch, reject_unisolated_boot_refresh):
     """Keep content-only injection tests off the host storage-cache refresh.
 
     Replace imager's bindings, not the shared time/subprocess modules: the

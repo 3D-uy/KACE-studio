@@ -129,11 +129,18 @@ class TestKaceBackend(unittest.TestCase):
         """
         Tests that port probing functions handle closed/dead IP sockets gracefully and return False.
         """
-        # Test probing an unroutable IP address
-        results = probe_ip_ports("192.0.2.1", ports=[22, 7125], timeout=0.1)
+        # A reserved address is not guaranteed unroutable on every host. Keep
+        # the production probe loop, but never open a real network socket.
+        with patch("backend.discovery.socket.socket") as factory:
+            factory.return_value.connect_ex.return_value = 10060
+            results = probe_ip_ports("192.0.2.1", ports=[22, 7125], timeout=0.1)
+            self.assertEqual(factory.return_value.settimeout.call_count, 2)
+            factory.return_value.settimeout.assert_called_with(0.1)
+            self.assertEqual(factory.return_value.close.call_count, 2)
         self.assertFalse(results.get(22, True), "SSH Port should report closed on unroutable IP")
         self.assertFalse(results.get(7125, True), "Moonraker Port should report closed on unroutable IP")
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_networkmanager_profile(self):
         """
         Tests that config injection creates valid wpa_supplicant AND NetworkManager 
@@ -217,6 +224,7 @@ class TestKaceBackend(unittest.TestCase):
         result = _get_country_from_timezone("America/Indiana/Indianapolis")
         self.assertEqual(result, "US")
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_config_injection_uses_default_username(self):
         """Tests that config injection uses the DEFAULT_USERNAME constant in userconf.txt."""
         import tempfile
@@ -243,6 +251,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_config_injection_country_code_from_timezone(self):
         """Tests that wpa_supplicant.conf uses the correct country code derived from timezone.
         Also verifies that custom.toml does NOT contain a [wlan] section (HIGH-01 fix —
@@ -295,6 +304,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_config_injection_default_country_when_no_timezone(self):
         """Tests that wpa_supplicant uses 'US' when no timezone is provided."""
         import tempfile
@@ -362,6 +372,7 @@ class TestKaceBackend(unittest.TestCase):
         # Should not raise
         session.send_input("test")
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_bootstrap_config_injection(self):
         """Tests that the kace-bootstrap.txt file is correctly generated."""
         import tempfile
@@ -479,6 +490,7 @@ class TestKaceBackend(unittest.TestCase):
                 drive_identity=dict(_TEST_DISK_IDENTITY, number=1),
             )
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_wifi_credentials_injection_escaping(self):
         r"""
         Test that legal wifi values containing shell metacharacters (", ', ;, $, \)
@@ -606,6 +618,7 @@ class TestKaceBackend(unittest.TestCase):
         
         self.assertFalse(verify_password("wrong_password", hashed))
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_dashboard_ui_both_injection(self):
         """
         Verify that when dashboard_ui="both" is passed, the kace-bootstrap.txt
@@ -666,7 +679,8 @@ class TestKaceBackend(unittest.TestCase):
         import tempfile
         import shutil
         
-        bash = shutil.which("bash")
+        from tests.test_bootstrap_contract import _find_bash
+        bash = _find_bash()
         try:
             if bash is None:
                 raise FileNotFoundError("bash")
@@ -833,6 +847,7 @@ class TestKaceBackend(unittest.TestCase):
         self.assertEqual(_build_boot_path("/mock/path/dir"), "/mock/path/dir")
         self.assertEqual(_build_boot_path("C:\\temp\\dir"), "C:\\temp\\dir")
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_inject_config_integration_real_write(self):
         """
         Verify inject_config end-to-end using a real temp directory.
@@ -897,6 +912,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_userconf_hash_verification(self):
         """
         Verify that userconf.txt contains a valid SHA-512 crypt hash (Modular Crypt Format)
@@ -951,6 +967,7 @@ class TestKaceBackend(unittest.TestCase):
         result = _compute_wpa_psk("Root", "SalociN20")
         self.assertEqual(result, "096995fe921ae6d8e570d57a8dcb56c14f11d7841a4e20843b4b5d5bc3b44021")
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_cloud_init_injection(self):
         """
         Verify that user-data, network-config, meta-data are written with correct values,
@@ -1025,6 +1042,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_cloud_init_empty_wifi(self):
         """
         Verify that the wifis section is omitted from network-config when wifi_ssid is empty.
@@ -1060,6 +1078,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_cloud_init_missing_cmdline_handling(self):
         """
         Verify that missing cmdline.txt is handled gracefully (skips patch without failing inject_config).
@@ -1094,6 +1113,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_bootstrap_local_copy_and_version_injection(self):
         """
         Verify that inject_config copies bootstrap.sh to the boot partition,
@@ -1321,6 +1341,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_prebaked_cleans_existing_cloud_init_files(self):
         """
         Verify that when is_prebaked=True, any pre-existing cloud-init files
@@ -1372,6 +1393,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_non_prebaked_network_config_uses_plaintext_password(self):
         """
         Verify that for non-prebaked images, the network-config file uses the
@@ -1420,6 +1442,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_prebaked_preserves_nm_and_wpa_configs(self):
         """
         Verify that prebaked mode still writes wpa_supplicant.conf and
@@ -1469,6 +1492,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_prebaked_writes_headless_nm_txt(self):
         """
         Verify that prebaked mode writes headless_nm.txt to the boot partition
@@ -1511,6 +1535,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_vanilla_writes_firstrun_sh(self):
         """
         Verify that vanilla (non-prebaked) mode writes firstrun.sh to the boot
@@ -1572,6 +1597,7 @@ class TestKaceBackend(unittest.TestCase):
         finally:
             shutil.rmtree(temp_boot)
 
+    @pytest.mark.usefixtures("isolated_boot_refresh")
     def test_prebaked_writes_firstrun_sh(self):
         """
         Verify that prebaked mode writes firstrun.sh to the boot partition
