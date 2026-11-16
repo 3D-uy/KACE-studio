@@ -3,6 +3,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
@@ -147,10 +148,17 @@ def test_slow_error_body_obeys_same_total_deadline(endpoint):
 def test_slow_dns_cannot_send_late_request_and_has_bounded_capacity(monkeypatch):
     entered, release = threading.Event(), threading.Event()
     completed = threading.Event()
+    # Opener initialization is outside the scenario under test. Expire the real
+    # budget logic only after DNS starts, without racing runner startup speed.
+    now = [100.0]
+    monkeypatch.setattr(http, "time", SimpleNamespace(monotonic=lambda: now[0]))
     real_getaddrinfo = http.socket.getaddrinfo
     calls = []
+    resolvers = []
     def resolve(*args, **kwargs):
+        resolvers.append(threading.current_thread())
         calls.append(args)
+        now[0] += 1.0
         entered.set()
         try:
             assert release.wait(2)
@@ -177,6 +185,9 @@ def test_slow_dns_cannot_send_late_request_and_has_bounded_capacity(monkeypatch)
         assert len(calls) == 1
     finally:
         release.set()
+        for worker in resolvers:
+            worker.join(1)
+            assert not worker.is_alive()
         assert completed.wait(1)
     assert sent == []
 
