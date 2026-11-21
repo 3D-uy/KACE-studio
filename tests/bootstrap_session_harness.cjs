@@ -36,6 +36,7 @@ const context = {console, assert, requests, timers, deferred, scenarioName: proc
         get_firmware_workflow_checkpoint: (...args) => deferred('checkpoint', args),
         get_remote_power_config: () => Promise.resolve({status: 'disabled'}),
         download_file: (...args) => {requests.downloads.push(args); return Promise.resolve(true);},
+        download_kace_firmware: (...args) => {requests.downloads.push(args); return Promise.resolve(true);},
         download_kace_configuration: (...args) => deferred('configurationDownloads', args),
     }},
 };
@@ -65,6 +66,7 @@ function begin() {
 }
 `;
 const cases = {
+    media_approval: fs.readFileSync(require('node:path').join(__dirname, 'media_approval.js'), 'utf8'),
     host_key_confirmation: `
         const output = [];
         window.Terminal = class {
@@ -146,7 +148,7 @@ const cases = {
             for (const [index,state] of ['ARTIFACT_READY','MEDIA_PREPARED','ACTION_REQUIRED','FLASHED','CANCELLED','FAILED_FLASH'].entries()) {
                 const id=language+'-'+state;
                 assert.equal(restoreKaceDeploymentManifest({schema:1,workflow_kind:'firmware_deployment',
-                    workflow_id:id,sequence:index+1,state,generation:7,deployment:{deployment_id:id,
+                    workflow_id:id,sequence:index+1,state,generation:7,download_available:true,deployment:{deployment_id:id,
                         final_filename:'Robin_nano.bin',staged_path:'/home/kace/kace/deploy/'+id+'/Robin_nano.bin',
                         instructions:[{id:'copy',text:'Copy the final file'}]}}),true);
                 const view=kaceWorkflowViews.get(id);
@@ -158,7 +160,7 @@ const cases = {
                 assert.equal(document.getElementById('kace-configuration-download').style.display,'none');
                 if (downloadable) {
                     assert.equal(window.downloadKaceFirmwareArtifact(),true);
-                    assert.deepEqual(Array.from(requests.downloads.at(-1)),[view.data.staged_path,7]);
+                    assert.deepEqual(Array.from(requests.downloads.at(-1)),[id,index+1,7,view.data.staged_path]);
                     await tick();
                 }
             }
@@ -176,7 +178,7 @@ const cases = {
     manifest_discard_and_reconnect: `
         await login(7);
         const manifest={schema:1,workflow_kind:'firmware_deployment',workflow_id:'flow',sequence:99,
-            generation:7,state:'ARTIFACT_READY',deployment:{deployment_id:'flow',
+            generation:7,state:'ARTIFACT_READY',download_available:true,deployment:{deployment_id:'flow',
                 final_filename:'firmware.bin',staged_path:'/home/kace/kace/firmware.bin'}};
         assert.equal(restoreKaceDeploymentManifest(manifest),true);
         requests.checkpoint.at(-1).resolve({generation:7,event:event(2,'DEPLOYING'),checkpoint:{state:'DEPLOYING'}});
@@ -192,7 +194,7 @@ const cases = {
         const fresh={...manifest,workflow_id:'new',generation:8,deployment:{...manifest.deployment,deployment_id:'new'}};
         assert.equal(restoreKaceDeploymentManifest(fresh),true);
         assert.equal(window.downloadKaceFirmwareArtifact(),true);
-        assert.equal(requests.downloads.at(-1)[1],8);
+        assert.equal(requests.downloads.at(-1)[2],8);
     `,
     manifest_checkpoint_api_evidence: `
         requests.manifest=[];
@@ -633,8 +635,7 @@ const cases = {
             const button = document.getElementById('kace-firmware-download');
             assert.equal(button.dataset.remotePath, row.data.staged_path);
             assert.equal(window.downloadKaceFirmwareArtifact(), true); await tick();
-            assert.equal(requests.downloads.at(-1)[0], row.data.staged_path);
-            assert.equal(requests.downloads.at(-1)[1], 7);
+            assert.deepEqual(Array.from(requests.downloads.at(-1)), [row.workflow_id, row.sequence, 7, row.data.staged_path]);
             assert.notEqual(row.data.final_filename, 'klipper.bin');
         }
         updateConnectionStatus(false);
@@ -651,11 +652,30 @@ const cases = {
         assert.equal(window.updateKaceWorkflowEvent(event(2, 'AWAITING_FLASH'), 7), true);
         assert.equal(document.getElementById('kace-firmware-download').disabled, false);
         assert.equal(window.downloadKaceFirmwareArtifact(), true); await tick();
-        assert.equal(JSON.stringify(requests.downloads), JSON.stringify([['/home/kace/kace/firmware.bin', 7]]));
+        assert.equal(JSON.stringify(requests.downloads), JSON.stringify([['flow', 2, 7, '/home/kace/kace/firmware.bin']]));
         window.updateDeviceState('SSH_READY', 100, 'Duplicate connected notification');
         assert.equal(firmwareGeneration, 7);
         assert.equal(window.updateKaceWorkflowEvent(event(1), 7), false);
         assert.equal(window.updateKaceWorkflowEvent(event(3), 6), false);
+    `,
+    complete_before_bootstrap: `
+        await login(7); begin();
+        const cp={...event(15,'COMPLETE'),data:{firmware_authority:'durable_checkpoint'}};
+        const success={protocol:'kace-bootstrap/v1',workflow_id:'boot',sequence:2,event:'workflow_succeeded'};
+        const buttons=()=>['kace-new-configuration','kace-discover-configurations'].map(id=>document.getElementById(id).disabled);
+        assert.equal(window.updateKaceWorkflowEvent(cp,7),true);
+        assert.ok(buttons().every(Boolean));
+        assert.equal(window.updateBootstrapEvent(success,powerContext),true);
+        assert.equal(window.updateKaceWorkflowEvent(cp,7),false);
+        assert.ok(buttons().every(value=>!value));
+        window.updateSshDisconnected('lost',false);
+        assert.ok(buttons().every(Boolean));
+        await login(8); begin();
+        assert.equal(window.updateBootstrapEvent(success,powerContext),true);
+        assert.equal(window.updateKaceWorkflowEvent({...cp,sequence:16},8),true);
+        assert.ok(buttons().every(value=>!value));
+        window.updateTerminalClosed(8);
+        assert.equal(document.getElementById('kace-new-configuration').disabled,true);
     `,
     checkpoint_survives_bootstrap: `
         await login(7); begin();

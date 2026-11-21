@@ -88,6 +88,10 @@ def test_source_smoke_uses_hidden_real_application_contract(monkeypatch):
     assert runtime.create_kwargs["y"] == -32_000
     assert runtime.create_kwargs["url"].__class__ is main.KaceWsgiApp
     assert runtime.create_kwargs["js_api"].__class__ is main.Api
+    monkeypatch.setattr(main, "list_drives", lambda: pytest.fail("Smoke touched real storage"))
+    api = runtime.create_kwargs["js_api"]
+    assert api.get_drives() == []
+    assert api.get_preferences()["kace_auto_scan"] is False
     assert runtime.window.hidden is True
     assert runtime.window.destroyed is True
 

@@ -155,10 +155,11 @@ def test_valid_manifest_is_observational_and_preserves_optional_legacy_fields():
     value["state"] = "ACTION_REQUIRED"
     # v1 presentation never required newer firmware identity, profile or
     # transformation records, nor physical access to the recorded Pi paths.
-    assert read_manifest(value) == {**value, "generation": 7}
+    assert read_manifest(value) == {**value, "generation": 7, "download_available": False}
 
 
 @pytest.mark.parametrize("case", CORPUS["cases"], ids=lambda case: case["case"])
 def test_accepts_current_and_original_producer_serializations(case):
     value = case["manifest"]
-    assert read_manifest(value) == {**value, "generation": 7}
+    assert read_manifest(value) == {**value, "generation": 7, "download_available": value["state"] in {
+        "ARTIFACT_READY", "MEDIA_PREPARED", "ACTION_REQUIRED"}}

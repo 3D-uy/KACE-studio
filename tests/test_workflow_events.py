@@ -294,7 +294,7 @@ def test_simulated_kace_transcripts_keep_terminal_semantics_observational():
 
     api = Api()
     api._ssh = ReadOnlySsh()
-    assert api.get_firmware_deployment_manifest() == {**persisted, "generation": 0}
+    assert api.get_firmware_deployment_manifest() == {**persisted, "generation": 0, "download_available": False}
     assert api._ssh.calls == ["kace/deployment-manifest.json"]
 
 

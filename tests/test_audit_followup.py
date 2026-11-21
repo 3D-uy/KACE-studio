@@ -118,14 +118,14 @@ def test_firmware_download_passes_originating_generation_and_rejects_stale_view(
     harness = '''const assert = require('node:assert/strict');
 const window = globalThis;
 let firmwareGeneration = 9, sshConnected = true;
-const button = {dataset: {remotePath:'kace/firmware.bin',generation:'9'}, disabled:false};
+const button = {dataset: {remotePath:'kace/firmware.bin',generation:'9',workflowId:'flow',sequence:'3'}, disabled:false};
 const document = {getElementById() {return button;}};
 const calls=[];
-window.pywebview={api:{download_file(...args) {calls.push(args);return Promise.resolve(true);}}};
+window.pywebview={api:{download_kace_firmware(...args) {calls.push(args);return Promise.resolve(true);}}};
 '''
     scenario = '''
 assert.equal(downloadKaceFirmwareArtifact(),true);
-assert.deepEqual(calls,[['kace/firmware.bin',9]]);
+assert.deepEqual(calls,[['flow',3,9,'kace/firmware.bin']]);
 firmwareGeneration=10;
 assert.equal(downloadKaceFirmwareArtifact(),false);
 firmwareGeneration=9;sshConnected=false;

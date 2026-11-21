@@ -18,6 +18,10 @@ from test_bootstrap_contract import _find_bash
     ('', 'CONFIGURATION_COMPLETE', True),
     ('pending', 'CONFIGURATION_PENDING', True),
     ('wrong-result', 'CONFIGURATION_PENDING', True),
+    ('wrong-schema', 'CONFIGURATION_PENDING', True),
+    ('wrong-checkpoint', 'CONFIGURATION_PENDING', True),
+    ('stale-sequence', 'CONFIGURATION_PENDING', True),
+    ('invalid-exit', 'CONFIGURATION_PENDING', True),
     ('changed-original', 'CONFIGURATION_PENDING', True),
     ('missing-result', 'CONFIGURATION_PENDING', True),
     ('missing-capability', 'CONFIGURATION_CONTRACT_MISMATCH', False),
@@ -28,7 +32,8 @@ from test_bootstrap_contract import _find_bash
     ('resume', 'CONFIGURATION_COMPLETE', True),
     ('resume-changed', 'CONFIGURATION_CONTRACT_MISMATCH', False),
 ])
-def test_new_operation_requires_its_own_result_and_preserves_original(tmp_path, fault, expected, launched):
+@pytest.mark.parametrize("optimize", [0, 1])
+def test_new_operation_requires_its_own_result_and_preserves_original(tmp_path, fault, expected, launched, optimize):
     bash = _find_bash()
     if not bash:
         pytest.skip('Bash required for offline launch integration')
@@ -79,6 +84,10 @@ if fault=='missing-result': raise SystemExit(0)
 result=dict(schema='kace-configuration-operation/v1',operation_id=args[2],source_checkpoint_sha256=args[4],sequence=5,state='COMPLETE',exit_code=0)
 if fault=='pending': result.update(state='FAILED',exit_code=1)
 if fault=='wrong-result': result['operation_id']='d'*32
+if fault=='wrong-schema': result['schema']='unknown'
+if fault=='wrong-checkpoint': result['source_checkpoint_sha256']='d'*64
+if fault=='stale-sequence': result['sequence']=False
+if fault=='invalid-exit': result['exit_code']=False
 p=pathlib.Path('configuration-operations')/args[2]/'result.json';p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(result))
 ''', newline='\n')
     env_path='/tmp/kace-studio-preflight-'+uuid.uuid4().hex+'.env'
@@ -87,7 +96,8 @@ p=pathlib.Path('configuration-operations')/args[2]/'result.json';p.parent.mkdir(
            f'export TEST_COMMIT={"a"*40}; export TEST_FAULT={shlex.quote(fault)}; '
            f'trap "rm -f -- {env_path}" EXIT; ')
     if fault != 'missing-env': setup+=f"printf '%s\\n' 'export KACE_STUDIO_PREFLIGHT_TOKEN=fixture-secret' > {env_path}; "
-    completed=subprocess.run([bash,'-c',setup+command],cwd=tmp_path,capture_output=True,text=True,encoding='utf-8',timeout=20)
+    completed=subprocess.run([bash,'-c',setup+command],cwd=tmp_path,capture_output=True,text=True,encoding='utf-8',
+                             env={**os.environ, 'PYTHONOPTIMIZE': str(optimize)},timeout=20)
     events=[json.loads(line.split('=== KACE_BOOTSTRAP_EVENT: ',1)[1].rsplit(' ===',1)[0]) for line in completed.stdout.splitlines() if line.startswith('=== KACE_BOOTSTRAP_EVENT: ')]
     assert events and events[-1]['code']==expected, completed.stdout+completed.stderr
     assert (runtime/'launched').exists()==launched

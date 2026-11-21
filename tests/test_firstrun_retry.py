@@ -31,6 +31,39 @@ def _state(path: Path) -> dict[str, str]:
     )
 
 
+@pytest.mark.parametrize("scenario,expected", [
+    ("absent", True), ("disabled", True), ("active", False),
+    ("enabled", False), ("unknown", False), ("disable-failed", False),
+])
+def test_prebaked_ssh_policy_checks_effective_state(tmp_path, scenario, expected):
+    bash = _bash()
+    if not bash:
+        pytest.skip("Requires Bash to exercise the generated first-run code")
+    # The function shadows systemctl. All state observations are synthetic.
+    script = tmp_path / "verify-ssh.sh"
+    script.write_text("""set -Eeuo pipefail
+systemctl() {
+  if [ "$1" = disable ]; then
+    [ "$2" = --now ] && [ "$3" = ssh.service ] && [ "$SCENARIO" != disable-failed ]
+    return
+  fi
+  [ "$1" = show ] || exit 91
+  case "$2" in
+    --property=LoadState)
+      if [ "$SCENARIO" = unknown ]; then return 1; fi
+      if [ "$4" = ssh.service ] && [ "$SCENARIO" != absent ]; then echo loaded; else echo not-found; return 4; fi ;;
+    --property=Id) echo ssh.service ;;
+    --property=ActiveState) if [ "$SCENARIO" = active ]; then echo active; else echo inactive; fi ;;
+    --property=UnitFileState) if [ "$SCENARIO" = enabled ]; then echo enabled; else echo disabled; fi ;;
+    *) exit 92 ;;
+  esac
+}
+""" + imager._first_run_disable_ssh_body(), encoding="utf-8", newline="\n")
+    result = subprocess.run([bash, str(script)], env=dict(os.environ, SCENARIO=scenario),
+                            capture_output=True, text=True, timeout=10)
+    assert (result.returncode == 0) is expected, result.stderr
+
+
 @pytest.mark.skipif(_bash() is None, reason="bash is unavailable")
 def test_prebaked_hostname_reconciliation_is_safe_and_idempotent(tmp_path):
     hostname_file = tmp_path / "hostname"
@@ -183,6 +216,7 @@ def _user_migration_lab(tmp_path, username="testuser"):
         "hashed_pw": "synthetic-unused", "username": username, "ssh_enabled_str": "false",
         "hostname_reconciliation": "", "pw_auth_str": "false", "wifi_ssid": "",
         "_first_run_network_import_body": lambda _: "",
+        "_first_run_disable_ssh_body": imager._first_run_disable_ssh_body,
     })
     body = body[:body.index("# ── 3. Configure SSH")].replace("/home/", "$LAB_HOME/")
     home = tmp_path / "homes"

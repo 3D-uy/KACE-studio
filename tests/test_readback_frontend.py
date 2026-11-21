@@ -64,7 +64,7 @@ for(const language of ['English','Español','Português']) {
     }
     begin();nodes.get('drive-select').value='4';
     window.updateDeviceState('FLASHED',100,'complete',payload);
-    assert.equal(nodes.get('success-modal').open,false,'changed selected disk');
+    assert.equal(nodes.get('success-modal').open,true,'completion follows the approved operation');
     begin();window.updateDeviceState('ERROR',95,'injection failed',{operation_id:operation,disk_identity:identity});
     window.updateDeviceState('FLASHED',100,'late success',payload);
     assert.equal(nodes.get('success-modal').open,false,'error must invalidate late completion');

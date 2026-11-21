@@ -41,6 +41,18 @@ qualify the printer configuration or firmware.
 
 ## Validation boundary
 
+For a custom raw image Studio compares the SHA-256 of the resolved bytes with
+reviewed raw-image identities. A known architecture mismatch is rejected for
+any selection. An unknown digest requires the operator's explicit compatibility
+confirmation in the write dialog. A custom pre-baked image still requires its
+image-bound service attestation; a conflicting architecture declaration fails.
+
+Pre-baked injection requires a readable single-line `cmdline.txt` and an
+unambiguous first-run trigger. An unrelated boot action is preserved and the
+operation fails before injecting credentials. The script checks the effective
+SSH service and socket state when SSH is disabled. Runtime failures use the
+existing bounded retry and diagnostic files on the boot volume.
+
 Readback is enabled by default. The final provisioned-card dialog reports the
 writer's operation-bound result explicitly: image readback verified or readback
 skipped. A verification discrepancy, missing/incompatible evidence, cancelled or
@@ -55,8 +67,9 @@ provisioning with sandboxed downloads/services. They do not prove a physical
 SD write, Pi boot or printer readiness. Klipper requires the normal printer/MCU
 configuration workflow before it can be ready to print.
 
-Safe eject compares the same hardware identity fields in Python and PowerShell:
-disk number, model, serial, path, capacity, bus type, and system/boot flags.
+Safe eject starts with the completed operation's receipt. Python compares
+disk number, serial, path, bus type and system/boot flags with the current disk.
+PowerShell also rechecks current model and capacity immediately before removal.
 The content-derived UniqueId is excluded from eject comparisons because writing
 an image can change it. A confirmed native eject ends the operation immediately.
 Fallback verification queries CIM partitions: no rows is a valid result for an

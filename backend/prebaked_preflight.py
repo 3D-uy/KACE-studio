@@ -75,6 +75,17 @@ class PrebakedAttestationError(ValueError):
     """Raised when a pre-baked image cannot prove Studio compatibility."""
 
 
+def validate_custom_architecture(image_sha256, selected_architecture, confirmed):
+    for release in TRUSTED_RELEASES.values():
+        for architecture, evidence in release["architectures"].items():
+            if evidence["image_sha256"] == image_sha256:
+                if architecture != selected_architecture:
+                    raise ValueError(f"Image architecture {architecture} differs from selected {selected_architecture}.")
+                return
+    if confirmed is not True:
+        raise ValueError("Unknown image architecture. Check the image against the selected Pi and confirm compatibility in the write dialog.")
+
+
 @dataclass(frozen=True)
 class PrebakedAttestation:
     family: str
@@ -227,7 +238,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_custom_attestation(image_path: str) -> PrebakedAttestation:
+def load_custom_attestation(image_path: str, selected_architecture: str) -> PrebakedAttestation:
     image = Path(image_path)
     candidates = (
         image.with_name(image.name + ".kace-attestation.json"),
@@ -247,6 +258,8 @@ def load_custom_attestation(image_path: str) -> PrebakedAttestation:
         payload,
         image_type="custom_prebaked",
     )
+    if "architecture" in payload and payload["architecture"] != selected_architecture:
+        raise PrebakedAttestationError("Custom image architecture declaration differs from the selected architecture.")
     actual_sha256 = sha256_file(image)
     if attestation.image_sha256 != actual_sha256:
         raise PrebakedAttestationError(

@@ -155,7 +155,7 @@ def test_pending_candidate_blocks_before_any_flash_worker(monkeypatch, pending_r
     assert "pending" in state.call_args.args[2]
     api._ssh = Mock()
     assert api.start_bootstrap("mainsail")["status"] == "failed"
-    api._ssh.send_input.assert_not_called()
+    api._ssh.send_resume_command.assert_not_called()
 
 
 def test_packaging_gate_runs_before_pyinstaller_analysis(pending_runtime):
@@ -192,7 +192,7 @@ def test_remote_bootstrap_only_executes_exact_contract_bytes(tmp_path, monkeypat
     monkeypatch.setattr(main, "DockerPreflight", lambda: Mock())
     api._ssh.start_preflight.return_value = "/tmp/kace-studio-preflight-fixture.env"
     assert api.start_bootstrap("mainsail")["status"] == "started"
-    command = api._ssh.send_input.call_args.args[0]
+    command = api._ssh.send_resume_command.call_args.args[0]
     environment = tmp_path / "preflight.env"
     environment.write_text("# Synthetic private context for the bootstrap byte gate test\n")
     command = command.replace("/tmp/kace-studio-preflight-fixture.env", "'" + environment.as_posix() + "'")

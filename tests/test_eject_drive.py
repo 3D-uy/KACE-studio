@@ -35,7 +35,7 @@ def test_api_rejects_eject_without_stored_identity(monkeypatch):
         called = True
 
     monkeypatch.setattr(main, "request_safe_eject", forbidden_request)
-    result = api.eject_drive(3)
+    result = api.eject_drive(3, "a" * 32)
     assert result["success"] is False
     assert "identity is unavailable" in result["error"]
     assert called is False
@@ -44,6 +44,7 @@ def test_api_rejects_eject_without_stored_identity(monkeypatch):
 def test_api_passes_stored_identity_to_elevated_helper(monkeypatch):
     api = main.Api()
     api._drive_snapshots[3] = disk_identity()
+    api._completed_flash = {"operation_id": "a" * 32, "disk_identity": disk_identity()}
     captured = {}
 
     def fake_request(disk_number, identity):
@@ -52,7 +53,7 @@ def test_api_passes_stored_identity_to_elevated_helper(monkeypatch):
         return {"success": True, "method": "offline", "message": "Safe to remove."}
 
     monkeypatch.setattr(main, "request_safe_eject", fake_request)
-    result = api.eject_drive(3)
+    result = api.eject_drive(3, "a" * 32)
     assert result["success"] is True
     assert captured == {"disk_number": 3, "identity": disk_identity()}
 
@@ -60,13 +61,26 @@ def test_api_passes_stored_identity_to_elevated_helper(monkeypatch):
 def test_api_propagates_verified_eject_failure(monkeypatch):
     api = main.Api()
     api._drive_snapshots[3] = disk_identity()
+    api._completed_flash = {"operation_id": "a" * 32, "disk_identity": disk_identity()}
     monkeypatch.setattr(
         main,
         "request_safe_eject",
         lambda *_args: {"success": False, "error": "The volume is in use."},
     )
-    result = api.eject_drive(3)
+    result = api.eject_drive(3, "a" * 32)
     assert result == {"success": False, "error": "The volume is in use."}
+
+
+@pytest.mark.parametrize("request_id,current", [
+    ("b" * 32, disk_identity()),
+    ("a" * 32, disk_identity(serial_number="REPLACEMENT")),
+])
+def test_eject_rejects_reused_number_or_earlier_receipt(monkeypatch, request_id, current):
+    api = main.Api()
+    api._completed_flash = {"operation_id": "a" * 32, "disk_identity": disk_identity()}
+    api._drive_snapshots[3] = current
+    monkeypatch.setattr(main, "request_safe_eject", lambda *_: pytest.fail("unexpected eject"))
+    assert api.eject_drive(3, request_id)["success"] is False
 
 
 def test_privileged_eject_rejects_changed_disk_identity(monkeypatch, tmp_path):

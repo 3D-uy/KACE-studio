@@ -1,6 +1,9 @@
 """PC validation preparation cannot launch on a changed or interrupted session."""
 from types import SimpleNamespace
 from unittest.mock import Mock
+import json
+import shlex
+import subprocess
 
 import pytest
 
@@ -17,6 +20,7 @@ class Session:
         self.generation = 0
         self.path = None
         self.started = []
+        self.pristine = True
 
     def stop_preflight(self, path=None):
         self.stops.append(path)
@@ -34,6 +38,12 @@ class Session:
     def send_input(self, command):
         self.commands.append(command)
         return True
+
+    def resume_terminal_available(self):
+        return self.pristine
+
+    def send_resume_command(self, command):
+        return self.pristine and self.send_input(command)
 
 
 @pytest.fixture
@@ -120,7 +130,7 @@ def test_success_command_contains_private_path_but_no_secret(context):
     assert context.session.started == [context.engine]
     assert len(context.session.commands) == 1
     command = context.session.commands[0]
-    assert f"( set +x; . {PATH} && rm -f -- {PATH} && " in command
+    assert f"( set +x; if . {PATH} && rm -f -- {PATH}; then " in command
     assert "KACE_STUDIO_PREFLIGHT_TOKEN" not in command
     assert "KACE_STUDIO_PREFLIGHT_SESSION" not in command
     assert "sha256sum --status --check" in command
@@ -135,3 +145,40 @@ def test_busy_workflow_does_not_prepare_or_revoke(context):
     context.factory.assert_not_called()
     assert not context.session.stops
     assert not context.session.commands
+
+
+@pytest.mark.parametrize("when", ["before-preflight", "during-preflight"])
+def test_initial_bootstrap_refuses_a_used_terminal(context, when):
+    if when == "before-preflight":
+        context.session.pristine = False
+    else:
+        context.engine.prepare.side_effect = lambda: setattr(context.session, "pristine", False)
+    result = context.api.start_bootstrap("mainsail")
+    assert result["code"] == "RESUME_RECONNECT_REQUIRED"
+    assert not context.session.commands and not context.api._bootstrap_active
+    if when == "before-preflight":
+        context.factory.assert_not_called()
+    else:
+        assert context.session.stops[-1] == PATH
+
+
+@pytest.mark.parametrize("fault", ["missing", "cannot-remove"])
+def test_initial_launch_reports_private_environment_failure(context, tmp_path, fault):
+    from test_bootstrap_contract import _find_bash
+    bash = _find_bash()
+    if not bash:
+        pytest.skip("Bash required for the offline launch command")
+    result = context.api.start_bootstrap("mainsail")
+    assert result["status"] == "started"
+    path = tmp_path / "context.env"
+    if fault == "cannot-remove":
+        path.write_text("# synthetic environment\n", encoding="utf-8")
+    command = context.session.commands[0].replace(PATH, shlex.quote(path.as_posix()))
+    # Any accidental launch fails before reaching a device or the real /boot.
+    command = command.replace("/boot/", "/nonexistent-kace-test-root/")
+    completed = subprocess.run([bash, "-c", "function rm() { return 1; }; " + command],
+                               cwd=tmp_path, capture_output=True, text=True, timeout=10)
+    events = [json.loads(line.removeprefix("=== KACE_BOOTSTRAP_EVENT: ").removesuffix(" ==="))
+              for line in completed.stdout.splitlines() if line.startswith("=== KACE_BOOTSTRAP_EVENT: ")]
+    assert [(event["workflow_id"], event["event"], event["code"]) for event in events] == [
+        (result["workflow_id"], "workflow_failed", "PREFLIGHT_CONTEXT_UNAVAILABLE")]

@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import uuid
 import re
+import shlex
 from backend.sha512_crypt import hash_password
 from backend.provisioning import ImageType, WifiSecurity, validate_provisioning, quote_headless_value
 from backend.resources import resolve_bootstrap_source as _resolve_bootstrap_resource
@@ -78,6 +79,73 @@ status=pending
 attempts=0
 exit_code=0
 """
+
+
+def _first_run_cmdline(path: str) -> tuple[str, str]:
+    """Read a single kernel command line and plan the Studio first-run trigger."""
+    try:
+        with open(path, encoding="utf-8") as source:
+            current = source.read().strip()
+    except FileNotFoundError as exc:
+        raise ValueError("First boot cannot be scheduled: cmdline.txt is missing.") from exc
+    if not current or len(current.splitlines()) != 1:
+        raise ValueError("First boot requires a single nonempty kernel command line.")
+    tokens = shlex.split(current)
+    if "--" in tokens:
+        raise ValueError("Cannot safely schedule first boot after a kernel command-line separator.")
+    required = (
+        "systemd.run=/boot/firmware/firstrun.sh",
+        "systemd.run_success_action=reboot",
+        "systemd.run_failure_action=reboot",
+        "systemd.unit=kernel-command-line.target",
+    )
+    missing = []
+    for argument in required:
+        key = argument.split("=", 1)[0]
+        existing = [token for token in tokens if token.partition("=")[0] == key]
+        if not existing:
+            missing.append(argument)
+        elif existing != [argument]:
+            raise ValueError(f"Conflicting {key} in cmdline.txt; the existing boot action was preserved.")
+    return current, " ".join([current, *missing])
+
+
+def _schedule_first_run(path: str) -> None:
+    current, planned = _first_run_cmdline(path)
+    if current != planned:
+        _write_text_atomically(path, planned + "\n")
+    actual, verified = _first_run_cmdline(path)
+    if actual != verified:
+        raise ValueError("First-run trigger verification failed.")
+
+
+def _first_run_disable_ssh_body() -> str:
+    return r'''
+# Socket activation can start a disabled service. Check both service names
+# and their sockets, resolving aliases to the canonical unit before disabling.
+for unit in ssh.socket sshd.socket ssh.service sshd.service; do
+    load=$(systemctl show --property=LoadState --value "$unit") || [ "$load" = not-found ] || exit 1
+    [ "$load" != not-found ] || continue
+    case "$load" in
+        loaded|masked) ;;
+        *) echo "Cannot determine SSH unit state for $unit" >&2; exit 1 ;;
+    esac
+    canonical=$(systemctl show --property=Id --value "$unit")
+    [ -n "$canonical" ] || exit 1
+    if [ "$load" = masked ]; then
+        systemctl stop "$canonical"
+    else
+        systemctl disable --now "$canonical"
+    fi
+    active=$(systemctl show --property=ActiveState --value "$canonical")
+    enabled=$(systemctl show --property=UnitFileState --value "$canonical")
+    [ "$active" = inactive ] || { echo "SSH unit remains active: $canonical" >&2; exit 1; }
+    case "$enabled" in
+        disabled|masked) ;;
+        *) echo "SSH unit remains enabled or unverified: $canonical" >&2; exit 1 ;;
+    esac
+done
+'''
 
 
 def _build_retryable_first_run(label: str, body: str) -> str:
@@ -1033,6 +1101,9 @@ def inject_config(disk_number: int, hostname: str, wifi_ssid: str, wifi_password
             return False
 
         # C. SSH Enablement
+        cmdline_path = os.path.join(boot_path, "cmdline.txt")
+        if is_prebaked or (wifi_ssid and os.path.isfile(cmdline_path)):
+            _first_run_cmdline(cmdline_path)
         ssh_marker_paths = (
             os.path.join(boot_path, "ssh"),
             os.path.join(boot_path, "ssh.txt"),
@@ -1489,11 +1560,11 @@ if [ "$SSH_ENABLED" = "true" ]; then
         echo "PasswordAuthentication no" > /etc/ssh/sshd_config.d/00-kace.conf
         sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
     fi
-    systemctl enable ssh >/dev/null 2>&1 || systemctl enable sshd >/dev/null 2>&1 || true
+    systemctl enable ssh || systemctl enable sshd
     systemctl restart ssh || systemctl restart sshd
+    systemctl is-active --quiet ssh || systemctl is-active --quiet sshd
 else
-    systemctl disable --now ssh >/dev/null 2>&1 || \
-        systemctl disable --now sshd >/dev/null 2>&1 || true
+{_first_run_disable_ssh_body()}
 fi
 
 {_first_run_network_import_body(bool(wifi_ssid))}
@@ -1513,34 +1584,7 @@ fi
                 print(f"[ERROR] Failed writing or verifying firstrun.sh: {e}", file=sys.stderr)
                 raise e
 
-            # Append systemd.run trigger to cmdline.txt
-            if os.path.exists(cmdline_path):
-                try:
-                    with open(cmdline_path, "r") as f:
-                        cmdline_content = f.read().strip()
-                    if "systemd.run=" not in cmdline_content:
-                        # Plain unquoted path — no /bin/sh -c dispatcher.
-                        # The dispatcher caused [^ ]* cleanup regex truncation
-                        # because the quoted string contained embedded spaces.
-                        # Pre-baked images are Bookworm-based; boot is always /boot/firmware.
-                        cmdline_content = (
-                            f"{cmdline_content}"
-                            f" systemd.run=/boot/firmware/firstrun.sh"
-                            f" systemd.run_success_action=reboot"
-                            f" systemd.run_failure_action=reboot"
-                            f" systemd.unit=kernel-command-line.target"
-                        )
-                        _write_text_atomically(cmdline_path, cmdline_content + "\n")
-                        
-                        # Verification check for cmdline.txt patch
-                        with open(cmdline_path, "r", encoding="utf-8") as f_check:
-                            c = f_check.read()
-                        if "systemd.run=" not in c:
-                            raise ValueError("cmdline.txt systemd.run verification failed.")
-                        _dbg(f"Successfully patched and verified cmdline.txt for prebaked firstrun.sh")
-                except Exception as e:
-                    print(f"[ERROR] Failed appending or verifying systemd.run in cmdline.txt: {e}", file=sys.stderr)
-                    raise e
+            _schedule_first_run(cmdline_path)
         else:
             # ── Vanilla RPi OS: write cloud-init artifacts ───────────────────
 
@@ -1685,29 +1729,8 @@ ssh_pwauth: {"true" if effective_password_auth else "false"}
                     print(f"[ERROR] Failed writing firstrun.sh: {e}", file=sys.stderr)
                     raise e
 
-                # Append systemd.run trigger to cmdline.txt so firstrun.sh
-                # executes on the very first boot.
-                # The boot partition is mounted at /boot/firmware/ on
-                # Bookworm/Trixie.
-                if os.path.exists(cmdline_path):
-                    try:
-                        with open(cmdline_path, "r") as f:
-                            cmdline_content = f.read().strip()
-                        if "systemd.run=" not in cmdline_content:
-                            # Plain unquoted path — no /bin/sh -c dispatcher.
-                            # Vanilla Bookworm/Trixie always mounts boot at /boot/firmware.
-                            cmdline_content = (
-                                f"{cmdline_content}"
-                                f" systemd.run=/boot/firmware/firstrun.sh"
-                                f" systemd.run_success_action=reboot"
-                                f" systemd.run_failure_action=reboot"
-                                f" systemd.unit=kernel-command-line.target"
-                            )
-                            _write_text_atomically(cmdline_path, cmdline_content + "\n")
-                            _dbg(f"Appended systemd.run trigger for firstrun.sh to cmdline.txt")
-                    except Exception as e:
-                        print(f"[ERROR] Failed appending systemd.run to cmdline.txt: {e}", file=sys.stderr)
-                        raise e
+                if os.path.isfile(cmdline_path):
+                    _schedule_first_run(cmdline_path)
 
         # M. Preserve the exact release-pinned bootstrap bytes.
         try:

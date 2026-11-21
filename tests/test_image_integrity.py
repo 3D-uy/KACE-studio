@@ -289,6 +289,7 @@ def test_custom_prebaked_family_reaches_injection_without_vanilla_inference(
     image.write_bytes(raw_image())
     provisioning = validate_provisioning(
         image_type=ImageType.CUSTOM_PREBAKED,
+        unverified_arch_confirmed=True,
         image_path=str(image),
         hostname="printer-one",
         wifi_ssid="",

@@ -122,10 +122,40 @@ def test_prebaked_ssh_disable_is_enforced_on_first_boot(tmp_path, monkeypatch):
 
     script = (tmp_path / "firstrun.sh").read_text(encoding="utf-8")
     assert "SSH_ENABLED='false'" in script
-    assert "systemctl disable --now ssh" in script
+    assert 'systemctl disable --now "$canonical"' in script
     assert "Refusing to merge existing target user" in script
     assert not (tmp_path / "ssh").exists()
     assert not (tmp_path / "ssh.txt").exists()
+
+
+@pytest.mark.parametrize("line", [None, "rootwait systemd.run=/opt/other.sh",
+                                  "rootwait systemd.run=/boot/firmware/firstrun.sh systemd.unit=rescue.target"])
+def test_invalid_first_boot_trigger_preserves_existing_media(tmp_path, monkeypatch, line):
+    cmdline = tmp_path / "cmdline.txt"
+    if line:
+        cmdline.write_text(line, encoding="utf-8")
+    script = tmp_path / "firstrun.sh"
+    script.write_bytes(b"existing script")
+    monkeypatch.setattr("backend.imager.get_boot_drive_letter", lambda *_a, **_kw: str(tmp_path))
+    with pytest.raises(ValueError, match="cmdline.txt"):
+        inject_config(99, "kace", "", "", "local-password", "mainsail",
+                      image_type=ImageType.MAINSAILOS_PREBAKED,
+                      drive_identity=dict(_TEST_DISK_IDENTITY, number=99))
+    assert script.read_bytes() == b"existing script"
+    assert (cmdline.read_text(encoding="utf-8") if cmdline.exists() else None) == line
+    assert not (tmp_path / "ssh").exists()
+
+
+def test_existing_own_trigger_is_completed_without_duplicate(tmp_path):
+    from backend.imager import _schedule_first_run
+    cmdline = tmp_path / "cmdline.txt"
+    cmdline.write_text("rootwait systemd.run=/boot/firmware/firstrun.sh", encoding="utf-8")
+    _schedule_first_run(str(cmdline))
+    scheduled = cmdline.read_bytes()
+    assert scheduled.count(b"systemd.run=") == 1
+    assert b"systemd.unit=kernel-command-line.target" in scheduled
+    _schedule_first_run(str(cmdline))
+    assert cmdline.read_bytes() == scheduled
 
 
 @pytest.mark.usefixtures("isolated_boot_refresh")

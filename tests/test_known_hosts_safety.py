@@ -73,6 +73,23 @@ def test_known_hosts_lock_serializes_threads(tmp_path, monkeypatch):
     assert maximum_active == 1
 
 
+@pytest.mark.parametrize("endpoint,expected", [
+    ("pi", ["alias", "[pi]:2200", "pi.other", "2001:db8::1"]),
+    ("pi:2200", ["pi,alias", "[pi]:22", "pi.other", "2001:db8::1"]),
+    ("[2001:db8::1]:22", ["pi,alias", "[pi]:2200", "[pi]:22", "pi.other"]),
+])
+def test_forget_preserves_other_ports_and_aliases(tmp_path, monkeypatch, endpoint, expected):
+    _set_home(monkeypatch, tmp_path)
+    path = Path(ssh_client._get_known_hosts_path())
+    hosts = ["pi,alias", "[pi]:2200", "[pi]:22", "pi.other", "2001:db8::1"]
+    key = ssh_client.paramiko.RSAKey.generate(1024)
+    path.write_text("".join(f"{host} {key.get_name()} {key.get_base64()}\n" for host in hosts))
+    assert ssh_client.clear_host_key(endpoint)
+    assert [line.split()[0] for line in path.read_text().splitlines()] == expected
+    trust = ssh_client.paramiko.HostKeys(str(path))
+    assert all(trust.check(host, key) for group in expected for host in group.split(","))
+
+
 def test_clear_host_key_publish_failure_preserves_previous_file(tmp_path, monkeypatch):
     _set_home(monkeypatch, tmp_path)
     known_hosts = Path(ssh_client._get_known_hosts_path())

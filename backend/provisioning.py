@@ -71,6 +71,7 @@ class ProvisioningData:
     power_active_low: bool
     restart_klipper_when_powered: bool
     verify_write: bool
+    unverified_arch_confirmed: bool = False
 
 
 _HOSTNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
@@ -145,6 +146,7 @@ def validate_provisioning(
     power_active_low: bool = False,
     restart_klipper_when_powered: bool = True,
     verify_write: bool = True,
+    unverified_arch_confirmed: bool = False,
     bootstrap_exists: bool = True,
     bootstrap_sha256: str = EXPECTED_BOOTSTRAP_SHA256,
     validate_media: bool = False,
@@ -222,6 +224,7 @@ def validate_provisioning(
         _invalid("os_arch", f"{normalized_pi_model} does not support the selected {normalized_arch} image.")
 
     boolean_fields = {
+        "unverified_arch_confirmed": unverified_arch_confirmed,
         "ssh_enabled": ssh_enabled,
         "crowsnest": crowsnest,
         "password_auth": password_auth,
@@ -293,4 +296,5 @@ def validate_provisioning(
         power_active_low=power_active_low,
         restart_klipper_when_powered=restart_klipper_when_powered,
         verify_write=verify_write,
+        unverified_arch_confirmed=unverified_arch_confirmed,
     )

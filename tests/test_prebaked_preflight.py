@@ -230,6 +230,33 @@ def test_custom_prebaked_requires_checksum_bound_attestation(tmp_path):
         api._preflight_prebaked_image(str(image), _provisioning(ImageType.CUSTOM_PREBAKED, str(image)))
 
 
+@pytest.mark.parametrize("digest_arch,ack,allowed", [
+    ("32bit", False, True), ("64bit", True, False), (None, False, False), (None, True, True),
+])
+def test_custom_architecture_on_32bit_only_pi(tmp_path, monkeypatch, digest_arch, ack, allowed):
+    from backend.prebaked_preflight import TRUSTED_RELEASES
+    from unittest.mock import Mock
+    from tests.test_drive_identity import snapshot
+    api = main.Api()
+    custom = tmp_path / "custom.img"
+    custom.write_bytes(_raw_image())
+    digests = TRUSTED_RELEASES[("mainsailos", "3.0.0")]["architectures"]
+    digest = digests[digest_arch]["image_sha256"] if digest_arch else "a" * 64
+    monkeypatch.setattr(api, "_resolve_custom_image", lambda path: ResolvedImage(path, digest, 4096))
+    writer = Mock(return_value=(False, "end of simulated write"))
+    monkeypatch.setattr(main, "flash_drive", writer)
+    monkeypatch.setattr(main, "inject_config", lambda *_a, **_kw: pytest.fail("unexpected injection"))
+    state = Mock()
+    monkeypatch.setattr(api, "set_device_state", state)
+    request = validate_provisioning(image_type=ImageType.CUSTOM_VANILLA, image_path=str(custom),
+        hostname="fixture", wifi_ssid="", wifi_password="", ssh_password="synthetic",
+        dashboard_ui="mainsail", pi_model="pizerow", os_arch="32bit", unverified_arch_confirmed=ack)
+    api._flash_worker(3, request, snapshot())
+    assert writer.called is allowed
+    if not allowed:
+        assert "architecture" in state.call_args.args[2]
+
+
 def test_custom_prebaked_accepts_matching_complete_attestation(tmp_path):
     api = main.Api()
     image = tmp_path / "custom.img"
@@ -254,6 +281,12 @@ def test_custom_prebaked_accepts_matching_complete_attestation(tmp_path):
 
     assert result.family == "mainsailos"
     assert set(result.services) >= REQUIRED_SERVICES
+
+    # A locally declared architecture cannot contradict the reviewed Pi selection.
+    contract["architecture"] = "32bit"
+    (tmp_path / "custom.img.kace-attestation.json").write_text(json.dumps(contract), encoding="utf-8")
+    with pytest.raises(ValueError, match="architecture declaration"):
+        api._preflight_prebaked_image(str(image), _provisioning(ImageType.CUSTOM_PREBAKED, str(image)))
 
 
 def test_custom_prebaked_rejects_attestation_for_different_image(tmp_path):

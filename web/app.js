@@ -1,7 +1,9 @@
 // KACE Desktop Web App logic
 
 let activeTab = 'imager-tab';
-let lastFlashedDriveId = null;
+let completedFlash = null;
+let pendingDriveApproval = null;
+let driveScanGeneration = 0;
 let ejectRequestGeneration = 0;
 const driveIdentitySnapshots = new Map();
 let term = null;
@@ -184,29 +186,39 @@ function switchTab(tabId, { focusContent = false } = {}) {
 }
 
 // Drive Management (Stage A)
+function driveOptionText(drive) {
+    const risk = drive.high_risk ? ` [${studioText('driveRisk')}]` : '';
+    return `${drive.name} (${drive.size}) [${studioText('driveNumber')} ${drive.id}]${risk}`;
+}
+
 function refreshDrives() {
     const driveSelect = document.getElementById('drive-select');
-    driveSelect.innerHTML = '<option value="">Scanning for removable drives...</option>';
+    const previous = driveSelect.value;
+    const generation = ++driveScanGeneration;
+    driveIdentitySnapshots.clear();
+    driveSelect.innerHTML = `<option value="" data-ui-text="driveScanning">${studioText('driveScanning')}</option>`;
 
     if (window.pywebview && window.pywebview.api) {
         window.pywebview.api.get_drives().then((drives) => {
+            if (generation !== driveScanGeneration) return;
             driveSelect.innerHTML = '';
             driveIdentitySnapshots.clear();
             if (drives.length === 0) {
-                driveSelect.innerHTML = '<option value="">No removable drives found.</option>';
+                driveSelect.innerHTML = `<option value="" data-ui-text="driveEmpty">${studioText('driveEmpty')}</option>`;
                 return;
             }
             drives.forEach(drive => {
                 driveIdentitySnapshots.set(String(drive.id), Object.freeze({ ...drive }));
                 const opt = document.createElement('option');
                 opt.value = drive.id;
-                const riskLabel = drive.high_risk ? ' [HIGH-RISK HDD/SSD]' : '';
-                opt.textContent = `${drive.name} (${drive.size}) [Drive ${drive.id}]${riskLabel}`;
+                opt.textContent = driveOptionText(drive);
                 driveSelect.appendChild(opt);
             });
+            if (driveIdentitySnapshots.has(previous)) driveSelect.value = previous;
         }).catch(err => {
+            if (generation !== driveScanGeneration) return;
             console.error("Failed to load drives: ", err);
-            driveSelect.innerHTML = '<option value="">Error querying drives.</option>';
+            driveSelect.innerHTML = `<option value="" data-ui-text="driveQueryFailed">${studioText('driveQueryFailed')}</option>`;
         });
     } else {
         // Mock drives in pure web debug mode
@@ -699,7 +711,18 @@ function initValidationListeners() {
     }
 }
 
+function customImageSelection() {
+    if (document.getElementById('image-source-select').value !== 'custom') return null;
+    return {
+        path: document.getElementById('custom-image-path').value.trim(),
+        family: document.getElementById('custom-image-type').value,
+        arch: document.getElementById('os-arch-select').value,
+        model: document.getElementById('pi-model-select').value,
+    };
+}
+
 function openFormatModal() {
+    pendingDriveApproval = null;
     clearInputErrors();
     let hasErrors = false;
 
@@ -714,7 +737,8 @@ function openFormatModal() {
 
     const driveSelect = document.getElementById('drive-select');
     const driveId = driveSelect.value;
-    if (!driveId) {
+    const selectedIdentity = driveIdentitySnapshots.get(String(driveId));
+    if (!driveId || (window.pywebview?.api && !selectedIdentity)) {
         showInputError('drive-select', studioText('driveRequired'));
         hasErrors = true;
     }
@@ -789,17 +813,25 @@ function openFormatModal() {
     modalDriveName.textContent = '';
     const prefix = document.createTextNode(studioText('targetDrivePrefix'));
     const strong = document.createElement('strong');
-    strong.textContent = selectedOption.textContent;
+    strong.textContent = selectedIdentity?.serial_number
+        ? `${selectedOption.textContent} · ${studioText('driveSerial')} ${selectedIdentity.serial_number}`
+        : selectedOption.textContent;
     modalDriveName.appendChild(prefix);
     modalDriveName.appendChild(strong);
 
-    const selectedIdentity = driveIdentitySnapshots.get(String(driveId));
+    const custom = customImageSelection();
+    pendingDriveApproval = {driveId, identity: selectedIdentity, custom};
+    const customArchPanel = document.getElementById('custom-arch-confirmation');
+    customArchPanel.hidden = imageSource !== 'custom';
+    document.getElementById('custom-arch-summary').textContent = custom
+        ? `${custom.path} · ${custom.model} · ${custom.arch}` : '';
+    document.getElementById('custom-arch-ack').checked = false;
     const highRiskPanel = document.getElementById('high-risk-drive-confirmation');
     const highRiskInput = document.getElementById('high-risk-confirm-input');
     const highRiskPhrase = document.getElementById('high-risk-confirm-phrase');
     const agreeButton = document.getElementById('modal-agree-btn');
     if (selectedIdentity && selectedIdentity.high_risk) {
-        const expectedPhrase = `ERASE DRIVE ${selectedIdentity.number}`;
+        const expectedPhrase = studioText('eraseDrivePhrase').replace('{number}', selectedIdentity.number);
         highRiskPanel.style.display = 'block';
         highRiskInput.value = '';
         highRiskInput.dataset.expectedPhrase = expectedPhrase;
@@ -817,6 +849,7 @@ function openFormatModal() {
 }
 
 function closeFormatModal() {
+    pendingDriveApproval = null;
     closeStudioModal('format-modal');
 }
 
@@ -847,17 +880,17 @@ function renderEjectState(state) {
 }
 
 function ejectFlashedDrive() {
-    if (lastFlashedDriveId === null) {
+    const receipt = completedFlash;
+    if (!receipt) {
         alert(studioText('ejectNoDrive'));
         return;
     }
     renderEjectState('pending');
     const generation = ++ejectRequestGeneration;
-    const driveId = lastFlashedDriveId;
-    const current = () => generation === ejectRequestGeneration && driveId === lastFlashedDriveId;
+    const current = () => generation === ejectRequestGeneration && completedFlash === receipt;
 
     if (window.pywebview && pywebview.api && pywebview.api.eject_drive) {
-        pywebview.api.eject_drive(parseInt(driveId))
+        pywebview.api.eject_drive(receipt.disk_identity.number, receipt.operation_id)
             .then(res => {
                 if (!current()) return;
                 if (res && res.success) {
@@ -880,13 +913,32 @@ function ejectFlashedDrive() {
 }
 
 function confirmAndFlash() {
+    const approval = pendingDriveApproval;
+    if (!approval || !document.getElementById('format-modal').open) return;
+    const current = driveIdentitySnapshots.get(String(approval.driveId));
+    if (document.getElementById('drive-select').value !== approval.driveId ||
+        (window.pywebview?.api && (!approval.identity || !current || Object.keys(approval.identity).some(
+            key => approval.identity[key] !== current[key])))) {
+        closeFormatModal();
+        showInputError('drive-select', studioText('driveApprovalExpired'));
+        updateInputErrorSummary();
+        return;
+    }
+    const custom = customImageSelection();
+    if (Boolean(custom) !== Boolean(approval.custom) ||
+        (custom && Object.keys(custom).some(key => custom[key] !== approval.custom[key]))) {
+        closeFormatModal();
+        showInputError('custom-image-path', studioText('customSelectionChanged'));
+        updateInputErrorSummary();
+        return;
+    }
     const highRiskInput = document.getElementById('high-risk-confirm-input');
     if (highRiskInput.dataset.expectedPhrase &&
         highRiskInput.value.trim() !== highRiskInput.dataset.expectedPhrase) {
         return;
     }
     closeFormatModal();
-    startFlashing();
+    startFlashing(approval);
 }
 
 function togglePowerRelaySettings() {
@@ -898,21 +950,20 @@ function togglePowerRelaySettings() {
     }
 }
 
-function startFlashing() {
-    const driveSelect = document.getElementById('drive-select');
-    const driveId = driveSelect.value;
-    const driveIdentity = driveIdentitySnapshots.get(String(driveId));
-    if (window.pywebview && window.pywebview.api && !driveIdentity) {
-        window.updateDeviceState("ERROR", 0, "Target drive identity expired. Refresh the drive list and select it again.");
-        return;
-    }
+function startFlashing(approval) {
+    const {driveId, identity: driveIdentity} = approval;
     const highRiskInput = document.getElementById('high-risk-confirm-input');
     const highRiskConfirmed = !driveIdentity?.high_risk || (
         highRiskInput.dataset.expectedPhrase &&
         highRiskInput.value.trim() === highRiskInput.dataset.expectedPhrase
     );
     ejectRequestGeneration++;
-    lastFlashedDriveId = driveId;
+    completedFlash = null;
+    const flashError = document.getElementById('flash-error');
+    if (flashError) {
+        flashError.hidden = true;
+        flashError.textContent = '';
+    }
 
     // Hardware, OS & Arch
     const piModel = document.getElementById('pi-model-select').value;
@@ -1015,7 +1066,8 @@ function startFlashing() {
             imageType,
             wifiSecurity,
             verifyWrite,
-            flashOperationId
+            flashOperationId,
+            imageSource === 'custom' && document.getElementById('custom-arch-ack').checked
         ).then(res => {
             if (window.activeFlashOperation?.operation_id !== flashOperationId) return;
             if (!res) {
@@ -1061,12 +1113,8 @@ let currentDeviceState = "UNKNOWN";
 function flashResultMatchesRequest(result) {
     const request = window.activeFlashOperation;
     if (!request || !result || result.operation_id !== request.operation_id) return false;
-    const selected = document.getElementById('drive-select');
-    if (String(selected?.value) !== String(request.disk_identity.number)) return false;
-    const currentDisk = driveIdentitySnapshots.get(String(selected.value));
     return ['number', 'serial_number', 'path', 'size_bytes', 'unique_id'].every(field =>
-        result.disk_identity?.[field] === request.disk_identity[field]
-        && currentDisk?.[field] === request.disk_identity[field]);
+        result.disk_identity?.[field] === request.disk_identity[field]);
 }
 
 function renderFlashReadback(result) {
@@ -1133,6 +1181,8 @@ window.updateDeviceState = function (state, progress, message, flashContext = nu
             }
             break;
         case 'FLASHED':
+            completedFlash = flashContext;
+            window.activeFlashOperation = null;
             renderFlashReadback(flashContext);
             startFirstBootDiscovery();
             flashBtn.disabled = false;
@@ -1191,6 +1241,14 @@ window.updateDeviceState = function (state, progress, message, flashContext = nu
             break;
         case 'ERROR':
             flashBtn.disabled = false;
+            const flashError = document.getElementById('flash-error');
+            if (flashError && (flashContext || activeTab === 'imager-tab' || activeTab === 'credentials-tab')) {
+                flashError.hidden = false;
+                flashError.textContent = `${message} ${studioText('flashErrorAction')}`;
+                if (activeTab === 'imager-tab' || activeTab === 'credentials-tab') {
+                    flashError.scrollIntoView?.({block:'nearest'});
+                }
+            }
 
             // Hide progress container and reset progress fill
             const statusContainerErr = document.getElementById('flash-status-container');
@@ -1279,7 +1337,7 @@ function updateProgress(percent, message, stage = 'FLASHING') {
         if (safePct > 0 && safePct < 100) {
             textContent.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${stage === 'VERIFYING_IMAGE' ? studioText('verifying') : studioText('writing')} ${safePct}%`;
         } else {
-            textContent.innerHTML = `<i class="fa-solid fa-fire"></i> Write`;
+            textContent.innerHTML = `<i class="fa-solid fa-fire"></i> ${studioText('write')}`;
         }
     }
     if (msg) {
@@ -1574,7 +1632,7 @@ function connectManually() {
     stopFirstBootDiscovery();
     const ip = document.getElementById('manual-ip').value.trim();
     if (!ip) {
-        alert("Please enter a valid IP address or hostname.");
+        alert(studioText('ipRequired'));
         return;
     }
     // Client-side format validation (mirrors backend LOW-02 FIX regex).
@@ -1582,7 +1640,7 @@ function connectManually() {
     // Rejects empty strings and inputs containing dangerous characters.
     const IP_HOST_RE = /^[\w.\-]{1,253}(:\d{1,5})?$/;
     if (!IP_HOST_RE.test(ip)) {
-        alert("Invalid IP address or hostname format. Only letters, digits, dots, hyphens, and an optional :PORT are allowed.");
+        alert(studioText('ipInvalid'));
         return;
     }
 
@@ -1590,7 +1648,7 @@ function connectManually() {
     const btn = document.getElementById('manual-connect-btn');
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Probing...';
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${studioText('ipProbing')}`;
     }
 
     const list = document.getElementById('discovered-device-list');
@@ -1604,7 +1662,7 @@ function connectManually() {
     const probeIcon = document.createElement('i');
     probeIcon.className = 'fa-solid fa-spinner fa-spin';
     probeDiv.appendChild(probeIcon);
-    probeDiv.appendChild(document.createTextNode(` Probing manual IP address ${ip}...`));
+    probeDiv.appendChild(document.createTextNode(' ' + studioText('ipProbeHost').replace('{host}', ip)));
     list.appendChild(probeDiv);
 
     if (window.pywebview && window.pywebview.api) {
@@ -1615,17 +1673,17 @@ function connectManually() {
             } else {
                 list.innerHTML = `
                     <div class="list-empty text-danger">
-                        <i class="fa-solid fa-triangle-exclamation"></i> Manual IP probe failed. Host unresponsive.
+                        <i class="fa-solid fa-triangle-exclamation"></i> ${studioText('ipUnresponsive')}
                     </div>
                 `;
-                alert("IP Probe failed. Target device is not listening on SSH (22) or Moonraker (7125) ports.");
+                alert(studioText('ipProbeFailed'));
             }
         }).catch(err => {
             if (btn) { btn.disabled = false; btn.textContent = studioText('connectTarget'); }
             list.innerHTML = '';
             const emptyDiv = document.createElement('div');
             emptyDiv.className = 'list-empty';
-            emptyDiv.textContent = "Manual probe error: " + err;
+            emptyDiv.textContent = studioText('ipProbeError') + ' ' + err;
             list.appendChild(emptyDiv);
         });
     } else {
@@ -2237,14 +2295,25 @@ function renderKaceWorkflow(view) {
     // Keep extra space only for actionable recovery, disconnection or completion.
     detail.hidden = !(isDone || view.connectionLost || view.recoveryObserving || isRecovery || isError);
     const downloadablePath = view.kind === 'firmware_deployment' && view.data &&
+        (view.origin !== 'manifest' || view.data.download_available === true) &&
         ['ARTIFACT_READY', 'AWAITING_FLASH', 'VERIFYING_MCU', 'ACTION_REQUIRED', 'MEDIA_PREPARED', 'AWAITING_USER_ACTION'].includes(view.state) &&
         typeof view.data.staged_path === 'string' ? view.data.staged_path : '';
     if (downloadButton) {
+        if (downloadButton.dataset.workflowId !== view.workflowId ||
+            downloadButton.dataset.sequence !== String(view.sequence) ||
+            downloadButton.dataset.generation !== String(view.generation)) {
+            downloadButton.dataset.busy = '';
+            const status = document.getElementById('kace-firmware-download-status');
+            if (status) status.hidden = true;
+        }
         downloadButton.style.display = downloadablePath ? 'inline-flex' : 'none';
         downloadButton.textContent = studioText('download', selectedStudioLanguage || (view.data && view.data.language));
         downloadButton.dataset.remotePath = downloadablePath;
+        downloadButton.dataset.workflowId = view.workflowId;
+        downloadButton.dataset.sequence = String(view.sequence);
         downloadButton.dataset.generation = Number.isInteger(view.generation) ? String(view.generation) : '';
-        downloadButton.disabled = !Number.isInteger(view.generation) || view.generation !== firmwareGeneration;
+        downloadButton.disabled = !downloadablePath || downloadButton.dataset.busy === '1' || !sshConnected ||
+            Boolean(view.connectionLost) || !Number.isInteger(view.generation) || view.generation !== firmwareGeneration;
     }
     if (configurationButton) {
         const available = view.kind === 'firmware_deployment' && view.data &&
@@ -2407,6 +2476,7 @@ function restoreKaceDeploymentManifest(manifest) {
             method: deployment.method,
             final_filename: deployment.final_filename,
             staged_path: deployment.staged_path,
+            download_available: manifest.download_available === true,
             instructions: deployment.instructions,
             automation: deployment.automation,
         },
@@ -2417,13 +2487,27 @@ window.downloadKaceFirmwareArtifact = function () {
     const button = document.getElementById('kace-firmware-download');
     const remotePath = button ? button.dataset.remotePath : '';
     const generation = button && button.dataset.generation ? Number(button.dataset.generation) : null;
-    if (!remotePath || !sshConnected || !Number.isInteger(generation) || generation !== firmwareGeneration || !window.pywebview || !window.pywebview.api) return false;
+    const workflow = button?.dataset.workflowId;
+    const sequence = Number(button?.dataset.sequence);
+    if (button?.disabled || !workflow || !Number.isInteger(sequence) || sequence < 1 || !remotePath ||
+        !sshConnected || !Number.isInteger(generation) || generation !== firmwareGeneration ||
+        !window.pywebview?.api?.download_kace_firmware) return false;
     button.disabled = true;
-    window.pywebview.api.download_file(remotePath, generation)
-        .catch(err => console.error('Firmware download failed:', err))
-        .finally(() => {
-            if (firmwareGeneration === generation && button.dataset.generation === String(generation)) button.disabled = false;
-        });
+    button.dataset.busy = '1';
+    function finished(success) {
+        if (!sshConnected || firmwareGeneration !== generation || button.dataset.generation !== String(generation) ||
+            button.dataset.workflowId !== workflow || button.dataset.sequence !== String(sequence) ||
+            button.dataset.remotePath !== remotePath) return;
+        button.dataset.busy = '';
+        button.disabled = false;
+        const status = document.getElementById('kace-firmware-download-status');
+        if (status) {
+            status.textContent = studioText(success ? 'fileDownloaded' : 'firmwareDownloadIncomplete');
+            status.hidden = false;
+        }
+    }
+    window.pywebview.api.download_kace_firmware(workflow, sequence, generation, remotePath)
+        .then(finished, () => finished(false));
     return true;
 };
 
@@ -2516,6 +2600,7 @@ function setBootstrapStage(stageId) {
 
 function completeBootstrapSuccess(message, context) {
     bootstrapActive = false;
+    refreshVisibleKaceWorkflow();
     BOOTSTRAP_STAGES.forEach(stage => {
         const el = document.getElementById('bstage-' + stage.id);
         if (el) { el.classList.remove('active'); el.classList.add('done'); }
@@ -2568,6 +2653,12 @@ function completeBootstrapTerminal(state, message) {
     }
 }
 
+function refreshVisibleKaceWorkflow() {
+    const id = document.getElementById('kace-workflow-tracker')?.dataset.workflowId;
+    const view = kaceWorkflowViews.get(id);
+    if (view) renderKaceWorkflow(view);
+}
+
 window.updateBootstrapEvent = function (event, context) {
     if (!currentSshContext(context)) return false;
     if (!event || event.protocol !== 'kace-bootstrap/v1') return false;
@@ -2589,12 +2680,14 @@ window.updateBootstrapEvent = function (event, context) {
             configurationOperation.operationId = event.operation_id;
         }
         bootstrapActive = true;
+        refreshVisibleKaceWorkflow();
         const bootstrapBtn = document.getElementById('bootstrap-btn');
         if (bootstrapBtn) bootstrapBtn.disabled = true;
         return true;
     }
     if (eventName === 'stage_started') {
         bootstrapActive = true;
+        refreshVisibleKaceWorkflow();
         setBootstrapStage(event.stage);
         return true;
     }
@@ -2602,6 +2695,7 @@ window.updateBootstrapEvent = function (event, context) {
         if (event.code === 'CONFIGURATION_COMPLETE') {
             if (!configurationOperation || event.operation_id !== configurationOperation.operationId) return false;
             bootstrapActive = false;
+            refreshVisibleKaceWorkflow();
             const label = document.getElementById('bootstrap-stage-label');
             if (label) { delete label.dataset.uiText; label.textContent = workflowText('configurationComplete', {}); }
             return true;
@@ -2657,6 +2751,7 @@ window.updateTerminalClosed = function (generation) {
     }
     if (!sshConnected || generation !== firmwareGeneration) return false;
     terminalShellOpen = false;
+    refreshVisibleKaceWorkflow();
     const subtitle = document.getElementById('connection-subtitle');
     if (subtitle) { subtitle.dataset.uiText = 'terminalClosed'; subtitle.textContent = studioText('terminalClosed'); }
     if (term) term.write(`\r\n${studioText('terminalClosed')}\r\n`);
@@ -4216,6 +4311,24 @@ const STUDIO_INSTALLATION_TEXT = {
         "hide": "Hide",
         "architecture": "Architecture",
         "refreshDrives": "Refresh drives",
+        "driveScanning": "Scanning for removable drives…",
+        "driveEmpty": "No removable drives found.",
+        "driveQueryFailed": "Could not query removable drives.",
+        "driveRisk": "HIGH-RISK HDD/SSD",
+        "driveNumber": "Drive",
+        "driveSerial": "Serial",
+        "customSelectionChanged": "The custom image or Pi selection changed. Review and confirm it again.",
+        "eraseDrivePhrase": "ERASE DRIVE {number}",
+        "driveApprovalExpired": "The selected drive changed. Review the destination and confirm again.",
+        "customArchAck": "If Studio cannot verify this image’s architecture, I confirm that I checked its compatibility with the selected Pi and architecture.",
+        "flashErrorAction": "Check the error and the destination before starting again.",
+        "ipRequired": "Enter an IP address or hostname.",
+        "ipInvalid": "Invalid address. Use letters, digits, dots or hyphens and an optional port.",
+        "ipProbing": "Checking…",
+        "ipProbeHost": "Checking {host}…",
+        "ipUnresponsive": "The host did not respond.",
+        "ipProbeFailed": "Could not reach SSH (22) or Moonraker (7125) on this host.",
+        "ipProbeError": "Connection check failed.",
         "theme": "Toggle Light/Dark Mode",
         "changeLanguage": "Change language: {language}",
         "directory": "Remote directory",
@@ -4263,6 +4376,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "searchDone": "First-boot search finished. Manual scan remains available.",
         "stop": "Stop search",
         "download": "Download firmware",
+        "firmwareDownloadIncomplete": "Firmware was not saved. Keep its original filename and retry from the current installation.",
         "configurationDownload": "Download configuration",
         "configurationDownloadHint": "ZIP with generated printer.cfg and, if selected, macros.cfg. Downloading does not install them.",
         "configurationDownloadSaving": "Choose where to save the configuration ZIP…",
@@ -4482,6 +4596,24 @@ const STUDIO_INSTALLATION_TEXT = {
         "hide": "Ocultar",
         "architecture": "Arquitectura",
         "refreshDrives": "Actualizar unidades",
+        "driveScanning": "Buscando unidades extraíbles…",
+        "driveEmpty": "No se encontraron unidades extraíbles.",
+        "driveQueryFailed": "No se pudieron consultar las unidades extraíbles.",
+        "driveRisk": "HDD/SSD DE ALTO RIESGO",
+        "driveNumber": "Unidad",
+        "driveSerial": "Número de serie",
+        "customSelectionChanged": "Cambió la imagen propia o la Pi seleccionada. Revisá y confirmá la selección de nuevo.",
+        "eraseDrivePhrase": "BORRAR UNIDAD {number}",
+        "driveApprovalExpired": "Cambió la unidad seleccionada. Revisá el destino y volvé a confirmar.",
+        "customArchAck": "Si Studio no puede verificar la arquitectura de esta imagen, confirmo que comprobé su compatibilidad con la Pi y la arquitectura seleccionadas.",
+        "flashErrorAction": "Revisá el error y el destino antes de volver a iniciar la grabación.",
+        "ipRequired": "Ingresá una dirección IP o un nombre de host.",
+        "ipInvalid": "Dirección inválida. Usá letras, números, puntos o guiones y un puerto opcional.",
+        "ipProbing": "Comprobando…",
+        "ipProbeHost": "Comprobando {host}…",
+        "ipUnresponsive": "El host no respondió.",
+        "ipProbeFailed": "No se pudo contactar a SSH (22) ni a Moonraker (7125) en este host.",
+        "ipProbeError": "Falló la comprobación de conexión.",
         "theme": "Cambiar tema claro/oscuro",
         "changeLanguage": "Cambiar idioma: {language}",
         "directory": "Directorio remoto",
@@ -4529,6 +4661,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "searchDone": "Terminó la búsqueda automática. Podés seguir buscando manualmente.",
         "stop": "Detener búsqueda",
         "download": "Descargar firmware",
+        "firmwareDownloadIncomplete": "El firmware no se guardó. Conservá el nombre original y reintentá desde la instalación actual.",
         "configurationDownload": "Descargar configuración",
         "configurationDownloadHint": "ZIP con printer.cfg generado y, si las elegiste, macros.cfg. Descargar no instala los archivos.",
         "configurationDownloadSaving": "Elegí dónde guardar el ZIP de configuración…",
@@ -4748,6 +4881,24 @@ const STUDIO_INSTALLATION_TEXT = {
         "hide": "Ocultar",
         "architecture": "Arquitetura",
         "refreshDrives": "Atualizar unidades",
+        "driveScanning": "Procurando unidades removíveis…",
+        "driveEmpty": "Nenhuma unidade removível encontrada.",
+        "driveQueryFailed": "Não foi possível consultar as unidades removíveis.",
+        "driveRisk": "HDD/SSD DE ALTO RISCO",
+        "driveNumber": "Unidade",
+        "driveSerial": "Número de série",
+        "customSelectionChanged": "A imagem personalizada ou o Pi selecionado mudou. Revise a seleção e confirme novamente.",
+        "eraseDrivePhrase": "APAGAR UNIDADE {number}",
+        "driveApprovalExpired": "A unidade selecionada mudou. Revise o destino e confirme novamente.",
+        "customArchAck": "Se o Studio não conseguir verificar a arquitetura desta imagem, confirmo que verifiquei a compatibilidade com o Pi e a arquitetura selecionados.",
+        "flashErrorAction": "Verifique o erro e o destino antes de iniciar a gravação novamente.",
+        "ipRequired": "Insira um endereço IP ou um nome de host.",
+        "ipInvalid": "Endereço inválido. Use letras, números, pontos ou hífens e uma porta opcional.",
+        "ipProbing": "Verificando…",
+        "ipProbeHost": "Verificando {host}…",
+        "ipUnresponsive": "O host não respondeu.",
+        "ipProbeFailed": "Não foi possível acessar SSH (22) ou Moonraker (7125) neste host.",
+        "ipProbeError": "Falha ao verificar a conexão.",
         "theme": "Alternar tema claro/escuro",
         "changeLanguage": "Alterar idioma: {language}",
         "directory": "Diretório remoto",
@@ -4795,6 +4946,7 @@ const STUDIO_INSTALLATION_TEXT = {
         "searchDone": "A busca automática terminou. A busca manual continua disponível.",
         "stop": "Parar busca",
         "download": "Baixar firmware",
+        "firmwareDownloadIncomplete": "O firmware não foi salvo. Mantenha o nome original e tente novamente a partir da instalação atual.",
         "configurationDownload": "Baixar configuração",
         "configurationDownloadHint": "ZIP com printer.cfg gerado e, se escolhidas, macros.cfg. Baixar não instala os arquivos.",
         "configurationDownloadSaving": "Escolha onde salvar o ZIP de configuração…",
@@ -4892,6 +5044,10 @@ function setStudioLanguage(language, persist = true) {
     try { localStorage.setItem('kace_language', language); } catch (_) { /* Optional cache. */ }
     if (typeof userPreferences !== 'undefined') userPreferences.language = language;
     applyStudioLanguage();
+    for (const option of document.getElementById('drive-select')?.options || []) {
+        const drive = driveIdentitySnapshots.get(String(option.value));
+        if (drive) option.textContent = driveOptionText(drive);
+    }
     ['scan-status-text', 'discovery-scan-title', 'discovery-scan-detail', 'printer-power-state'].forEach(id => {
         const element = document.getElementById(id);
         if (!element) return;

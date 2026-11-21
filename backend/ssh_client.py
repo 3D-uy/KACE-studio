@@ -299,16 +299,33 @@ def _get_known_hosts_path(*, deadline: float | None = None) -> str:
 
 
 def clear_host_key(ip: str):
-    """
-    Removes any stored keys for the target IP/hostname from the known_hosts file.
-    Supports parsing port-bracketed formats (e.g., [192.168.1.47]:22).
-    """
-    known_hosts_path = _get_known_hosts_path()
-    target_ip = ip
-    if ":" in ip:
-        parts = ip.split(":")
-        target_ip = parts[0]
+    """Forget only this endpoint, including its aliases for the default port."""
+    if not isinstance(ip, str) or not ip or re.search(r"[\s,*?!|]", ip):
+        return False
+    endpoint = re.fullmatch(r"\[([^\[\]]+)\](?::([0-9]+))?", ip)
+    if endpoint:
+        host, port = endpoint.groups()
+    elif "[" in ip or "]" in ip:
+        return False
+    elif ip.count(":") == 1:
+        host, port = ip.split(":")
+        if not host or not re.fullmatch(r"[0-9]{1,5}", port):
+            return False
+    else:
+        host, port = ip, None
+    if port and (len(port) > 5 or not 1 <= int(port) <= 65535):
+        return False
+    port = int(port or 22)
+    target_names = {f"[{host}]:{port}"}
+    if port == 22:
+        target_names.add(host)
 
+    def matches(alias):
+        if alias.startswith("|1|"):
+            return any(paramiko.HostKeys.hash_host(name, alias) == alias for name in target_names)
+        return alias in target_names
+
+    known_hosts_path = _get_known_hosts_path()
     try:
         with _known_hosts_lock(known_hosts_path):
             lines_to_keep = []
@@ -318,20 +335,16 @@ def clear_host_key(ip: str):
                     if not stripped or stripped.startswith("#"):
                         lines_to_keep.append(line)
                         continue
-                    parts = stripped.split()
-                    if parts:
-                        host_part = parts[0]
-                        hosts = [h.strip("[]") for h in host_part.split(",")]
-                        hosts_clean = []
-                        for host in hosts:
-                            if "]" in host:
-                                host = host.split("]")[0]
-                            if ":" in host:
-                                host = host.split(":")[0]
-                            hosts_clean.append(host)
-                        if target_ip in hosts_clean:
-                            continue
-                    lines_to_keep.append(line)
+                    record = re.match(r"^(\s*)([^\s]+)(\s+.*)$", line.rstrip("\r\n"))
+                    if not record or record[2].startswith("@"):
+                        lines_to_keep.append(line)
+                        continue
+                    aliases = record[2].split(",")
+                    remaining = [alias for alias in aliases if not matches(alias)]
+                    if remaining == aliases:
+                        lines_to_keep.append(line)
+                    elif remaining:
+                        lines_to_keep.append(line[:record.start(2)] + ",".join(remaining) + line[record.end(2):])
             _atomic_write_known_hosts(known_hosts_path, "".join(lines_to_keep))
         print(f"[SECURITY] Removed stored host keys for {ip} from {known_hosts_path}.")
         return True

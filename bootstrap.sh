@@ -150,7 +150,7 @@ FLUIDD_CONFIG_REF="807175d72e3a00cdc6b5e249444a4630e1e03a55"
 FLUIDD_CONFIG_URL="https://raw.githubusercontent.com/fluidd-core/fluidd-config/${FLUIDD_CONFIG_REF}/client.cfg"
 FLUIDD_CONFIG_SHA256="f5511c153c36ab21513c2f9d12d59a4e7f34fc403ea1d2c199d82d99925675c0"
 
-KACE_INSTALL_REF="c2da6d6bdade6ab31f88ab4ccd060cc8e59eae1a"
+KACE_INSTALL_REF="5e47eb2e5db57df80ce573de1e26e0d8bfe5b0ab"
 KACE_INSTALL_SHA256="8321a6c9706e459dbcd8e6e29b7f8a847e2cac2c9ffd5401f6ffe268281da452"
 KACE_INSTALL_URL="https://raw.githubusercontent.com/3D-uy/KACE/${KACE_INSTALL_REF}/install.sh"
 readonly KLIPPER_REPOSITORY KLIPPER_REF MOONRAKER_REPOSITORY MOONRAKER_REF
@@ -2628,24 +2628,28 @@ else
     fi
 fi
 
-if [ "$INSTALL_OK" -ne 1 ]; then
-    # The installer also returns the wizard outcome. A durable, valid checkpoint
-    # distinguishes an installed agent awaiting recovery from installation loss.
-    if [ -x "$PRINTER_HOME/kace/venv/bin/python" ] && (
-        # Diagnostic imports must cooperate with runtime publication too. Open
-        # read-only so a root bootstrap never creates a printer-user lock file.
-        exec 8<"$PRINTER_HOME/.kace-install.lock" || exit 1
+has_pending_checkpoint() {
+    # Drop privileges before opening any printer-owned paths, including the lock.
+    # Keep the shared lock until the diagnostic interpreter has exited.
+    run_as_printer bash -c '
+        [ "$EUID" -ne 0 ] || exit 1
+        home=$1
+        [ -x "$home/kace/venv/bin/python" ] || exit 1
+        exec 8<"$home/.kace-install.lock" || exit 1
         flock -s -n 8 || exit 1
-        if [ -e "$PRINTER_HOME/.kace-runtime-transaction.json" ] || \
-                [ -L "$PRINTER_HOME/.kace-runtime-transaction.json" ]; then
-            exit 1
-        fi
-        cd "$PRINTER_HOME/kace" && ./venv/bin/python -c '
+        [ ! -e "$home/.kace-runtime-transaction.json" ] &&
+            [ ! -L "$home/.kace-runtime-transaction.json" ] || exit 1
+        cd "$home/kace" && exec ./venv/bin/python -c "$2"
+    ' _ "$PRINTER_HOME" '
 from core.firmware_workflow import load_checkpoint
 c = load_checkpoint("firmware-workflow.json", verify_artifact=True)
 raise SystemExit(0 if c and c["state"] != "COMPLETE" else 1)
 ' >/dev/null 2>&1
-    ); then
+}
+
+if [ "$INSTALL_OK" -ne 1 ]; then
+    # The same principal owns the runtime and its non-mutating diagnostic.
+    if has_pending_checkpoint; then
         if [ "$STUDIO_PREFLIGHT_CONTEXT" = "1" ]; then
             log_warn "KACE is installed. Continue the pending installation with 'Resume installation' in KACE Studio."
         else

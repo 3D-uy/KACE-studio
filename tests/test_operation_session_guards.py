@@ -34,7 +34,10 @@ class Session:
         self.shell_command, self.shell_dimensions = command, kwargs
         self.on_data, self.on_close = on_data, on_close
 
-    def send_input(self, command):
+    def resume_terminal_available(self):
+        return self.connected
+
+    def send_resume_command(self, command):
         self.commands.append(command)
         return self.connected
 
@@ -108,12 +111,12 @@ def test_bootstrap_rejects_request_from_previous_frontend_session(api):
 
 
 def test_bootstrap_exception_releases_guard_for_retry(api, monkeypatch):
-    monkeypatch.setattr(api._ssh, "send_input", Mock(side_effect=OSError("synthetic send failure")))
+    monkeypatch.setattr(api._ssh, "send_resume_command", Mock(side_effect=OSError("synthetic send failure")))
     with pytest.raises(OSError, match="synthetic send failure"):
         api.start_bootstrap("mainsail", dict(api._power_context))
     assert api._bootstrap_active is False
     assert api._bootstrap_workflow_id is None
-    monkeypatch.setattr(api._ssh, "send_input", Mock(return_value=True))
+    monkeypatch.setattr(api._ssh, "send_resume_command", Mock(return_value=True))
     assert api.start_bootstrap("mainsail", dict(api._power_context))["status"] == "started"
 
 
@@ -148,6 +151,7 @@ def test_old_terminal_timer_and_close_discard_buffer_after_reconnect(api, monkey
 @pytest.fixture
 def media_api(api, monkeypatch, tmp_path):
     api._drive_snapshots[3] = snapshot()
+    api._completed_flash = {"operation_id": "a" * 32, "disk_identity": snapshot()}
     monkeypatch.setattr(main, "bootstrap_preflight_facts", lambda: ("fake", True, "a" * 64))
     monkeypatch.setattr(main, "application_cache_dir", lambda: str(tmp_path))
     monkeypatch.setattr(main, "validate_provisioning", lambda **_kwargs: SimpleNamespace())
@@ -164,7 +168,7 @@ def test_eject_cannot_start_during_flash(media_api, monkeypatch):
     media_api._flash_active = True
     helper = Mock(return_value={"success": True})
     monkeypatch.setattr(main, "request_safe_eject", helper)
-    assert media_api.eject_drive(3)["success"] is False
+    assert media_api.eject_drive(3, "a" * 32)["success"] is False
     helper.assert_not_called()
 
 
@@ -178,12 +182,12 @@ def test_flash_cannot_start_until_eject_finishes(media_api, monkeypatch):
         return {"success": True}
 
     monkeypatch.setattr(main, "request_safe_eject", eject)
-    worker = threading.Thread(target=lambda: outcomes.append(media_api.eject_drive(3)))
+    worker = threading.Thread(target=lambda: outcomes.append(media_api.eject_drive(3, "a" * 32)))
     worker.start()
     try:
         assert entered.wait(3)
         assert start_flash(media_api) is False
-        assert media_api.eject_drive(3)["success"] is False
+        assert media_api.eject_drive(3, "a" * 32)["success"] is False
         media_api._flash_worker.assert_not_called()
     finally:
         release.set()
@@ -196,5 +200,5 @@ def test_flash_cannot_start_until_eject_finishes(media_api, monkeypatch):
 def test_eject_helper_exception_releases_media_guard(media_api, monkeypatch):
     monkeypatch.setattr(main, "request_safe_eject", Mock(side_effect=OSError("synthetic eject failure")))
     with pytest.raises(OSError, match="synthetic eject failure"):
-        media_api.eject_drive(3)
+        media_api.eject_drive(3, "a" * 32)
     assert start_flash(media_api) is True

@@ -255,6 +255,33 @@ def configuration_download_available(checkpoint: Mapping[str, object]) -> bool:
     return checkpoint.get("state") in {"CONFIG_GENERATED", "READY_TO_DEPLOY", "DEPLOYING", "COMPLETE"}
 
 
+def manifest_download_artifact(manifest):
+    """Return final-byte evidence from a validated legacy delivery manifest."""
+    if manifest["state"] not in {"ARTIFACT_READY", "MEDIA_PREPARED", "ACTION_REQUIRED"}:
+        return None
+    deployment = manifest["deployment"]
+    digest = deployment.get("staged_sha256")
+    build = deployment.get("artifact")
+    if not _digest(digest) or not isinstance(build, dict):
+        return None
+    proof = deployment.get("transformation")
+    if proof is None:
+        if digest != build.get("sha256"):
+            return None
+        size = build.get("size_bytes")
+    else:
+        if (not isinstance(proof, dict) or proof.get("final_sha256") != digest
+                or proof.get("final_filename") != deployment["final_filename"]
+                or proof.get("final_path") != deployment["staged_path"]
+                or not _digest(build.get("sha256")) or proof.get("native_sha256") != build["sha256"]):
+            return None
+        size = proof.get("size_bytes")
+    if not _integer(size, 1):
+        return None
+    return {"path": deployment["staged_path"], "final_filename": deployment["final_filename"],
+            "sha256": digest, "size_bytes": size}
+
+
 def checkpoint_event(checkpoint: Mapping[str, object]) -> dict:
     artifact = checkpoint.get("artifact")
     data = {
@@ -273,6 +300,8 @@ def checkpoint_event(checkpoint: Mapping[str, object]) -> dict:
             "strategy": artifact.get("strategy", ""),
             "final_filename": artifact.get("final_filename", ""),
             "staged_path": artifact.get("path", ""),
+            "artifact_sha256": artifact.get("sha256", ""),
+            "artifact_size": artifact.get("size_bytes"),
             "instructions": artifact.get("instructions", []),
         })
     return {

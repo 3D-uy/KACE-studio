@@ -127,6 +127,7 @@
         <!-- Main Content Area -->
         <main class="content-area">
             <div id="input-error-summary" class="input-error-summary" role="alert" hidden></div>
+            <div id="flash-error" class="input-error-summary" role="alert" hidden></div>
             <!-- Stage A: Smart SD Card Imager -->
             <section id="imager-tab" class="tab-content active">
                 <div class="header">
@@ -618,6 +619,7 @@
                                 <span id="kace-workflow-status" class="kace-workflow-status">In progress</span>
                             </div>
                         </div>
+                        <div id="kace-firmware-download-status" class="kace-workflow-detail" role="status" hidden></div>
                         <div id="kace-configuration-download-status" class="kace-workflow-detail" role="status" hidden></div>
                         <div id="kace-resume-status" class="kace-workflow-detail" role="status" hidden></div>
                         <div id="kace-configuration-recovery" class="kace-workflow-detail" hidden>
@@ -669,6 +671,10 @@
             <div class="modal-body">
                 <p><strong><span data-ui-text="warning">Warning!</span></strong> <span data-ui-text="formatWarning">This operation will completely format the selected storage device:</span></p>
                 <div class="target-drive-summary" id="modal-drive-name">Drive Selection: None</div>
+                <div id="custom-arch-confirmation" hidden>
+                    <p id="custom-arch-summary" style="overflow-wrap:anywhere"></p>
+                    <label><input type="checkbox" id="custom-arch-ack"> <span data-ui-text="customArchAck">If Studio cannot verify this image's architecture, I confirm that I checked its compatibility with the selected Pi and architecture.</span></label>
+                </div>
                 <p><span data-ui-text="partitionsWarning">All existing partitions and data on this drive will be</span> <strong><span data-ui-text="destroyed">permanently destroyed</span></strong><span data-ui-text="cannotUndo">. This action cannot be undone.</span></p>
                 <div id="high-risk-drive-confirmation" style="display: none;">
                     <p><strong><span data-ui-text="highRisk">High-risk destination:</span></strong> <span data-ui-text="highRiskHint">this USB/1394 device appears to be an HDD or SSD.</span></p>

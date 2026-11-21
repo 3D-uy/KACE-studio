@@ -99,7 +99,7 @@ def test_frontend_selects_fluidd_profile_and_preserves_lite_dashboard_choices():
     if not node:
         pytest.skip('Node.js is required for frontend execution')
     app = (Path(main.__file__).parent / 'web/app.js').read_text(encoding='utf-8')
-    source = app[app.index('function startFlashing()'):app.index('function cancelFlashing()')]
+    source = app[app.index('function startFlashing(approval)'):app.index('function cancelFlashing()')]
     harness = r'''
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -114,7 +114,7 @@ const window = {updateDeviceState() {}, pywebview:{api:{start_flash(...args) {
 }}}};
 function updateProgress() {}
 function alert(message) {throw Error(message);}
-let lastFlashedDriveId;
+let completedFlash;
 let ejectRequestGeneration = 0;
 const driveIdentitySnapshots = new Map([['7', {number:7}]]);
 function set(id,value) {document.getElementById(id).value=value;}
@@ -127,7 +127,7 @@ for (const dashboard of ['mainsail','fluidd','both']) {
     for (const source of ['default','raspios_lite','custom']) {
         set('image-source-select',source);
         set('custom-image-path','custom.img'); set('custom-image-type','custom_vanilla');
-        startFlashing();
+        startFlashing({driveId:'7',identity:driveIdentitySnapshots.get('7')});
         const args = calls.at(-1);
         assert.equal(args[6],dashboard);
         assert.equal(args[9],'64bit');

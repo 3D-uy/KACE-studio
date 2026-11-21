@@ -11,6 +11,7 @@ import uuid
 import secrets
 import shlex
 import zipfile
+from pathlib import Path, PureWindowsPath
 import webview
 
 # Adjust path to allow absolute imports
@@ -30,7 +31,7 @@ from backend.provisioning import (
     ProvisioningValidationError,
     validate_provisioning,
 )
-from backend.ejector import request_safe_eject
+from backend.ejector import EJECT_IDENTITY_FIELDS, request_safe_eject
 from backend.discovery import scan_network, probe_manual_ip, DiscoveryError
 from backend.ssh_client import SSHSession, UnknownHostKey
 from backend.power_controller import MoonrakerPowerController, PowerControllerError
@@ -39,6 +40,7 @@ from backend.remote_power_config import RemotePowerConfigError, parse_remote_pow
 from backend.workflow_events import KaceWorkflowEventParser
 from backend.firmware_workflow import (
     checkpoint_event, parse_checkpoint, parse_deployment_manifest, configuration_download_available,
+    manifest_download_artifact,
 )
 from backend.bootstrap_events import BootstrapEventParser, MachineProtocolDisplayFilter
 from backend.resources import (
@@ -48,7 +50,7 @@ from backend.resources import (
 from backend.app_paths import application_cache_dir
 from backend.klipper_preflight import DockerPreflight
 from backend.image_manifest import ImageManifest, ResolvedImage
-from backend.prebaked_preflight import load_custom_attestation
+from backend.prebaked_preflight import load_custom_attestation, validate_custom_architecture, sha256_file
 import mimetypes
 
 HTTP_TIMEOUT_SECONDS = 30
@@ -181,7 +183,8 @@ class KaceWsgiApp:
                 return [b'Not Found']
 
 class Api:
-    def __init__(self):
+    def __init__(self, *, smoke_mode=False):
+        self._smoke_mode = smoke_mode
         self._ssh = SSHSession()
         self._power_controller = None
         self._power_target = None
@@ -210,6 +213,8 @@ class Api:
         self._flash_active = False
         self._eject_active = False
         self._flash_operation_id = None
+        self._flash_progress_context = None
+        self._completed_flash = None
         self._drive_snapshots = {}
         # INFO-02 FIX: Timestamp for scan rate-limiting (one scan per 10 seconds max).
         self._last_scan_time = 0.0
@@ -334,6 +339,8 @@ class Api:
         """
         if self._window:
             try:
+                if flash_context is None and state in ("FLASHING", "VERIFYING_IMAGE"):
+                    flash_context = self._flash_progress_context
                 escaped_msg = json.dumps(message)
                 # INFO-01 FIX: JSON-encode state to prevent JS injection if state
                 # ever contains a single-quote character (e.g. from an unexpected code path).
@@ -348,7 +355,7 @@ class Api:
         """
         Invoked by JS to get a list of safe storage drives.
         """
-        drives = list_drives()
+        drives = [] if self._smoke_mode else list_drives()
         self._drive_snapshots = {int(drive["number"]): dict(drive) for drive in drives}
         return drives
 
@@ -376,25 +383,29 @@ class Api:
         self._flash_cancel_event.set()
         return True
 
-    def eject_drive(self, disk_number: int) -> dict:
-        """Safely removes a previously selected disk after revalidating its identity."""
-        if isinstance(disk_number, bool):
-            return {"success": False, "error": "Invalid disk number."}
-        try:
-            disk_number = int(disk_number)
-            expected_identity = _normalize_disk_identity(self._drive_snapshots[disk_number])
-        except (KeyError, TypeError, ValueError):
-            return {
-                "success": False,
-                "error": "Target disk identity is unavailable. Refresh the drive list and try again.",
-            }
+    def eject_drive(self, disk_number: int, operation_id=None) -> dict:
+        """Eject only the disk named by the last provisioned operation's receipt."""
         with self._flash_lock:
             if self._flash_active or self._eject_active:
                 return {"success": False, "error": "A flash or eject operation is already running."}
+            receipt = self._completed_flash
+            if (type(disk_number) is not int or not receipt or operation_id != receipt["operation_id"]
+                    or disk_number != receipt["disk_identity"]["number"]):
+                return {"success": False, "error": "Completed flash identity is unavailable."}
+            expected_identity = receipt["disk_identity"]
+            try:
+                current = _normalize_disk_identity(self._drive_snapshots[disk_number])
+            except (KeyError, TypeError, ValueError):
+                return {"success": False, "error": "Refresh the drive list before ejecting."}
+            if any(current[key] != expected_identity[key] for key in EJECT_IDENTITY_FIELDS):
+                return {"success": False, "error": "The flashed disk identity has changed."}
             self._eject_active = True
         try:
             result = request_safe_eject(disk_number, expected_identity)
-            if result.get("success") is not True:
+            if result.get("success") is True:
+                with self._flash_lock:
+                    self._completed_flash = None
+            else:
                 result["error"] = self._sanitize_error(
                     result.get("error") or "Windows could not safely remove the disk."
                 )
@@ -403,7 +414,7 @@ class Api:
             with self._flash_lock:
                 self._eject_active = False
 
-    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, image_type: str = ImageType.RASPIOS_VANILLA.value, wifi_security: str = "wpa2", verify_write: bool = True, operation_id=None):
+    def start_flash(self, drive_id: int, image_path: str, hostname: str, wifi_ssid: str, wifi_password: str, ssh_password: str, dashboard_ui: str, timezone: str = "", pi_model: str = "", os_arch: str = "", ssh_enabled: bool = True, crowsnest: bool = False, username: str = "kace", password_auth: bool = True, drive_identity: dict = None, high_risk_confirmed: bool = False, power_relay: bool = False, power_device: str = "", power_gpio: int | None = None, power_active_low: bool = False, restart_klipper_when_powered: bool = True, image_type: str = ImageType.RASPIOS_VANILLA.value, wifi_security: str = "wpa2", verify_write: bool = True, operation_id=None, unverified_arch_confirmed: bool = False):
         """
         Triggers the block-flashing and boot config injection process in a background thread.
         """
@@ -460,6 +471,7 @@ class Api:
                 power_active_low=power_active_low,
                 restart_klipper_when_powered=restart_klipper_when_powered,
                 verify_write=verify_write,
+                unverified_arch_confirmed=unverified_arch_confirmed,
                 bootstrap_exists=bootstrap_exists,
                 bootstrap_sha256=bootstrap_sha256,
                 validate_media=True,
@@ -469,7 +481,8 @@ class Api:
                 cache_free_bytes=cache_free_bytes,
             )
         except (OSError, ProvisioningValidationError, ValueError, ResourceContractError) as exc:
-            self.set_device_state("ERROR", 0, f"Provisioning preflight failed: {self._sanitize_error(exc)}")
+            context = {"operation_id": operation_id, "disk_identity": drive_identity}
+            self.set_device_state("ERROR", 0, f"Provisioning preflight failed: {self._sanitize_error(exc)}", context)
             if isinstance(exc, ProvisioningValidationError) and self._window:
                 try:
                     self._window.evaluate_js(
@@ -487,6 +500,7 @@ class Api:
                 self.set_device_state("ERROR", 0, "A flash or eject operation is already running.")
                 return False
             self._flash_active = True
+            self._completed_flash = None
             self._flash_operation_id = operation_id or uuid.uuid4().hex
             operation_id = self._flash_operation_id
             self._flash_cancel_event.clear()
@@ -756,7 +770,7 @@ class Api:
             "VERIFYING_IMAGE", 0, "Validating pre-baked image services and capabilities..."
         )
         if provisioning.image_type is ImageType.CUSTOM_PREBAKED:
-            return load_custom_attestation(image_path)
+            return load_custom_attestation(image_path, provisioning.os_arch)
         if provisioning.image_type not in {
             ImageType.MAINSAILOS_PREBAKED,
             ImageType.FLUIDD_PREBAKED,
@@ -994,6 +1008,7 @@ class Api:
 
         try:
             current_operation()
+            self._flash_progress_context = context
             self.set_device_state("FLASHING", 0, "Initializing physical block-writing...", context)
 
             # Stage 1: Resolve image path (download/cache/verify)
@@ -1017,10 +1032,13 @@ class Api:
             if provisioning.image_type.is_prebaked:
                 self._preflight_prebaked_image(image_path, provisioning)
                 self._check_cancelled()
+            if provisioning.image_type.is_custom:
+                validate_custom_architecture(resolved_image.sha256, provisioning.os_arch,
+                                             provisioning.unverified_arch_confirmed)
 
             # Stage 2: Flash image to drive
             current_operation()
-            self.set_device_state("FLASHING", 0, "Writing blocks to SD card...")
+            self.set_device_state("FLASHING", 0, "Writing blocks to SD card...", context)
 
             def progress_callback(status, percent, message):
                 if operation_id == self._flash_operation_id:
@@ -1049,7 +1067,7 @@ class Api:
             current_operation()
 
             # Stage 3: Inject boot configuration files
-            self.set_device_state("FLASHING", 95, "Injecting system configuration files...")
+            self.set_device_state("FLASHING", 95, "Injecting system configuration files...", context)
             inject_success = inject_config(
                 drive_id,
                 provisioning.hostname,
@@ -1076,6 +1094,9 @@ class Api:
 
             current_operation()
             if inject_success:
+                with self._flash_lock:
+                    current_operation()
+                    self._completed_flash = readback
                 self.set_device_state("FLASHED", 100, "SD Card successfully flashed and provisioned!", readback)
             else:
                 self.set_device_state("ERROR", 95, "Error injecting boot configurations to FAT32 partition.", context)
@@ -1091,6 +1112,7 @@ class Api:
         finally:
             with self._flash_lock:
                 if operation_id == self._flash_operation_id:
+                    self._flash_progress_context = None
                     self._flash_active = False
 
     def scan_network(self):
@@ -1596,6 +1618,9 @@ class Api:
                 if self._bootstrap_active:
                     return {"status": "busy", "message": "A bootstrap workflow is already active.",
                             "workflow_id": self._bootstrap_workflow_id}
+                if not session.resume_terminal_available():
+                    return {"status": "failed", "code": "RESUME_RECONNECT_REQUIRED",
+                            "message": "Reconnect SSH before launching KACE. The terminal is closed or has received input."}
                 preflight_generation = session.stop_preflight()
                 self._bootstrap_active = True
                 self._bootstrap_workflow_id = workflow_id
@@ -1645,6 +1670,9 @@ class Api:
         mismatch_marker = "=== KACE_BOOTSTRAP_EVENT: " + json.dumps(
             {**missing_event, "code": "BOOTSTRAP_CONTRACT_MISMATCH"}, separators=(',', ':'),
         ) + " ==="
+        env_marker = "=== KACE_BOOTSTRAP_EVENT: " + json.dumps(
+            {**missing_event, "code": "PREFLIGHT_CONTEXT_UNAVAILABLE"}, separators=(',', ':'),
+        ) + " ==="
 
         def verified_launch(path):
             return (
@@ -1654,12 +1682,12 @@ class Api:
             )
 
         command = (
-            f"KACE_STUDIO_LAUNCH=1; ( set +x; . {shlex.quote(env_path)} && rm -f -- {shlex.quote(env_path)} && "
-            "{ if [ -f /boot/firmware/bootstrap.sh ]; then "
+            f"KACE_STUDIO_LAUNCH=1; ( set +x; if . {shlex.quote(env_path)} && rm -f -- {shlex.quote(env_path)}; then "
+            "if [ -f /boot/firmware/bootstrap.sh ]; then "
             + verified_launch("/boot/firmware/bootstrap.sh")
             + "elif [ -f /boot/bootstrap.sh ]; then "
             + verified_launch("/boot/bootstrap.sh")
-            + f"else printf '%s\\n' '{missing_marker}'; fi; }} )\n"
+            + f"else printf '%s\\n' '{missing_marker}'; fi; else printf '%s\\n' '{env_marker}'; fi; )\n"
         )
 
         if recovery:
@@ -1699,17 +1727,15 @@ class Api:
                 return {"status": "failed", "message": "Bootstrap preparation was interrupted."}
             self.set_device_state("BOOTSTRAPPING", 0, "Preparing a new KACE configuration." if recovery and recovery.get("configuration_id") else "Resuming KACE installation." if recovery else "Starting KACE bootstrap.")
             try:
-                sent = session.send_resume_command(command) if recovery else session.send_input(command)
+                sent = session.send_resume_command(command)
             except Exception:
                 release_start()
                 raise
             if not sent:
                 release_start()
                 self.set_device_state("SSH_READY", 100, "Bootstrap could not be sent to SSH.")
-                if recovery:
-                    return {"status": "failed", "code": "RESUME_RECONNECT_REQUIRED",
-                            "message": "Reconnect SSH before resuming; the terminal changed or received input."}
-                return {"status": "failed", "message": "SSH terminal is not ready."}
+                return {"status": "failed", "code": "RESUME_RECONNECT_REQUIRED",
+                        "message": "Reconnect SSH before launching KACE. The terminal changed or received input."}
         return {"status": "started", "workflow_id": workflow_id,
                 **({"operation_id": recovery["configuration_id"]} if recovery and recovery.get("configuration_id") else {})}
 
@@ -1820,6 +1846,65 @@ class Api:
                 return True
 
         return session.download_file(remote_path, chosen_path, publish=publish)
+
+    def _firmware_download_artifact(self, session, workflow_id, sequence):
+        status, raw = session.read_text_file_result("kace/firmware-workflow.json")
+        if status == "absent":
+            manifest = parse_deployment_manifest(session.read_text_file("kace/deployment-manifest.json"))
+            if manifest and manifest["workflow_id"] == workflow_id and manifest["sequence"] == sequence:
+                return manifest_download_artifact(manifest)
+            return None
+        checkpoint = parse_checkpoint(raw) if status == "ok" else None
+        if (checkpoint and checkpoint["workflow_id"] == workflow_id and checkpoint["sequence"] == sequence
+                and checkpoint["state"] in {"ARTIFACT_READY", "AWAITING_FLASH", "VERIFYING_MCU"}):
+            return checkpoint["artifact"]
+        return None
+
+    def download_kace_firmware(self, workflow_id, sequence, generation, expected_path):
+        """Publish only the final bytes selected by the current KACE workflow."""
+        if not self._window or not isinstance(workflow_id, str) or type(sequence) is not int:
+            return False
+        with self._ssh_lock:
+            session = self._ssh
+            if type(generation) is not int or generation != self._ssh_gen or not session.is_connected():
+                return False
+
+        def current_session():
+            return generation == self._ssh_gen and session is self._ssh and session.is_connected()
+
+        try:
+            artifact = self._firmware_download_artifact(session, workflow_id, sequence)
+            if not artifact or artifact["path"] != expected_path:
+                return False
+            filename = artifact["final_filename"]
+            if (filename != PureWindowsPath(filename).name or filename in {".", ".."}
+                    or re.search(r'[<>:"/\\|?*\x00-\x1f]', filename)
+                    or filename.rstrip(". ") != filename or PureWindowsPath(filename).is_reserved()):
+                return False
+            chosen = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=filename)
+            if isinstance(chosen, (list, tuple)):
+                chosen = chosen[0] if chosen else None
+            if not chosen or os.path.basename(chosen) != filename:
+                return False
+            with self._ssh_lock:
+                if not current_session():
+                    return False
+
+            def publish(temporary, destination):
+                staged = Path(temporary)
+                if (staged.stat().st_size != artifact["size_bytes"]
+                        or sha256_file(staged) != artifact["sha256"].lower()
+                        or self._firmware_download_artifact(session, workflow_id, sequence) != artifact):
+                    return False
+                with self._ssh_lock:
+                    if not current_session():
+                        return False
+                    os.replace(temporary, destination)
+                    return True
+
+            return session.download_file(artifact["path"], chosen, publish=publish)
+        except (OSError, ValueError, TypeError):
+            return False
 
     def _configuration_download_snapshot(self, session, workflow_id, sequence):
         checkpoint = parse_checkpoint(session.read_text_file("kace/firmware-workflow.json"))
@@ -1979,7 +2064,8 @@ class Api:
         manifest = parse_deployment_manifest(raw)
         if manifest is None:
             return None
-        return {**manifest, "generation": generation}
+        return {**manifest, "generation": generation,
+                "download_available": manifest_download_artifact(manifest) is not None}
 
     def get_firmware_workflow_checkpoint(self):
         """Return a validated read-only projection of KACE's resume checkpoint."""
@@ -2226,6 +2312,8 @@ class Api:
         """
         Reads user preferences from a local file, falling back to defaults.
         """
+        if self._smoke_mode:
+            return {"theme": "dark", "kace_auto_scan": False, "form_state": {}}
         defaults = {
             "theme": "dark",
             "kace_auto_scan": True,
@@ -2305,7 +2393,7 @@ class Api:
             return False
 
 def _create_application_window(*, smoke_mode: bool = False):
-    api = Api()
+    api = Api(smoke_mode=smoke_mode)
     web_dir = bundled_path("web")
     html_path = web_dir / "index.html"
     

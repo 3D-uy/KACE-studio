@@ -155,15 +155,17 @@ def configuration_command(env_path, runtime_commit, checkpoint_sha, workflow_id,
     result_path = f'configuration-operations/{operation_id}/result.json'
     operation_gate = (f"printf '%s  %s\\n' '{result_sha}' '{result_path}' | sha256sum --status --check"
                       if result_sha else f'[ ! -e configuration-operations/{operation_id} ]')
-    capability = 'from core.configuration_operation import SCHEMA; assert SCHEMA=="kace-configuration-operation/v1"'
+    capability = ('from core.configuration_operation import SCHEMA; '
+                  'raise SystemExit(SCHEMA != "kace-configuration-operation/v1")')
     complete = (
         'import hashlib,json,pathlib; '
         f'r=json.loads(pathlib.Path({result_path!r}).read_text()); '
-        f'assert r["schema"]=="kace-configuration-operation/v1" and r["operation_id"]=={operation_id!r}; '
-        f'assert r["source_checkpoint_sha256"]=={checkpoint_sha!r}; '
-        'assert r["state"]=="COMPLETE" and type(r["exit_code"]) is int and r["exit_code"]==0; '
-        'assert type(r["sequence"]) is int and r["sequence"]>0; '
-        f'assert hashlib.sha256(pathlib.Path("firmware-workflow.json").read_bytes()).hexdigest()=={checkpoint_sha!r}'
+        'valid = (r["schema"]=="kace-configuration-operation/v1" '
+        f'and r["operation_id"]=={operation_id!r} and r["source_checkpoint_sha256"]=={checkpoint_sha!r} '
+        'and r["state"]=="COMPLETE" and type(r["exit_code"]) is int and r["exit_code"]==0 '
+        'and type(r["sequence"]) is int and r["sequence"]>0 '
+        f'and hashlib.sha256(pathlib.Path("firmware-workflow.json").read_bytes()).hexdigest()=={checkpoint_sha!r}); '
+        'raise SystemExit(not valid)'
     )
     return (
         'KACE_STUDIO_LAUNCH=1; ( set +x; '

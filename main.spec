@@ -1,8 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import json
+from importlib.metadata import distribution
 from pathlib import Path
 import sys
+from packaging.requirements import Requirement
 
 sys.path.insert(0, SPECPATH)
 from backend.resources import require_release_ready
@@ -61,17 +63,44 @@ version_info = VSVersionInfo(
 )
 
 
+# Include the notices shipped by the locked runtime wheels and by the bootloader.
+notice_data = []
+pending = ["pyinstaller"]
+for line in (Path(SPECPATH) / "requirements.txt").read_text(encoding="utf-8").splitlines():
+    if line.strip() and not line.lstrip().startswith("#"):
+        pending.append(Requirement(line).name)
+seen = set()
+while pending:
+    dep = distribution(pending.pop())
+    name = dep.metadata["Name"].lower()
+    if name in seen:
+        continue
+    seen.add(name)
+    for relative in sorted(dep.files or []):
+        if not relative.name.lower().startswith(("license", "copying", "notice")):
+            continue
+        if relative.parts[0].endswith(".dist-info") or name == "pyinstaller":
+            notice_data.append((str(dep.locate_file(relative)), f"notices/wheels/{name}/{relative.parent}"))
+    if name != "pyinstaller":
+        for entry in dep.requires or []:
+            req = Requirement(entry)
+            if req.marker is None or req.marker.evaluate():
+                pending.append(req.name)
+
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
     datas=[
         ('web', 'web'),
+        ('LICENSE', '.'),
+        ('notices', 'notices'),
+        (str(Path(sys.base_prefix) / 'LICENSE.txt'), 'notices/python'),
         ('bootstrap.sh', '.'),
         ('image-manifest.json', '.'),
         ('release-contract.json', '.'),
         ('preflight', 'preflight'),
-    ],  # Includes vendor/fonts, vendor/xterm, vendor/fontawesome
+    ] + notice_data,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

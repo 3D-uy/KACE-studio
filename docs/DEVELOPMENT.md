@@ -35,6 +35,14 @@ inferring verification from preferences. Worker errors and rejected-start
 callbacks carry that operation's context; an independent SSH error cannot
 invalidate its completion. Eject replies
 are discarded after a newer request or flash starts, including on the same disk.
+The confirmation dialog captures the reviewed device before asynchronous drive
+refreshes. The eject request names the completed operation, and the backend
+rechecks its receipt against both the latest inventory and the native disk.
+Run `python -m pytest tests/test_media_approval.py tests/test_eject_drive.py -q`
+for synthetic disk coverage. To exercise the same frontend regression against a
+specific local EXE, set `KACE_STUDIO_MEDIA_TEST_EXE` to its full path.
+Set `KACE_STUDIO_CHROMIUM` to a headless Chromium executable with
+`--dump-dom` support to repeat the scenario with native HTML controls.
 Flash and eject share the existing media-operation lock. Eject remains reserved
 until the native helper returns, even if its modal is closed; another flash or
 eject is rejected while either operation is active. Exceptions release the guard.
@@ -623,6 +631,22 @@ real disk writing, native WebView2, first boot or physical qualification.
 
 
 ### Runtime updates and official resume actions
+
+The initial bootstrap uses the same unused-shell guard as a resume. The guard
+rechecks the PTY under the keyboard input lock after PC validation preparation.
+A failed private environment setup emits a terminal bootstrap failure. The
+configuration launcher validates the terminal receipt and the original
+checkpoint with explicit Python checks, including under optimized Python.
+
+The firmware download button requests a specific workflow, sequence, SSH
+generation and staged path. Python reads the validated checkpoint and checks
+the staged download's size and SHA-256 before saving it under the required
+board filename. It rechecks remote evidence and the local SSH generation before
+publishing. With an absent checkpoint, a legacy manifest can authorize only a
+delivery whose final bytes are identified. Incomplete manifests remain visible
+as historical progress. The generic SFTP download remains separate. Regression
+coverage uses synthetic bytes and the real temporary-file publication path in
+`tests/test_verified_firmware_download.py`.
 
 Both official runtime launch commands acquire the installer's shared
 `$HOME/.kace-install.lock` before reading commit/checkpoint identity or importing

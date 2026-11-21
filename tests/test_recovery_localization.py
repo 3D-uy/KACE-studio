@@ -48,8 +48,8 @@ vm.runInContext(`
  const before=messages.length;restoreSshAfterReconnect(result,3,null);assert.equal(messages.length,before);
  messages.length=0;restoreSshAfterReconnect(result,4,{generation:6,event:{state:'COMPLETE'},checkpoint:{state:'COMPLETE'}});
  assert.ok(messages.join('').includes(studioText('recoveryUnavailable')));
- lastFlashedDriveId=null;ejectFlashedDrive();assert.equal(alerts.pop(),studioText('ejectNoDrive'));
- lastFlashedDriveId=99;
+ completedFlash=null;ejectFlashedDrive();assert.equal(alerts.pop(),studioText('ejectNoDrive'));
+ completedFlash={operation_id:'a'.repeat(32),disk_identity:{number:99}};
  window.pywebview={api:{eject_drive:()=>new Promise((resolve,reject)=>requests.push({resolve,reject}))}};
  const button=nodes.get('eject-btn');
  ejectFlashedDrive();assert.equal(button.disabled,true);

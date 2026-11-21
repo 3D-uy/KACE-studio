@@ -142,7 +142,10 @@ class FakeSsh:
         self.send_ok = send_ok
         self.commands = []
 
-    def send_input(self, command):
+    def resume_terminal_available(self):
+        return True
+
+    def send_resume_command(self, command):
         self.commands.append(command)
         return self.send_ok
 
