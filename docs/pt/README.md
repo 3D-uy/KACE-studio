@@ -152,3 +152,7 @@ Novas execuções do bootstrap configuram um diário persistente do Linux com or
 Em uma perda recuperável de SSH, também após o bootstrap, o Studio mostra a desconexão, desativa os controles da sessão e mantém o último progresso visível. A sessão de terminal ociosa consulta o servidor a cada dez segundos, com limite de cinco segundos por tentativa; uma resposta temporariamente lenta mantém o transporte SSH ativo por até 45 segundos sem resposta. Se o host permanecer silencioso, o Studio desconecta dentro desse limite. Ao reconectar, consulta o checkpoint remoto; a reconexão não comprova a conclusão. Use o novo executável e seu bootstrap correspondente para E2E; abrir o Studio não atualiza uma instalação anterior do Pi.
 
 Atualização no código-fonte: quando o KACE gera a configuração, Baixar configuração no cabeçalho do fluxo salva um ZIP com printer.cfg e o macros.cfg opcional escolhido nesse fluxo. Exporta arquivos gerados; não os instala. Exige a sessão SSH e o checkpoint atuais. Um executável anterior não recebe este botão até ser recompilado.
+
+### Firmware aguardando intervenção manual
+
+Se o firmware aguarda intervenção na placa e o Studio bloqueia o desligamento normal, confira a placa, o método de entrega e o checkpoint. Após perda de SSH, reconecte ao mesmo host e consulte o checkpoint, os aquecedores e o estado do trabalho antes de tentar novamente. Siga na bancada o procedimento da placa. A parada de emergência envia um comando ao Klipper. Se for necessário isolamento físico, aplique o procedimento documentado do equipamento.

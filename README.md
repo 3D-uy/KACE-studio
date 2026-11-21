@@ -152,3 +152,7 @@ New bootstrap runs configure a persistent Linux journal with a 64 MiB budget, se
 On a recoverable SSH loss, including after bootstrap, Studio shows Disconnected, disables session controls and keeps the last installation progress visible. Idle terminal sessions probe every ten seconds with a five-second response limit per probe; a temporarily slow reply keeps an otherwise active SSH transport for up to 45 seconds without a server response. A silent host still disconnects within that bound. Reconnection reloads the remote checkpoint; it does not establish completion. Use the new executable and its matching bootstrap for E2E; an older Pi installation is not upgraded by opening Studio.
 
 Source update: after KACE generates configuration, Download configuration in the workflow header saves a ZIP with printer.cfg and the optional macros.cfg selected in that flow. This exports generated files; it does not install them. The action requires the current SSH session and checkpoint. A previous executable does not gain this button until rebuilt.
+
+### Firmware waiting for manual intervention
+
+If the firmware workflow is waiting for a board intervention and normal OFF is blocked, keep the recorded board, delivery method and checkpoint visible. After an SSH loss, reconnect to the same host and read the current checkpoint, heater and job status before retrying. Follow the board-specific service procedure at the bench. An emergency stop is a Klipper command. Use the equipment’s documented isolation procedure when physical isolation is required.

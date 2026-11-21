@@ -15,6 +15,7 @@ FRONTEND_MODULES = {
     "test_power_frontend_identity", "test_sftp_frontend_identity", "test_ssh_recovery",
 }
 FRONTEND_CASES = {
+    "test_media_approval.test_confirmed_media_lifecycle",
     "test_audit_followup.test_firmware_download_passes_originating_generation_and_rejects_stale_view",
     "test_bootstrap_contract.test_frontend_rejects_bootstrap_error_marker",
     "test_fluidd_provisioning.test_frontend_selects_fluidd_profile_and_preserves_lite_dashboard_choices",

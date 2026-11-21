@@ -15,6 +15,7 @@ from tests.test_provisioning_preflight import valid_request
 def test_prebaked_wifi_round_trips_through_exact_consumer(tmp_path, monkeypatch, value):
     boot = tmp_path / "boot"
     boot.mkdir()
+    (boot / "cmdline.txt").write_text("console=tty1 rootwait\n", encoding="utf-8")
     monkeypatch.setattr(imager, "get_boot_drive_letter", lambda *_args, **_kwargs: str(boot))
     monkeypatch.setattr(imager, "_verified_boot_volume", lambda path, _identity: path)
     identity = {"number": 7, "friendly_name": "Test SD", "size_bytes": 32 * 1024**3, "bus_type": "USB", "is_system": False, "is_boot": False, "serial_number": "SERIAL-7", "unique_id": "UNIQUE-7", "path": r"\\?\usbstor#test-7", "media_type": "Unspecified"}

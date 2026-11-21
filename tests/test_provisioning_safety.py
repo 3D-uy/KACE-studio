@@ -129,6 +129,7 @@ def test_prebaked_ssh_disable_is_enforced_on_first_boot(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("line", [None, "rootwait systemd.run=/opt/other.sh",
+                                  "rootwait 'systemd.run=/boot/firmware/firstrun.sh'",
                                   "rootwait systemd.run=/boot/firmware/firstrun.sh systemd.unit=rescue.target"])
 def test_invalid_first_boot_trigger_preserves_existing_media(tmp_path, monkeypatch, line):
     cmdline = tmp_path / "cmdline.txt"

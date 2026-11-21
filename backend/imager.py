@@ -88,9 +88,12 @@ def _first_run_cmdline(path: str) -> tuple[str, str]:
             current = source.read().strip()
     except FileNotFoundError as exc:
         raise ValueError("First boot cannot be scheduled: cmdline.txt is missing.") from exc
-    if not current or len(current.splitlines()) != 1:
+    if not current or len(current.splitlines()) != 1 or "\x00" in current:
         raise ValueError("First boot requires a single nonempty kernel command line.")
     tokens = shlex.split(current)
+    # A quoted/escaped argument can be interpreted differently by the boot
+    # firmware and systemd. Only an unquoted, literal Studio trigger is reusable.
+    bare_tokens = re.sub(r"""'(?:[^']*)'|"(?:\\.|[^"\\])*"|\\.""", "\x00", current).split()
     if "--" in tokens:
         raise ValueError("Cannot safely schedule first boot after a kernel command-line separator.")
     required = (
@@ -105,7 +108,7 @@ def _first_run_cmdline(path: str) -> tuple[str, str]:
         existing = [token for token in tokens if token.partition("=")[0] == key]
         if not existing:
             missing.append(argument)
-        elif existing != [argument]:
+        elif existing != [argument] or bare_tokens.count(argument) != 1:
             raise ValueError(f"Conflicting {key} in cmdline.txt; the existing boot action was preserved.")
     return current, " ".join([current, *missing])
 

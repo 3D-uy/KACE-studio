@@ -661,3 +661,17 @@ configuration-only generation/resume, including legacy checkpoints. Studio must
 preserve that interactive terminal step; reconnection or a previous installation
 COMPLETE does not answer it. Changing geometry requires a separately reviewed
 generation flow, not modifying a frozen recovery artifact.
+
+### Windows preflight without a Docker Desktop installation
+
+The current adapter needs a local Docker-compatible CLI and the pinned Linux
+image. Docker Desktop is the tested Windows engine. The first alternative to
+qualify is a local Linux engine reached from Windows with the same isolation,
+staging, immutable image identity and receipt checks. A remote engine introduces
+a different trust boundary and cannot assume that a Windows staging path exists
+on its filesystem. A native Windows loader would additionally need equivalent
+Klipper object loading and process isolation. Neither alternative is advertised
+as supported. To qualify one, repeat the accepted/rejected fixtures, staging
+integrity, stale receipt, session loss and no-write gates on a clean Windows
+installation without Desktop, then run the packaged bootstrap/preflight flow.
+Keep the current validation mandatory until that evidence exists.

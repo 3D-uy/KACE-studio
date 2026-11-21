@@ -10,6 +10,10 @@ from scripts.check_ci_source import (
 )
 
 
+def test_ci_requires_the_media_approval_case():
+    assert "test_media_approval.test_confirmed_media_lifecycle" in FRONTEND_CASES
+
+
 def report(path, outcome=None, omit=None):
     root = ET.Element("testsuite")
     identities = {module + ".test_example" for module in FRONTEND_MODULES} | FRONTEND_CASES

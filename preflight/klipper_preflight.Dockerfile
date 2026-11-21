@@ -10,4 +10,7 @@ RUN test "$KLIPPER_REF" = fe4eb8650bd7de4c2100a14eaf09b0965c430e29 \
     && git -C /opt/klipper diff --exit-code \
     && test -z "$(git -C /opt/klipper ls-files --others --exclude-standard)"
 RUN python -m pip install --no-cache-dir -r /opt/klipper/scripts/klippy-requirements.txt
+# Compile and load Klipper's own target-architecture helper once at image build.
+# Recompiling it for each review can exceed the loader timeout under ARM emulation.
+RUN python -IB /opt/klipper/klippy/chelper/__init__.py
 COPY core/klipper_preflight_worker.py /usr/local/bin/kace-klipper-validator
