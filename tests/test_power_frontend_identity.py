@@ -13,7 +13,7 @@ POWER_JS = APP[APP.index("function renderPrinterPower"):APP.index("function star
 LOGIN_JS = APP[APP.index("function performSshLogin"):APP.index("// Terminal Workspace (Stage C)")]
 BOOTSTRAP_JS = (
     APP[APP.index("function completeBootstrapSuccess"):APP.index("function completeBootstrapTerminal")]
-    + APP[APP.index("window.updateBootstrapEvent ="):APP.index("window.updateBootstrapInterrupted =")]
+    + APP[APP.index("function refreshVisibleKaceWorkflow"):APP.index("window.updateBootstrapInterrupted =")]
     + APP[APP.index("function parseBootstrapProgress"):APP.index("function updateConnectionStatus")]
 )
 GLOBALS_JS = APP[:APP.index("let userPreferences")]
@@ -61,6 +61,8 @@ window.updateDeviceState = () => {};
 const setTimeout = () => 0;
 const BOOTSTRAP_STAGES = [];
 const bootstrapEventCursors = new Map();
+const kaceWorkflowViews = new Map(), renderedViews = [];
+function renderKaceWorkflow(view) {renderedViews.push(view);}
 let bootstrapActive = false, bootstrapAuthoritativeSeen = false, bootstrapFailureHandled = false;
 let bootstrapBuffer = '';
 let firmwareGeneration = null;
@@ -350,13 +352,18 @@ CASES = {
         requests.status.at(-1).resolve(result(b, 'off'));
         await tick();
         window.writeTerminalData('Bootstrap complete! KACE wizard finished successfully.', a);
+        document.getElementById('kace-workflow-tracker').dataset.workflowId = 'active-B';
+        const view = {workflowId:'active-B'};
+        kaceWorkflowViews.set('active-B',view);
         const success = {protocol: 'kace-bootstrap/v1', workflow_id: 'A', sequence: 1, event: 'workflow_succeeded'};
         window.updateBootstrapEvent(success, a);
         await tick();
         assert.equal(requests.authority.length, 0);
         assert.deepEqual(powerContext, b);
         assert.equal(printerPowerStatus, 'off');
+        assert.deepEqual(renderedViews, []);
         window.updateBootstrapEvent({...success, workflow_id: 'B'}, b);
+        assert.deepEqual(renderedViews, [view]);
         assert.equal(requests.authority.length, 1);
         assert.deepEqual(requests.authority[0].args, [b]);
         requests.authority[0].resolve(authority(b, 'B_relay'));
