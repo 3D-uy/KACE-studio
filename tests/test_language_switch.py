@@ -1,9 +1,26 @@
 """Execute the production language switch without connecting to a device."""
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
 import pytest
+
+
+def test_imager_markup_uses_translated_labels_hints_and_decorative_icons():
+    html = (Path(__file__).resolve().parents[1] / "web/index.html").read_text(encoding="utf-8")
+    for field, key in (("pi-model-select", "piModel"), ("bootstrap-ui-select-imager", "osDashboard")):
+        label = re.search(rf'<label for="{field}">(.*?)</label>', html, re.S).group(1)
+        assert f'data-ui-text="{key}"' in label
+        select = re.search(rf'<select id="{field}"([^>]*)>(.*?)</select>', html, re.S)
+        assert 'aria-label=' not in select.group(1)
+        options = re.findall(r'<option\b([^>]*)>', select.group(2))
+        assert options and all('data-ui-title=' in option for option in options)
+    assert re.search(r'<input[^>]+id="manual-ip"[^>]+data-ui-placeholder="hostExample"', html)
+    for field in ("flash-action-btn", "eject-btn"):
+        body = re.search(rf'<button[^>]+id="{field}"[^>]*>(.*?)</button>', html, re.S).group(1)
+        icons = re.findall(r'<i\b([^>]*)>', body)
+        assert icons and all('aria-hidden="true"' in icon for icon in icons)
 
 
 def test_language_switch_updates_ui_and_preserves_form_and_session():
@@ -21,15 +38,22 @@ function element(dataset = {}) {
 }
 const heading = element({uiText: 'imagerTitle'}), label = element({uiLabel: 'theme'});
 const placeholder = element({uiPlaceholder: 'ssidPlaceholder'}), select = element();
+const address = element({uiPlaceholder: 'hostExample'});
+const model = element({uiTitle: 'pi4Hint'});
+select.id = 'pi-model-select';
+select.selectedOptions = [model];
+model.parentElement = select;
+model.selected = true;
 const nodes = new Map([['language-toggle-btn', element()], ['language-flag', element()],
     ['start-first-boot-scan', element()], ['stop-first-boot-scan', element()],
-    ['scan-status-text', element()]]);
-const context = {assert, nodes, heading, label, placeholder, select, writes, console,
+    ['scan-status-text', element()], [select.id, select], [select.id + '-description', element()]]);
+const context = {assert, nodes, heading, label, placeholder, select, model, address, writes, console,
     navigator: {language: 'en-US'}, Event: class {constructor(type) {this.type = type;}},
     localStorage: {getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value)},
     document: {documentElement: {}, addEventListener() {}, getElementById: id => nodes.get(id) || null,
         querySelectorAll: selector => ({'[data-ui-text]': [heading], '[data-ui-label]': [label],
-            '[data-ui-placeholder]': [placeholder], '#imager-tab select': [select]})[selector] || []},
+            'option[data-ui-title]': [model], '[data-ui-placeholder]': [placeholder,address],
+            '#imager-tab select': [select]})[selector] || []},
     addEventListener() {}, pywebview: {api: {set_preferences(prefs) {
         writes.push(JSON.parse(JSON.stringify(prefs))); return Promise.resolve(true);
     }}}};
@@ -49,16 +73,24 @@ assert.equal(nodes.get('language-flag').src, 'flags/es.svg');
 assert.equal(nodes.get('language-toggle-btn').attributes['aria-label'], 'Cambiar idioma: Español');
 assert.equal(nodes.get('scan-status-text').textContent, studioText('discoveryAmbiguous'));
 assert.equal(select.lastEvent, 'presentationchange');
+assert.ok(model.title.includes('400 y Compute Module'));
+assert.equal(nodes.get(select.id + '-description').textContent, model.title);
+assert.equal(address.placeholder, 'p. ej., 192.168.1.50 o kace.local');
 assert.equal(select.value, 'keep-my-form-value');
 assert.equal(placeholder.placeholder, studioText('ssidPlaceholder'));
 assert.equal(label.title, studioText('theme'));
 cycleStudioLanguage();
 assert.equal(studioLanguage(), 'English');
 assert.equal(document.documentElement.lang, 'en');
+assert.ok(model.title.includes('400, and Compute Module'));
+assert.equal(address.placeholder, 'e.g. 192.168.1.50 or kace.local');
 assert.equal(nodes.get('language-flag').src, 'flags/en.svg');
 cycleStudioLanguage();
 assert.equal(studioLanguage(), 'Português');
 assert.equal(document.documentElement.lang, 'pt');
+assert.ok(model.title.includes('400 e Compute Module'));
+assert.equal(nodes.get(select.id + '-description').textContent, model.title);
+assert.equal(address.placeholder, 'por exemplo, 192.168.1.50 ou kace.local');
 assert.equal(nodes.get('language-flag').src, 'flags/pt.svg');
 assert.equal(nodes.get('language-toggle-btn').attributes['aria-label'], 'Alterar idioma: Português');
 assert.equal(localStorage.getItem('kace_language'), 'Português');

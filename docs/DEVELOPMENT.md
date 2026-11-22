@@ -379,6 +379,10 @@ credentials and disks are synthetic. Test both success and rejected/pending stat
 - Exercise narrow and wide windows, scrolling, zoom, Escape/Tab and keyboard
   selection. Confirm overlays stay within the viewport and console errors are absent.
 - Review EN/ES/PT visible messages, failure/recovery actions and completion states.
+- Switch languages with a Pi model and dashboard already selected. Check the
+  accessible name, selected description, menu tooltips and manual IP example in
+  each language. Verify the Write and Eject icons are silent, then reject a
+  changed SSH identity and check the terminal's cancellation message.
 - Run `python main.py --smoke-test` on Windows for the native source renderer.
   Browser screenshots cannot replace this or the packaged renderer smoke gate.
 

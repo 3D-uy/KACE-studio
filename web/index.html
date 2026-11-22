@@ -144,12 +144,12 @@
                             <label for="pi-model-select"><span class="brand-orange"><span data-ui-text="step1">STEP 1:</span></span> <span data-ui-text="piModel">RASPBERRY PI MODEL</span></label>
                             <div class="illustrated-select">
                                     <span class="select-logos" aria-hidden="true"><img src="pi_icon.png" alt=""></span>
-                                    <select id="pi-model-select" aria-describedby="pi-model-select-description" aria-label="Raspberry Pi model">
-    <option value="pi5" data-icons="pi_icon.png" title="Raspberry Pi 5, 500 / 500+, and Compute Module 5">Raspberry Pi 5</option>
-    <option value="pi4" data-icons="pi_icon.png" title="Raspberry Pi 4 Model B, 400, and Compute Module 4 / 4S" selected>Raspberry Pi 4</option>
-    <option value="pi3" data-icons="pi_icon.png" title="Raspberry Pi 3 Model A+ / B / B+ and Compute Module 3 / 3+">Raspberry Pi 3</option>
-    <option value="pizero2w" data-icons="pi_icon.png" title="Raspberry Pi Zero 2 W and Compute Module 2 W">Raspberry Pi Zero 2 W</option>
-    <option value="pizerow" data-icons="pi_icon.png" title="Legacy single-core Raspberry Pi Zero W">Raspberry Pi Zero W</option>
+                                    <select id="pi-model-select" aria-describedby="pi-model-select-description">
+    <option value="pi5" data-icons="pi_icon.png" data-ui-title="pi5Hint" title="Raspberry Pi 5, 500 / 500+, and Compute Module 5">Raspberry Pi 5</option>
+    <option value="pi4" data-icons="pi_icon.png" data-ui-title="pi4Hint" title="Raspberry Pi 4 Model B, 400, and Compute Module 4 / 4S" selected>Raspberry Pi 4</option>
+    <option value="pi3" data-icons="pi_icon.png" data-ui-title="pi3Hint" title="Raspberry Pi 3 Model A+ / B / B+ and Compute Module 3 / 3+">Raspberry Pi 3</option>
+    <option value="pizero2w" data-icons="pi_icon.png" data-ui-title="piZero2Hint" title="Raspberry Pi Zero 2 W and Compute Module 2 W">Raspberry Pi Zero 2 W</option>
+    <option value="pizerow" data-icons="pi_icon.png" data-ui-title="piZeroWHint" title="Legacy single-core Raspberry Pi Zero W">Raspberry Pi Zero W</option>
 </select>
                                 </div>
                                 <p id="pi-model-select-description" class="select-description">Raspberry Pi 4 Model B, 400, and Compute Module 4 / 4S</p>
@@ -158,7 +158,7 @@
                         <!-- Step 5: Hostname, paired with the Pi model -->
                         <div class="form-group">
                             <label for="hostname-input"><span class="brand-orange"><span data-ui-text="step5">STEP 5:</span></span> <span data-ui-text="hostnameLabel">HOSTNAME</span></label>
-                            <input type="text" id="hostname-input" value="kace.local" placeholder="e.g. kace.local">
+                            <input type="text" id="hostname-input" value="kace.local" data-ui-placeholder="hostnameExample" placeholder="e.g. kace.local">
                         </div>
 
                         <!-- Step 2: Select OS / Dashboard -->
@@ -166,10 +166,10 @@
                             <label for="bootstrap-ui-select-imager"><span class="brand-orange"><span data-ui-text="step2">STEP 2:</span></span> <span data-ui-text="osDashboard">OS DASHBOARD</span></label>
                             <div class="illustrated-select">
                             <span class="select-logos" aria-hidden="true"><img class="mainsail-select-logo" src="mainsail_logo.png" alt=""><img class="fluidd-select-logo" src="fluidd_logo.png" alt=""></span>
-                            <select id="bootstrap-ui-select-imager" aria-describedby="bootstrap-ui-select-imager-description" aria-label="OS dashboard">
-    <option value="mainsail" data-icons="mainsail_logo.png" title="Mainsail web dashboard control panel" selected>Mainsail OS</option>
-    <option value="fluidd" data-icons="fluidd_logo.png" title="Fluidd web dashboard control panel">Fluidd</option>
-    <option value="both" data-icons="mainsail_logo.png fluidd_logo.png" title="Install both control interfaces side-by-side">Both (Mainsail & Fluidd)</option>
+                            <select id="bootstrap-ui-select-imager" aria-describedby="bootstrap-ui-select-imager-description">
+    <option value="mainsail" data-icons="mainsail_logo.png" data-ui-title="dashboardMainsailHint" title="Mainsail web dashboard control panel" selected>Mainsail OS</option>
+    <option value="fluidd" data-icons="fluidd_logo.png" data-ui-title="dashboardFluiddHint" title="Fluidd web dashboard control panel">Fluidd</option>
+    <option value="both" data-ui-text="dashboardBoth" data-icons="mainsail_logo.png fluidd_logo.png" data-ui-title="dashboardBothHint" title="Install both control interfaces side-by-side">Both (Mainsail & Fluidd)</option>
 </select>
                         </div>
                         <p id="bootstrap-ui-select-imager-description" class="select-description">Mainsail web dashboard control panel</p>
@@ -402,7 +402,7 @@
                              <div class="write-action-container" style="position: relative;">
                                  <button class="btn btn-primary btn-block progress-btn" onclick="openFormatModal()" id="flash-action-btn">
                                      <span class="btn-progress-fill" id="btn-progress-fill"></span>
-                                     <span class="btn-text" id="btn-text-content"><i class="fa-solid fa-fire"></i> <span data-ui-text="write">Write</span></span>
+                                     <span class="btn-text" id="btn-text-content"><i class="fa-solid fa-fire" aria-hidden="true"></i> <span data-ui-text="write">Write</span></span>
                                  </button>
                                  <div class="flash-status-container" id="flash-status-container" style="display: none; margin-top: 12px; align-items: center; justify-content: space-between; gap: 8px;">
                                      <span class="status-msg" id="flasher-status-msg" style="font-size: 13px; color: var(--text-secondary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap; flex-grow: 1;">Preparing disk write loops...</span>
@@ -432,7 +432,7 @@
                          <p id="flash-next-steps" data-ui-text="flashNextSteps" style="color: var(--text-secondary); margin: 0;">Safely eject the card, insert it into your Pi, power it on, and open Discovery.</p>
                      </div>
                      <div class="modal-footer" style="display: flex; gap: 12px; justify-content: flex-end;">
-                         <button class="btn btn-secondary" onclick="ejectFlashedDrive()" id="eject-btn" style="padding: 10px 16px; font-weight: 600;"><i class="fa-solid fa-eject"></i> <span data-ui-text="eject">Eject SD Card</span></button>
+                         <button class="btn btn-secondary" onclick="ejectFlashedDrive()" id="eject-btn" style="padding: 10px 16px; font-weight: 600;"><i class="fa-solid fa-eject" aria-hidden="true"></i> <span data-ui-text="eject">Eject SD Card</span></button>
                          <button class="btn btn-success" id="success-done-btn" autofocus onclick="closeSuccessModal()" style="font-weight: 600; padding: 10px 24px;"><span data-ui-text="done">Done</span></button>
                      </div>
                  </div>
@@ -487,7 +487,7 @@
                         <div class="form-group" style="margin-bottom: 0;">
                             <label for="manual-ip" data-ui-text="deviceAddress" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px;">Device IP / Hostname</label>
                             <div class="input-row" style="display: flex; gap: 12px;">
-                                <input type="text" id="manual-ip" placeholder="e.g. 192.168.1.50 or kace.local" style="flex-grow: 1;">
+                                <input type="text" id="manual-ip" data-ui-placeholder="hostExample" placeholder="e.g. 192.168.1.50 or kace.local" style="flex-grow: 1;">
                                 <button class="btn btn-secondary" id="manual-connect-btn" data-ui-text="connectTarget" onclick="connectManually()" style="white-space: nowrap; padding: 0 24px;">
                                     Connect to Target
                                 </button>

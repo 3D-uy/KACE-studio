@@ -454,6 +454,10 @@ function initIllustratedSelects() {
                 row.className = 'illustrated-option';
                 row.setAttribute('role', 'option');
                 row.setAttribute('aria-label', option.textContent);
+                if (option.title) {
+                    row.title = option.title;
+                    row.setAttribute('aria-description', option.title);
+                }
                 row.setAttribute('aria-disabled', String(option.disabled));
                 row.appendChild(content(option, true));
                 row.addEventListener('mousedown', event => event.preventDefault());
@@ -488,6 +492,7 @@ function initIllustratedSelects() {
                 else trigger.removeAttribute(attribute);
             });
             trigger.disabled = select.disabled || !options.length;
+            trigger.title = select.selectedOptions[0]?.title || '';
             trigger.replaceChildren(content(select.selectedOptions[0], false));
             const arrow = document.createElement('i');
             arrow.className = 'fa-solid fa-chevron-down';
@@ -613,6 +618,10 @@ function applyStudioLanguage() {
     });
     document.querySelectorAll('[data-ui-text]').forEach(el => {
         el.textContent = studioText(el.dataset.uiText);
+    });
+    document.querySelectorAll('option[data-ui-title]').forEach(option => {
+        option.title = studioText(option.dataset.uiTitle);
+        if (option.selected) updateSelectDescription(option.parentElement.id);
     });
     document.querySelectorAll('[data-ui-placeholder]').forEach(el => {
         el.placeholder = studioText(el.dataset.uiPlaceholder);
@@ -1335,9 +1344,9 @@ function updateProgress(percent, message, stage = 'FLASHING') {
         // ensure it cannot carry embedded HTML from an unexpected string value.
         const safePct = parseInt(percent, 10);
         if (safePct > 0 && safePct < 100) {
-            textContent.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${stage === 'VERIFYING_IMAGE' ? studioText('verifying') : studioText('writing')} ${safePct}%`;
+            textContent.innerHTML = `<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i> ${stage === 'VERIFYING_IMAGE' ? studioText('verifying') : studioText('writing')} ${safePct}%`;
         } else {
-            textContent.innerHTML = `<i class="fa-solid fa-fire"></i> ${studioText('write')}`;
+            textContent.innerHTML = `<i class="fa-solid fa-fire" aria-hidden="true"></i> ${studioText('write')}`;
         }
     }
     if (msg) {
@@ -2059,27 +2068,27 @@ function initTerminal() {
         } else if (loginState === 'PROMPTING_HOST_KEY_MISMATCH') {
             const char = data.toLowerCase();
             if (char === 'y') {
-                term.write("y\r\n[KACE Workspace] Clearing stored host key...\r\n");
+                term.write(`y\r\n[KACE Workspace] ${studioText('hostKeyClearing')}\r\n`);
                 loginState = 'CONNECTING';
                 if (window.pywebview && window.pywebview.api) {
                     window.pywebview.api.clear_stored_host_key(currentDeviceIp)
                         .then((cleared) => {
                             if (!cleared) {
-                                term.write("[KACE Workspace] Could not safely update SSH trust storage. Connection remains blocked.\r\n");
+                                term.write(`[KACE Workspace] ${studioText('hostKeyClearFailed')}\r\n`);
                                 loginState = 'PROMPTING_HOST_KEY_MISMATCH';
                                 return;
                             }
                             promptTerminalLogin();
                         })
                         .catch(() => {
-                            term.write("[KACE Workspace] SSH trust storage failed. Connection remains blocked.\r\n");
+                            term.write(`[KACE Workspace] ${studioText('hostKeyClearFailed')}\r\n`);
                             loginState = 'PROMPTING_HOST_KEY_MISMATCH';
                         });
                 } else {
                     promptTerminalLogin();
                 }
             } else if (char === 'n') {
-                term.write("n\r\n[KACE Workspace] Connection aborted.\r\n");
+                term.write(`n\r\n[KACE Workspace] ${studioText('hostKeyAborted')}\r\n`);
                 promptTerminalLogin();
             }
         } else if (!sshConnected) {
@@ -4158,6 +4167,20 @@ const STUDIO_INSTALLATION_TEXT = {
         "imagerIntro": "Prepare a bootable Raspberry Pi OS image pre-configured with primary settings.",
         "configurationOptions": "Configuration Options",
         "piModel": "RASPBERRY PI MODEL",
+        "pi5Hint": "Raspberry Pi 5, 500 / 500+, and Compute Module 5",
+        "pi4Hint": "Raspberry Pi 4 Model B, 400, and Compute Module 4 / 4S",
+        "pi3Hint": "Raspberry Pi 3 Model A+ / B / B+ and Compute Module 3 / 3+",
+        "piZero2Hint": "Raspberry Pi Zero 2 W",
+        "piZeroWHint": "Legacy single-core Raspberry Pi Zero W",
+        "dashboardMainsailHint": "Mainsail web dashboard control panel",
+        "dashboardFluiddHint": "Fluidd web dashboard control panel",
+        "dashboardBothHint": "Install both control interfaces side-by-side",
+        "dashboardBoth": "Both (Mainsail & Fluidd)",
+        "hostExample": "e.g. 192.168.1.50 or kace.local",
+        "hostnameExample": "e.g. kace.local",
+        "hostKeyAborted": "Connection aborted.",
+        "hostKeyClearing": "Clearing stored host key…",
+        "hostKeyClearFailed": "Could not safely update SSH trust storage. Connection remains blocked.",
         "osDashboard": "OS DASHBOARD",
         "imageSource": "OS IMAGE SOURCE",
         "targetStorage": "TARGET SD CARD / USB",
@@ -4443,6 +4466,20 @@ const STUDIO_INSTALLATION_TEXT = {
         "imagerIntro": "Prepará una imagen de Raspberry Pi OS con la configuración inicial.",
         "configurationOptions": "Opciones de configuración",
         "piModel": "MODELO RASPBERRY PI",
+        "pi5Hint": "Raspberry Pi 5, 500 / 500+ y Compute Module 5",
+        "pi4Hint": "Raspberry Pi 4 modelo B, 400 y Compute Module 4 / 4S",
+        "pi3Hint": "Raspberry Pi 3 modelos A+ / B / B+ y Compute Module 3 / 3+",
+        "piZero2Hint": "Raspberry Pi Zero 2 W",
+        "piZeroWHint": "Raspberry Pi Zero W de primera generación con un solo núcleo",
+        "dashboardMainsailHint": "Panel de control web de Mainsail",
+        "dashboardFluiddHint": "Panel de control web de Fluidd",
+        "dashboardBothHint": "Instalar las dos interfaces de control en paralelo",
+        "dashboardBoth": "Ambas (Mainsail y Fluidd)",
+        "hostExample": "p. ej., 192.168.1.50 o kace.local",
+        "hostnameExample": "p. ej., kace.local",
+        "hostKeyAborted": "Conexión cancelada.",
+        "hostKeyClearing": "Eliminando la clave guardada del equipo…",
+        "hostKeyClearFailed": "No se pudo actualizar de forma segura el almacén de claves SSH. La conexión sigue bloqueada.",
         "osDashboard": "INTERFAZ WEB",
         "imageSource": "ORIGEN DE LA IMAGEN",
         "targetStorage": "SD / USB DE DESTINO",
@@ -4728,6 +4765,20 @@ const STUDIO_INSTALLATION_TEXT = {
         "imagerIntro": "Prepare uma imagem do Raspberry Pi OS com as configurações iniciais.",
         "configurationOptions": "Opções de configuração",
         "piModel": "MODELO RASPBERRY PI",
+        "pi5Hint": "Raspberry Pi 5, 500 / 500+ e Compute Module 5",
+        "pi4Hint": "Raspberry Pi 4 modelo B, 400 e Compute Module 4 / 4S",
+        "pi3Hint": "Raspberry Pi 3 modelos A+ / B / B+ e Compute Module 3 / 3+",
+        "piZero2Hint": "Raspberry Pi Zero 2 W",
+        "piZeroWHint": "Raspberry Pi Zero W de primeira geração com um único núcleo",
+        "dashboardMainsailHint": "Painel de controle web do Mainsail",
+        "dashboardFluiddHint": "Painel de controle web do Fluidd",
+        "dashboardBothHint": "Instalar as duas interfaces de controle em paralelo",
+        "dashboardBoth": "Ambas (Mainsail e Fluidd)",
+        "hostExample": "por exemplo, 192.168.1.50 ou kace.local",
+        "hostnameExample": "por exemplo, kace.local",
+        "hostKeyAborted": "Conexão cancelada.",
+        "hostKeyClearing": "Removendo a chave armazenada do dispositivo…",
+        "hostKeyClearFailed": "Não foi possível atualizar com segurança o repositório de chaves SSH. A conexão continua bloqueada.",
         "osDashboard": "INTERFACE WEB",
         "imageSource": "ORIGEM DA IMAGEM",
         "targetStorage": "SD / USB DE DESTINO",

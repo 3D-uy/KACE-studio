@@ -96,6 +96,15 @@ const cases = {
             assert.equal(powerSelection, selected);
             assert.equal(requests.login.at(-1).args[2], 'second-password');
             requests.login.at(-1).resolve({status:'failed'}); await tick();
+            performSshLogin('pi', 'fixture'); await tick();
+            requests.login.at(-1).resolve({status:'host_key_mismatch'}); await tick();
+            assert.equal(loginState, 'PROMPTING_HOST_KEY_MISMATCH');
+            const count = requests.login.length;
+            term.input('n'); await tick();
+            const aborted = {'English':'Connection aborted.', 'Español':'Conexión cancelada.', 'Português':'Conexão cancelada.'};
+            assert.ok(output.some(line => line.includes('[KACE Workspace] ' + aborted[language])));
+            assert.equal(loginState, 'PROMPTING_USER');
+            assert.equal(requests.login.length, count);
         }
         performSshLogin('pi', 'password'); await tick();
         requests.login.at(-1).resolve({status:'host_key_confirmation_required', token:'challenge',
