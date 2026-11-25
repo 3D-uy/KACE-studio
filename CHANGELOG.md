@@ -8,6 +8,9 @@ uncommitted changes or current CI, packaging or physical qualification.
 
 ## [0.6.0-rc.1] - 2026-11-16 (preparation; unpublished)
 
+- The November 25 bench candidate pins the Core runtime that generates plain
+  ASCII comments and starter macro descriptions in English, Spanish and
+  Portuguese. The release contract records the exact runtime and bootstrap.
 - Add explicit configuration-only launch and bounded discovery/recovery of
   interrupted operations. Reconnection alone never resumes or completes them.
 - Acquire the runtime update lock before official Core launches, identity reads
@@ -29,10 +32,9 @@ uncommitted changes or current CI, packaging or physical qualification.
 - Bundle the corrected Core preflight engine: readable container input copies
   remain under a private host-side parent without adding Docker capabilities.
   Require the real loader and cross-project contract gate before packaging.
-- No 0.6.0-rc.1 executable or download is available from this preparation.
-  Clean-runner CI, bundle/PE/native renderer checks, repeated and independent
-  builds, and manual hardware E2E remain pending. Earlier unsigned-build evidence
-  does not attest this candidate.
+- Bench executables share this prerelease version. Match the Studio commit
+  and executable SHA-256 to the build manifest and qualification report.
+  Manual hardware E2E remains pending for the November 25 candidate.
 
 - Stage new SSH host keys in memory and publish trust through the locked atomic
   writer, preserving previous keys on temporary-write or replacement failure.
